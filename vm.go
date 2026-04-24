@@ -1,0 +1,825 @@
+package agentsdk
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/airlockrun/goai/model"
+	"github.com/airlockrun/goai/tool"
+	"github.com/airlockrun/sol/websearch"
+	"github.com/dop251/goja"
+)
+
+// newVM creates a fresh goja Runtime for a Run, binding all registered
+// Go functions and built-in bindings.
+func newVM(run *run, agent *Agent) *goja.Runtime {
+	vm := goja.New()
+
+	// Bind registered tools. Each RegisterTool(&Tool[In, Out]{...}) becomes
+	// a typed JS global: JS input → json.Marshal → decode into In → typed
+	// Execute → Out → json.Marshal → JSON.parse → JS value. Errors surface
+	// as JS throws via vm.NewGoError.
+	for _, t := range agent.tools {
+		t := t // capture
+		vm.Set(t.Name, func(call goja.FunctionCall) goja.Value {
+			var argJS any
+			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) && !goja.IsNull(call.Arguments[0]) {
+				argJS = call.Arguments[0].Export()
+			}
+			raw, err := json.Marshal(argJS)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("%s: marshal args: %w", t.Name, err)))
+			}
+			ctx := contextWithRun(run.ctx, run)
+			outJSON, err := t.Execute(ctx, raw)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			if outJSON == "" {
+				return goja.Undefined()
+			}
+			var parsed any
+			if err := json.Unmarshal([]byte(outJSON), &parsed); err != nil {
+				return vm.ToValue(outJSON)
+			}
+			return vm.ToValue(parsed)
+		})
+	}
+
+	// Inject persistent store for conversation-scoped runs.
+	// Uses a native goja Object (not a Go map proxy) so JS function source
+	// is preserved by toString() for serialization in teardownStore().
+	if cvm := agent.getOrCreateConvVM(run.conversationID); cvm != nil {
+		run.convVM = cvm
+		cvm.mu.Lock()
+
+		storeObj := vm.NewObject()
+
+		// Populate from Go map (plain values).
+		for key, val := range cvm.store {
+			storeObj.Set(key, val)
+		}
+
+		// Re-evaluate serialized functions in the fresh VM.
+		for key, src := range cvm.serializedFuncs {
+			val, err := vm.RunString("(" + src + ")")
+			if err == nil {
+				storeObj.Set(key, val)
+			}
+			// If eval fails (e.g. closure referencing dead scope), silently drop.
+		}
+
+		vm.Set("store", storeObj)
+		cvm.mu.Unlock()
+	}
+
+	// Register conn_{slug} objects for each registered connection.
+	for slug := range run.agent.auths {
+		handle := &ConnectionHandle{slug: slug, agent: run.agent}
+
+		obj := vm.NewObject()
+		connSlug := slug // capture for closures
+
+		obj.Set("request", func(call goja.FunctionCall) goja.Value {
+			method := call.Argument(0).String()
+			path := call.Argument(1).String()
+			var body any
+			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) {
+				body = call.Arguments[2].String()
+			}
+			result, err := handle.Request(run.ctx, method, path, body)
+			if err != nil {
+				if ae, ok := IsAuthRequired(err); ok {
+					errObj := vm.NewObject()
+					errObj.Set("authRequired", true)
+					errObj.Set("slug", ae.Slug)
+					errObj.Set("connName", ae.ConnName)
+					panic(vm.ToValue(errObj))
+				}
+				panic(vm.NewGoError(err))
+			}
+			return vm.ToValue(string(result))
+		})
+
+		obj.Set("requestJSON", func(call goja.FunctionCall) goja.Value {
+			method := call.Argument(0).String()
+			path := call.Argument(1).String()
+			var body any
+			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) {
+				body = call.Arguments[2].Export()
+			}
+			raw, err := handle.Request(run.ctx, method, path, body)
+			if err != nil {
+				if ae, ok := IsAuthRequired(err); ok {
+					errObj := vm.NewObject()
+					errObj.Set("authRequired", true)
+					errObj.Set("slug", ae.Slug)
+					errObj.Set("connName", ae.ConnName)
+					panic(vm.ToValue(errObj))
+				}
+				panic(vm.NewGoError(err))
+			}
+			var result any
+			if len(raw) > 0 {
+				if err := json.Unmarshal(raw, &result); err != nil {
+					panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
+				}
+			}
+			return vm.ToValue(result)
+		})
+
+		_ = connSlug // used for future error messages if needed
+		vm.Set("conn_"+slug, obj)
+	}
+
+	vm.Set("queryDB", func(call goja.FunctionCall) goja.Value {
+		db := agent.DB()
+		if db == nil {
+			panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
+		}
+		query := call.Argument(0).String()
+		params := make([]any, len(call.Arguments)-1)
+		for i := 1; i < len(call.Arguments); i++ {
+			params[i-1] = call.Arguments[i].Export()
+		}
+		rows, err := db.QueryContext(run.ctx, query, params...)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		defer rows.Close()
+		result, err := rowsToMaps(rows)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(result)
+	})
+
+	vm.Set("execDB", func(call goja.FunctionCall) goja.Value {
+		db := agent.DB()
+		if db == nil {
+			panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
+		}
+		query := call.Argument(0).String()
+		params := make([]any, len(call.Arguments)-1)
+		for i := 1; i < len(call.Arguments); i++ {
+			params[i-1] = call.Arguments[i].Export()
+		}
+		res, err := db.ExecContext(run.ctx, query, params...)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		affected, _ := res.RowsAffected()
+		obj := vm.NewObject()
+		obj.Set("rowsAffected", affected)
+		return vm.ToValue(obj)
+	})
+
+	vm.Set("writeFile", func(call goja.FunctionCall) goja.Value {
+		key := call.Argument(0).String()
+		data := call.Argument(1).String()
+		contentType := call.Argument(2).String()
+		if err := agent.StoreFile(run.ctx, key, strings.NewReader(data), contentType); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	})
+
+	vm.Set("readFile", func(call goja.FunctionCall) goja.Value {
+		key := call.Argument(0).String()
+		rc, err := agent.LoadFile(run.ctx, key)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		defer rc.Close()
+		b, err := io.ReadAll(rc)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(string(b))
+	})
+
+	vm.Set("fileInfo", func(call goja.FunctionCall) goja.Value {
+		key := call.Argument(0).String()
+		info, err := agent.FileInfo(run.ctx, key)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		obj := vm.NewObject()
+		obj.Set("key", info.Key)
+		obj.Set("size", info.Size)
+		obj.Set("contentType", info.ContentType)
+		obj.Set("lastModified", info.LastModified.Format("2006-01-02T15:04:05Z"))
+		return obj
+	})
+
+	vm.Set("copyFile", func(call goja.FunctionCall) goja.Value {
+		src := call.Argument(0).String()
+		dst := call.Argument(1).String()
+		if err := agent.CopyFile(run.ctx, src, dst); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	})
+
+	vm.Set("removeFile", func(call goja.FunctionCall) goja.Value {
+		key := call.Argument(0).String()
+		if err := agent.DeleteFile(run.ctx, key); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	})
+
+	vm.Set("listFiles", func(call goja.FunctionCall) goja.Value {
+		prefix := ""
+		if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
+			prefix = call.Argument(0).String()
+		}
+		files, err := agent.ListFiles(run.ctx, prefix)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(files)
+	})
+
+	// printToUser(parts) — send rich content to the user's conversation.
+	// Accepts a single DisplayPart object or an array of DisplayPart objects.
+	vm.Set("printToUser", func(call goja.FunctionCall) goja.Value {
+		parts := parseDisplayParts(vm, call.Argument(0))
+		if err := run.printToUser(run.ctx, parts, ""); err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return goja.Undefined()
+	})
+
+	// Register topic_{slug} objects for each registered topic.
+	for slug := range agent.topics {
+		topicObj := vm.NewObject()
+		topicSlug := slug // capture for closure
+
+		topicObj.Set("subscribe", func(call goja.FunctionCall) goja.Value {
+			if err := run.subscribeTopic(run.ctx, topicSlug); err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return goja.Undefined()
+		})
+
+		topicObj.Set("unsubscribe", func(call goja.FunctionCall) goja.Value {
+			if err := run.unsubscribeTopic(run.ctx, topicSlug); err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return goja.Undefined()
+		})
+
+		vm.Set("topic_"+slug, topicObj)
+	}
+
+	logFn := func(call goja.FunctionCall) goja.Value {
+		msg := formatJSValue(vm, call.Argument(0))
+		run.logAppend(msg)
+		run.mu.Lock()
+		run.pendingLogs = append(run.pendingLogs, msg)
+		run.mu.Unlock()
+		return goja.Undefined()
+	}
+	vm.Set("log", logFn)
+
+	// Alias console.log so LLMs that generate console.log() just work.
+	console := vm.NewObject()
+	console.Set("log", logFn)
+	console.Set("warn", logFn)
+	console.Set("error", logFn)
+	vm.Set("console", console)
+
+	// HTTP requests via Airlock proxy.
+	httpClient := &proxyHTTPClient{client: agent.client}
+	vm.Set("httpRequest", func(call goja.FunctionCall) goja.Value {
+		url := call.Argument(0).String()
+		if url == "" {
+			panic(vm.NewGoError(fmt.Errorf("httpRequest: url is required")))
+		}
+
+		req := HTTPRequest{URL: url, Method: "GET"}
+
+		// Parse optional opts object.
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+			opts := call.Arguments[1].ToObject(vm)
+			if v := opts.Get("method"); v != nil && !goja.IsUndefined(v) {
+				req.Method = v.String()
+			}
+			if v := opts.Get("headers"); v != nil && !goja.IsUndefined(v) {
+				exported := v.Export()
+				if m, ok := exported.(map[string]any); ok {
+					req.Headers = make(map[string]string, len(m))
+					for k, val := range m {
+						req.Headers[k] = fmt.Sprintf("%v", val)
+					}
+				}
+			}
+			if v := opts.Get("body"); v != nil && !goja.IsUndefined(v) {
+				if _, ok := v.Export().(string); ok {
+					req.Body = v.String()
+				} else {
+					// Object/array → JSON serialize.
+					b, err := json.Marshal(v.Export())
+					if err != nil {
+						panic(vm.NewGoError(fmt.Errorf("httpRequest: failed to serialize body: %w", err)))
+					}
+					req.Body = string(b)
+					// Auto-set Content-Type if not explicitly provided.
+					if req.Headers == nil {
+						req.Headers = map[string]string{}
+					}
+					if _, hasContentType := req.Headers["Content-Type"]; !hasContentType {
+						req.Headers["Content-Type"] = "application/json"
+					}
+				}
+			}
+			if v := opts.Get("timeout"); v != nil && !goja.IsUndefined(v) {
+				req.Timeout = int(v.ToInteger())
+			}
+			if v := opts.Get("saveAs"); v != nil && !goja.IsUndefined(v) {
+				// saveAs: Airlock saves response body directly to S3 (binary-safe).
+				req.SaveAs = v.String()
+			}
+			if v := opts.Get("raw"); v != nil && !goja.IsUndefined(v) {
+				// raw: skip HTML→markdown conversion (default is to convert HTML).
+				req.Raw = v.ToBoolean()
+			}
+		}
+
+		resp, err := httpClient.Do(run.ctx, req)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("httpRequest: %w", err)))
+		}
+
+		result := vm.NewObject()
+		result.Set("status", resp.Status)
+		result.Set("headers", resp.Headers)
+		result.Set("contentType", resp.ContentType)
+		result.Set("size", resp.Size)
+		if resp.SavedTo != "" {
+			result.Set("savedTo", resp.SavedTo)
+		}
+		if resp.Note != "" {
+			result.Set("note", resp.Note)
+		}
+
+		// Auto-parse JSON responses.
+		if strings.Contains(resp.ContentType, "application/json") && resp.Body != "" {
+			var parsed any
+			if jsonErr := json.Unmarshal([]byte(resp.Body), &parsed); jsonErr == nil {
+				result.Set("body", parsed)
+				return result
+			}
+		}
+
+		result.Set("body", resp.Body)
+		return result
+	})
+
+	// Web search via Airlock proxy (no API keys in container).
+	searchClient := &proxySearchClient{client: agent.client}
+	vm.Set("webSearch", func(call goja.FunctionCall) goja.Value {
+		query := call.Argument(0).String()
+		count := 5
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+			count = int(call.Arguments[1].ToInteger())
+		}
+		resp, err := searchClient.Search(run.ctx, websearch.Request{
+			Query: query,
+			Count: count,
+		})
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("web search: %w", err)))
+		}
+		return vm.ToValue(resp)
+	})
+
+	// attachToContext(key) — load an S3 file so the model can see it on the
+	// next turn. Idempotent per run. Bytes are collected on run.pendingAttachments
+	// and drained into the run_js tool.Result by buildRunJSTool.
+	vm.Set("attachToContext", func(call goja.FunctionCall) goja.Value {
+		key := call.Argument(0).String()
+		if key == "" {
+			panic(vm.NewGoError(fmt.Errorf("attachToContext: key is required")))
+		}
+
+		// Idempotent: skip if already attached this run.
+		run.mu.Lock()
+		if run.attachedKeys == nil {
+			run.attachedKeys = make(map[string]struct{})
+		}
+		if _, ok := run.attachedKeys[key]; ok {
+			run.mu.Unlock()
+			return vm.ToValue("Already in context for this turn.")
+		}
+		run.attachedKeys[key] = struct{}{}
+		run.mu.Unlock()
+
+		info, err := agent.FileInfo(run.ctx, key)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("attachToContext: file not found: %w", err)))
+		}
+
+		if len(run.supportedModalities) > 0 && !mimeMatchesModalities(info.ContentType, run.supportedModalities) {
+			panic(vm.NewGoError(fmt.Errorf(
+				"attachToContext: %s files are not supported by the current model. Supported types: %s. Use readFile() for text-based files",
+				info.ContentType, strings.Join(run.supportedModalities, ", "))))
+		}
+
+		// Emit a s3ref: sentinel rather than loading + base64-encoding here.
+		// Airlock's attachref resolver picks this up on the LLM-stream and
+		// session-append paths, canonicalizes to llm/agents/<id>/K, and
+		// either presigns a URL or inlines base64. Keeps the agent-side
+		// call flat-latency even for huge attachments.
+		run.mu.Lock()
+		run.pendingAttachments = append(run.pendingAttachments, tool.Attachment{
+			Data:     "s3ref:" + key,
+			MimeType: info.ContentType,
+			Filename: key,
+		})
+		run.mu.Unlock()
+
+		return vm.ToValue(fmt.Sprintf("Attached %s (%s). The file is visible on the next turn.", key, info.ContentType))
+	})
+
+	// transcribeAudio(key, opts?) → { text, language?, duration? }
+	// Loads bytes from agent storage, runs through the system-default STT
+	// model, returns the transcript. Capability-routed: no slug needed.
+	vm.Set("transcribeAudio", func(call goja.FunctionCall) goja.Value {
+		key := call.Argument(0).String()
+		if key == "" {
+			panic(vm.NewGoError(fmt.Errorf("transcribeAudio: key is required")))
+		}
+		var opts model.TranscribeCallOptions
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+			o := call.Arguments[1].ToObject(vm)
+			if v := o.Get("language"); v != nil && !goja.IsUndefined(v) {
+				opts.Language = v.String()
+			}
+			if v := o.Get("prompt"); v != nil && !goja.IsUndefined(v) {
+				opts.Prompt = v.String()
+			}
+			if v := o.Get("mimeType"); v != nil && !goja.IsUndefined(v) {
+				opts.MimeType = v.String()
+			}
+		}
+		res, err := run.transcribeAudio(run.ctx, key, opts)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("transcribeAudio: %w", err)))
+		}
+		out := vm.NewObject()
+		out.Set("text", res.Text)
+		if res.Language != "" {
+			out.Set("language", res.Language)
+		}
+		if res.Duration != nil {
+			out.Set("duration", *res.Duration)
+		}
+		return out
+	})
+
+	// generateImage(prompt, opts?) → { key, mimeType, size }
+	// opts: { saveAs?, size?, aspectRatio?, seed? }
+	vm.Set("generateImage", func(call goja.FunctionCall) goja.Value {
+		prompt := call.Argument(0).String()
+		if prompt == "" {
+			panic(vm.NewGoError(fmt.Errorf("generateImage: prompt is required")))
+		}
+		var saveAs string
+		var opts model.ImageCallOptions
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+			o := call.Arguments[1].ToObject(vm)
+			if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) {
+				saveAs = v.String()
+			}
+			if v := o.Get("size"); v != nil && !goja.IsUndefined(v) {
+				opts.Size = v.String()
+			}
+			if v := o.Get("aspectRatio"); v != nil && !goja.IsUndefined(v) {
+				opts.AspectRatio = v.String()
+			}
+			if v := o.Get("seed"); v != nil && !goja.IsUndefined(v) {
+				s := v.ToInteger()
+				opts.Seed = &s
+			}
+		}
+		res, err := run.generateImage(run.ctx, prompt, saveAs, opts)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("generateImage: %w", err)))
+		}
+		out := vm.NewObject()
+		out.Set("key", res.Key)
+		out.Set("mimeType", res.MimeType)
+		out.Set("size", res.Size)
+		return out
+	})
+
+	// speak(text, opts?) → { key, mimeType, size }
+	// opts: { saveAs?, voice?, outputFormat?, speed? }
+	vm.Set("speak", func(call goja.FunctionCall) goja.Value {
+		text := call.Argument(0).String()
+		if text == "" {
+			panic(vm.NewGoError(fmt.Errorf("speak: text is required")))
+		}
+		var saveAs string
+		var opts model.SpeechCallOptions
+		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+			o := call.Arguments[1].ToObject(vm)
+			if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) {
+				saveAs = v.String()
+			}
+			if v := o.Get("voice"); v != nil && !goja.IsUndefined(v) {
+				opts.Voice = v.String()
+			}
+			if v := o.Get("outputFormat"); v != nil && !goja.IsUndefined(v) {
+				opts.OutputFormat = v.String()
+			}
+			if v := o.Get("speed"); v != nil && !goja.IsUndefined(v) {
+				s := v.ToFloat()
+				opts.Speed = &s
+			}
+		}
+		res, err := run.generateSpeech(run.ctx, text, saveAs, opts)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("speak: %w", err)))
+		}
+		out := vm.NewObject()
+		out.Set("key", res.Key)
+		out.Set("mimeType", res.MimeType)
+		out.Set("size", res.Size)
+		return out
+	})
+
+	// embed(texts) → number[][]
+	// Accepts a single string or an array of strings.
+	vm.Set("embed", func(call goja.FunctionCall) goja.Value {
+		arg := call.Argument(0)
+		if arg == nil || goja.IsUndefined(arg) || goja.IsNull(arg) {
+			panic(vm.NewGoError(fmt.Errorf("embed: texts is required")))
+		}
+		var texts []string
+		switch v := arg.Export().(type) {
+		case string:
+			texts = []string{v}
+		case []any:
+			texts = make([]string, 0, len(v))
+			for _, x := range v {
+				if s, ok := x.(string); ok {
+					texts = append(texts, s)
+				}
+			}
+		default:
+			panic(vm.NewGoError(fmt.Errorf("embed: texts must be a string or an array of strings")))
+		}
+		if len(texts) == 0 {
+			panic(vm.NewGoError(fmt.Errorf("embed: at least one text is required")))
+		}
+		out, err := run.embed(run.ctx, texts)
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("embed: %w", err)))
+		}
+		return vm.ToValue(out)
+	})
+
+	// requestUpgrade(description) — ask Airlock to regenerate this agent with
+	// new capabilities. The current agent keeps running until the new build
+	// finishes.
+	vm.Set("requestUpgrade", func(call goja.FunctionCall) goja.Value {
+		description := call.Argument(0).String()
+		if description == "" {
+			panic(vm.NewGoError(fmt.Errorf("requestUpgrade: description is required")))
+		}
+		body := struct {
+			Description    string `json:"description"`
+			ConversationID string `json:"conversationId,omitempty"`
+		}{description, run.conversationID}
+		if err := agent.client.doJSON(run.ctx, "POST", "/api/agent/upgrade", body, nil); err != nil {
+			panic(vm.NewGoError(fmt.Errorf("requestUpgrade: %w", err)))
+		}
+		return vm.ToValue("Upgrade requested. The agent will be regenerated in the background.")
+	})
+
+	// Register mcp_{slug} objects for each registered MCP server.
+	for slug, def := range run.agent.mcps {
+		handle := &MCPHandle{slug: slug, agent: run.agent}
+		_ = def // used only for registration; handle talks to Airlock
+
+		obj := vm.NewObject()
+		mcpSlug := slug // capture for closures
+
+		obj.Set("callTool", func(call goja.FunctionCall) goja.Value {
+			toolName := call.Argument(0).String()
+			if toolName == "" {
+				panic(vm.NewGoError(fmt.Errorf("mcp_%s.callTool: tool name is required", mcpSlug)))
+			}
+
+			var args map[string]any
+			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+				args, _ = call.Arguments[1].Export().(map[string]any)
+			}
+
+			resp, err := handle.CallTool(run.ctx, toolName, args)
+			if err != nil {
+				if ae, ok := IsAuthRequired(err); ok {
+					errObj := vm.NewObject()
+					errObj.Set("authRequired", true)
+					errObj.Set("slug", ae.Slug)
+					errObj.Set("serverName", mcpSlug)
+					panic(vm.ToValue(errObj))
+				}
+				panic(vm.NewGoError(fmt.Errorf("mcp_%s.callTool: %w", mcpSlug, err)))
+			}
+			if resp.IsError {
+				text := "MCP tool error"
+				if len(resp.Content) > 0 {
+					text = resp.Content[0].Text
+				}
+				panic(vm.NewGoError(fmt.Errorf("mcp_%s.callTool %s: %s", mcpSlug, toolName, text)))
+			}
+
+			// Combine text content.
+			var out strings.Builder
+			for _, c := range resp.Content {
+				if c.Type == "text" {
+					out.WriteString(c.Text)
+				}
+			}
+
+			// Try to parse as JSON for nicer JS consumption.
+			raw := out.String()
+			var parsed any
+			if jsonErr := json.Unmarshal([]byte(raw), &parsed); jsonErr == nil {
+				return vm.ToValue(parsed)
+			}
+			return vm.ToValue(raw)
+		})
+
+		obj.Set("listTools", func(call goja.FunctionCall) goja.Value {
+			tools, err := handle.ListTools(run.ctx)
+			if err != nil {
+				if ae, ok := IsAuthRequired(err); ok {
+					errObj := vm.NewObject()
+					errObj.Set("authRequired", true)
+					errObj.Set("slug", ae.Slug)
+					errObj.Set("serverName", mcpSlug)
+					panic(vm.ToValue(errObj))
+				}
+				panic(vm.NewGoError(fmt.Errorf("mcp_%s.listTools: %w", mcpSlug, err)))
+			}
+			// Return simplified tool info for JS.
+			result := make([]map[string]any, len(tools))
+			for i, t := range tools {
+				entry := map[string]any{
+					"name":        t.Name,
+					"description": t.Description,
+				}
+				if len(t.InputSchema) > 0 {
+					var schema any
+					json.Unmarshal(t.InputSchema, &schema)
+					entry["inputSchema"] = schema
+				}
+				result[i] = entry
+			}
+			return vm.ToValue(result)
+		})
+
+		vm.Set("mcp_"+slug, obj)
+	}
+
+	return vm
+}
+
+// parseDisplayParts converts a goja Value to []DisplayPart.
+// Accepts a single object or an array of objects.
+func parseDisplayParts(vm *goja.Runtime, val goja.Value) []DisplayPart {
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		return nil
+	}
+
+	raw := val.Export()
+
+	// Single object → wrap in slice.
+	obj, isMap := raw.(map[string]any)
+	if isMap {
+		return []DisplayPart{mapToDisplayPart(obj)}
+	}
+
+	// Array of objects.
+	arr, isArr := raw.([]any)
+	if !isArr {
+		return nil
+	}
+	parts := make([]DisplayPart, 0, len(arr))
+	for _, item := range arr {
+		if m, ok := item.(map[string]any); ok {
+			parts = append(parts, mapToDisplayPart(m))
+		}
+	}
+	return parts
+}
+
+// mapToDisplayPart converts a JS object (map[string]any) to a DisplayPart.
+func mapToDisplayPart(m map[string]any) DisplayPart {
+	p := DisplayPart{}
+	if v, ok := m["type"].(string); ok {
+		p.Type = v
+	}
+	if v, ok := m["text"].(string); ok {
+		p.Text = v
+	}
+	if v, ok := m["source"].(string); ok {
+		p.Source = v
+	}
+	if v, ok := m["url"].(string); ok {
+		p.URL = v
+	}
+	if v, ok := m["filename"].(string); ok {
+		p.Filename = v
+	}
+	if v, ok := m["mimeType"].(string); ok {
+		p.MimeType = v
+	}
+	if v, ok := m["alt"].(string); ok {
+		p.Alt = v
+	}
+	if v, ok := m["duration"].(float64); ok {
+		p.Duration = v
+	}
+	// Handle "data" — can be string (base64), []byte, or ArrayBuffer.
+	if raw, ok := m["data"]; ok && raw != nil {
+		switch d := raw.(type) {
+		case []byte:
+			p.Data = d
+		case string:
+			p.Data = []byte(d)
+		case goja.ArrayBuffer:
+			p.Data = d.Bytes()
+		}
+	}
+	return p
+}
+
+// rowsToMaps converts sql.Rows to []map[string]any for JS consumption.
+func rowsToMaps(rows *sql.Rows) ([]map[string]any, error) {
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	var result []map[string]any
+	for rows.Next() {
+		values := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range values {
+			ptrs[i] = &values[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		row := make(map[string]any, len(cols))
+		for i, col := range cols {
+			v := values[i]
+			// Convert []byte to string for JS friendliness.
+			if b, ok := v.([]byte); ok {
+				v = string(b)
+			}
+			row[col] = v
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+// executeJS runs JavaScript code in a goja VM and returns the result as a string.
+// Catches panics and returns them as errors.
+func executeJS(vm *goja.Runtime, code string) (string, error) {
+	v, err := vm.RunString(code)
+	if err != nil {
+		return "", err
+	}
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return "", nil
+	}
+	return formatJSValue(vm, v), nil
+}
+
+// formatJSValue converts a goja value to a readable string.
+// Objects/arrays are JSON.stringified (like browser console).
+func formatJSValue(vm *goja.Runtime, v goja.Value) string {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return ""
+	}
+	if obj, ok := v.(*goja.Object); ok {
+		if stringify, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("stringify")); ok {
+			indent := vm.ToValue("  ")
+			result, err := stringify(goja.Undefined(), obj, goja.Undefined(), indent)
+			if err == nil && result != nil && !goja.IsUndefined(result) {
+				return result.String()
+			}
+		}
+	}
+	return v.String()
+}
