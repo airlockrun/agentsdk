@@ -142,6 +142,45 @@ func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
 	return &ConnectionHandle{slug: c.Slug, agent: a}
 }
 
+// RegisterStorage declares an S3-backed storage zone scoped to an Access
+// level. Returns a *StorageHandle for builder Go code and exposes a
+// `storage_{slug}` JS object inside run_js (only to callers whose access
+// satisfies the zone's Access; AccessInternal zones are never exposed
+// to JS at all). Slug also becomes the S3 prefix.
+//
+// The framework reserves the slug "tmp" for its own scratch storage
+// (truncated tool output, generated media). Builders may pass
+// Slug:"tmp" — the call returns a working handle to the framework's
+// tmp zone but the supplied Access / Description are silently ignored.
+//
+//	uploads := agent.RegisterStorage(&agentsdk.Storage{
+//	    Slug: "uploads", Access: agentsdk.AccessUser, Description: "User uploads",
+//	})
+//	err := uploads.Put(ctx, "doc.pdf", reader, "application/pdf")
+func (a *Agent) RegisterStorage(s *Storage) *StorageHandle {
+	if s == nil {
+		panic("agentsdk: RegisterStorage: nil *Storage")
+	}
+	if s.Slug == "" {
+		panic("agentsdk: RegisterStorage: Slug is required")
+	}
+	if existing, exists := a.storages[s.Slug]; exists {
+		// Reserved framework zone — return the existing handle without
+		// overwriting access / description. This lets builder code freely
+		// reference `agent.RegisterStorage(&Storage{Slug: "tmp"})`
+		// without colliding with the framework's auto-registration.
+		if s.Slug == reservedTmpSlug {
+			return &StorageHandle{slug: existing.Slug, access: existing.Access, agent: a}
+		}
+		panic("agentsdk: duplicate RegisterStorage: " + s.Slug)
+	}
+	if s.Access == "" {
+		s.Access = AccessUser
+	}
+	a.storages[s.Slug] = s
+	return &StorageHandle{slug: s.Slug, access: s.Access, agent: a}
+}
+
 // RegisterMCP registers a remote MCP server dependency and returns a handle
 // for calling its tools. Synced to Airlock on Serve(). Use the returned
 // handle for compile-time-bound tool calls:

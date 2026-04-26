@@ -183,6 +183,28 @@ type FileRef struct {
 	Size        int64  `json:"size"`
 }
 
+// --- Storage ---
+
+// Storage is the self-contained declaration registered via agent.RegisterStorage.
+// Each zone owns an S3 prefix ("{Slug}/") and a JS binding (storage_{slug});
+// AccessInternal zones are reachable only from builder Go code and never
+// surface in run_js. The framework auto-registers a reserved zone "tmp"
+// at AccessUser; builder calls with Slug="tmp" silently no-op (returning
+// the framework handle) so frameworks and builders share the same
+// scratch area without conflict.
+type Storage struct {
+	Slug        string
+	Access      Access // who may invoke storage_{slug} from JS; default AccessUser
+	Description string // shown in the system prompt's storage zones section
+}
+
+// StorageZoneDef is the wire format sent in SyncRequest.
+type StorageZoneDef struct {
+	Slug        string `json:"slug"`
+	Access      string `json:"access"`
+	Description string `json:"description"`
+}
+
 // --- Topic ---
 
 // Topic is the self-contained declaration registered via agent.RegisterTopic.
@@ -379,6 +401,7 @@ type SyncRequest struct {
 	Routes       []RouteDef        `json:"routes,omitempty"`
 	Topics       []TopicDef        `json:"topics,omitempty"`
 	MCPServers   []MCPServerSync   `json:"mcpServers,omitempty"`
+	Storages     []StorageZoneDef  `json:"storages,omitempty"`
 	ExtraPrompts []ExtraPromptSpec `json:"extraPrompts,omitempty"`
 	ModelSlots   []ModelSlotDef    `json:"modelSlots,omitempty"`
 }

@@ -169,9 +169,11 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 		return output
 	}
 
-	// Save full output to S3.
-	key := "tmp/output-" + randomHex(4) + ".txt"
-	if err := run.agent.StoreFile(ctx, key, strings.NewReader(output), "text/plain"); err != nil {
+	// Save full output to the framework-owned tmp zone. The LLM reads it
+	// back via storage_tmp.get(...) inside run_js.
+	relKey := "output-" + randomHex(4) + ".txt"
+	tmp := &StorageHandle{slug: reservedTmpSlug, access: AccessUser, agent: run.agent}
+	if err := tmp.Put(ctx, relKey, strings.NewReader(output), "text/plain"); err != nil {
 		// If save fails, just truncate without a key.
 		return output[:truncatePreviewLen] + fmt.Sprintf(
 			"\n\n[Output truncated (%dKB). Could not save full result.]",
@@ -179,13 +181,13 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 	}
 
 	return output[:truncatePreviewLen] + fmt.Sprintf(
-		"\n\n[Output truncated (%dKB → %dKB shown). Full result saved to %q.\n"+
+		"\n\n[Output truncated (%dKB → %dKB shown). Full result saved to storage_tmp at %q.\n"+
 			"Process it inside run_js without returning the full content:\n"+
-			"  let data = readFile(%q)\n"+
+			"  let data = storage_tmp.get(%q)\n"+
 			"  let parsed = JSON.parse(data) // or process as text\n"+
 			"  return parsed.slice(0, 10)    // return only what you need\n"+
 			"]",
-		len(output)/1024, truncatePreviewLen/1024, key, key)
+		len(output)/1024, truncatePreviewLen/1024, relKey, relKey)
 }
 
 // combineJSOutput merges console.log output with the return value,

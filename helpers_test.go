@@ -23,6 +23,7 @@ func testAgent(t *testing.T) (*Agent, *MockAirlock) {
 		mcps:         make(map[string]*MCP),
 		topics:       make(map[string]*Topic),
 		routes:       make(map[string]*Route),
+		storages:     make(map[string]*Storage),
 		convVMConfig: DefaultConversationVMConfig(),
 	}
 	a.client = newAirlockClient(url, "test-token", a.httpClient)

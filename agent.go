@@ -41,6 +41,7 @@ type Agent struct {
 	auths    map[string]*Connection
 	mcps     map[string]*MCP
 	topics   map[string]*Topic
+	storages map[string]*Storage
 
 	extraPrompts []*ExtraPrompt   // access-scoped system prompt fragments; see AddExtraPrompt
 	modelSlots   []*ModelSlot     // named model slots; see RegisterModel
@@ -125,6 +126,7 @@ func New(cfg Config) *Agent {
 		auths:    make(map[string]*Connection),
 		mcps:     make(map[string]*MCP),
 		topics:   make(map[string]*Topic),
+		storages: make(map[string]*Storage),
 		convVMConfig: DefaultConversationVMConfig(),
 	}
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
@@ -135,6 +137,15 @@ func New(cfg Config) *Agent {
 		logger = zap.NewNop()
 	}
 	a.logger = logger
+	// Framework-owned scratch zone — used by run_js output truncation and
+	// generated media. Builders may pass Slug:"tmp" to RegisterStorage; the
+	// register helper silently no-ops in that case so both sides share the
+	// same handle.
+	a.storages[reservedTmpSlug] = &Storage{
+		Slug:        reservedTmpSlug,
+		Access:      AccessUser,
+		Description: "Ephemeral run output (auto-managed by the framework — truncated tool output, generated media).",
+	}
 	return a
 }
 
@@ -172,90 +183,12 @@ func (a *Agent) DB() *sql.DB {
 	return a.db
 }
 
-// --- Storage methods (S3 via Airlock) ---
+// --- Conversation attachments ---
 
-// StoreFile stores a file in agent storage via Airlock.
-func (a *Agent) StoreFile(ctx context.Context, key string, data io.Reader, contentType string) error {
-	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+key, data)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", contentType)
-	resp, err := a.client.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("agentsdk: store file %s: %w", key, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: store file %s: status %d: %s", key, resp.StatusCode, string(b))
-	}
-	return nil
-}
-
-// LoadFile loads a file from agent storage via Airlock.
-func (a *Agent) LoadFile(ctx context.Context, key string) (io.ReadCloser, error) {
-	resp, err := a.client.do(ctx, "GET", "/api/agent/storage/"+key, nil)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		resp.Body.Close()
-		return nil, fmt.Errorf("agentsdk: load file %s: status %d", key, resp.StatusCode)
-	}
-	return resp.Body, nil
-}
-
-// DeleteFile deletes a file from agent storage via Airlock.
-func (a *Agent) DeleteFile(ctx context.Context, key string) error {
-	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage/"+key, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: delete file %s: status %d: %s", key, resp.StatusCode, string(b))
-	}
-	return nil
-}
-
-// FileInfo returns metadata for a file in agent storage.
-func (a *Agent) FileInfo(ctx context.Context, key string) (StoredFile, error) {
-	body := struct {
-		Key string `json:"key"`
-	}{key}
-	var info StoredFile
-	if err := a.client.doJSON(ctx, "POST", "/api/agent/storage/info", body, &info); err != nil {
-		return StoredFile{}, err
-	}
-	return info, nil
-}
-
-// CopyFile copies a file in agent storage via Airlock.
-func (a *Agent) CopyFile(ctx context.Context, srcKey, dstKey string) error {
-	body := struct {
-		Src string `json:"src"`
-		Dst string `json:"dst"`
-	}{srcKey, dstKey}
-	return a.client.doJSON(ctx, "POST", "/api/agent/storage/copy", body, nil)
-}
-
-// ListFiles lists files in agent storage matching a prefix.
-func (a *Agent) ListFiles(ctx context.Context, prefix string) ([]StoredFile, error) {
-	path := "/api/agent/storage"
-	if prefix != "" {
-		path += "?prefix=" + prefix
-	}
-	var files []StoredFile
-	if err := a.client.doJSON(ctx, "GET", path, nil, &files); err != nil {
-		return nil, err
-	}
-	return files, nil
-}
-
-// GetAttachment retrieves a conversation file attachment.
-func (a *Agent) GetAttachment(ctx context.Context, fileID string) (io.ReadCloser, error) {
+// Attachment retrieves a conversation file attachment by its opaque
+// fileID. Different surface from the zoned Storage handles — attachments
+// are content the user uploaded to a chat message and aren't builder-keyed.
+func (a *Agent) Attachment(ctx context.Context, fileID string) (io.ReadCloser, error) {
 	resp, err := a.client.do(ctx, "GET", "/api/agent/files/"+fileID, nil)
 	if err != nil {
 		return nil, err

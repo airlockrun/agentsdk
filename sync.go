@@ -115,6 +115,15 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		})
 	}
 
+	storages := make([]StorageZoneDef, 0, len(a.storages))
+	for _, s := range a.storages {
+		storages = append(storages, StorageZoneDef{
+			Slug:        s.Slug,
+			Access:      string(s.Access),
+			Description: s.Description,
+		})
+	}
+
 	modelSlots := make([]ModelSlotDef, 0, len(a.modelSlots))
 	for _, s := range a.modelSlots {
 		modelSlots = append(modelSlots, ModelSlotDef{
@@ -133,6 +142,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		Routes:       routes,
 		Topics:       topics,
 		MCPServers:   mcpServers,
+		Storages:     storages,
 		ExtraPrompts: extraPrompts,
 		ModelSlots:   modelSlots,
 	}

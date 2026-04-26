@@ -186,72 +186,88 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		return vm.ToValue(obj)
 	})
 
-	vm.Set("writeFile", func(call goja.FunctionCall) goja.Value {
-		key := call.Argument(0).String()
-		data := call.Argument(1).String()
-		contentType := call.Argument(2).String()
-		if err := agent.StoreFile(run.ctx, key, strings.NewReader(data), contentType); err != nil {
-			panic(vm.NewGoError(err))
+	// Register storage_{slug} objects for each registered Storage zone.
+	// Skip AccessInternal (never reachable from JS) and any zone whose
+	// required Access exceeds the run's caller level.
+	for slug, zone := range agent.storages {
+		if zone.Access == AccessInternal {
+			continue
 		}
-		return goja.Undefined()
-	})
-
-	vm.Set("readFile", func(call goja.FunctionCall) goja.Value {
-		key := call.Argument(0).String()
-		rc, err := agent.LoadFile(run.ctx, key)
-		if err != nil {
-			panic(vm.NewGoError(err))
+		if !accessSatisfies(run.callerAccess, zone.Access) {
+			continue
 		}
-		defer rc.Close()
-		b, err := io.ReadAll(rc)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return vm.ToValue(string(b))
-	})
-
-	vm.Set("fileInfo", func(call goja.FunctionCall) goja.Value {
-		key := call.Argument(0).String()
-		info, err := agent.FileInfo(run.ctx, key)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
+		handle := &StorageHandle{slug: slug, access: zone.Access, agent: agent}
 		obj := vm.NewObject()
-		obj.Set("key", info.Key)
-		obj.Set("size", info.Size)
-		obj.Set("contentType", info.ContentType)
-		obj.Set("lastModified", info.LastModified.Format("2006-01-02T15:04:05Z"))
-		return obj
-	})
 
-	vm.Set("copyFile", func(call goja.FunctionCall) goja.Value {
-		src := call.Argument(0).String()
-		dst := call.Argument(1).String()
-		if err := agent.CopyFile(run.ctx, src, dst); err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return goja.Undefined()
-	})
+		obj.Set("put", func(call goja.FunctionCall) goja.Value {
+			key := call.Argument(0).String()
+			data := call.Argument(1).String()
+			contentType := call.Argument(2).String()
+			if err := handle.Put(run.ctx, key, strings.NewReader(data), contentType); err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return goja.Undefined()
+		})
 
-	vm.Set("removeFile", func(call goja.FunctionCall) goja.Value {
-		key := call.Argument(0).String()
-		if err := agent.DeleteFile(run.ctx, key); err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return goja.Undefined()
-	})
+		obj.Set("get", func(call goja.FunctionCall) goja.Value {
+			key := call.Argument(0).String()
+			rc, err := handle.Get(run.ctx, key)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			defer rc.Close()
+			b, err := io.ReadAll(rc)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return vm.ToValue(string(b))
+		})
 
-	vm.Set("listFiles", func(call goja.FunctionCall) goja.Value {
-		prefix := ""
-		if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
-			prefix = call.Argument(0).String()
-		}
-		files, err := agent.ListFiles(run.ctx, prefix)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return vm.ToValue(files)
-	})
+		obj.Set("delete", func(call goja.FunctionCall) goja.Value {
+			key := call.Argument(0).String()
+			if err := handle.Delete(run.ctx, key); err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return goja.Undefined()
+		})
+
+		obj.Set("stat", func(call goja.FunctionCall) goja.Value {
+			key := call.Argument(0).String()
+			info, err := handle.Stat(run.ctx, key)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			res := vm.NewObject()
+			res.Set("key", info.Key)
+			res.Set("size", info.Size)
+			res.Set("contentType", info.ContentType)
+			res.Set("lastModified", info.LastModified.Format("2006-01-02T15:04:05Z"))
+			return res
+		})
+
+		obj.Set("list", func(call goja.FunctionCall) goja.Value {
+			prefix := ""
+			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
+				prefix = call.Argument(0).String()
+			}
+			files, err := handle.List(run.ctx, prefix)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return vm.ToValue(files)
+		})
+
+		obj.Set("copy", func(call goja.FunctionCall) goja.Value {
+			src := call.Argument(0).String()
+			dst := call.Argument(1).String()
+			if err := handle.Copy(run.ctx, src, dst); err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return goja.Undefined()
+		})
+
+		vm.Set("storage_"+slug, obj)
+	}
 
 	// printToUser(parts) — send rich content to the user's conversation.
 	// Accepts a single DisplayPart object or an array of DisplayPart objects.
@@ -432,14 +448,18 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		run.attachedKeys[key] = struct{}{}
 		run.mu.Unlock()
 
-		info, err := agent.FileInfo(run.ctx, key)
+		zone, relKey, ok := agent.findStorageByKey(key)
+		if !ok {
+			panic(vm.NewGoError(fmt.Errorf("attachToContext: %q must be a {storage}/{key} path under a registered zone", key)))
+		}
+		info, err := zone.Stat(run.ctx, relKey)
 		if err != nil {
 			panic(vm.NewGoError(fmt.Errorf("attachToContext: file not found: %w", err)))
 		}
 
 		if len(run.supportedModalities) > 0 && !mimeMatchesModalities(info.ContentType, run.supportedModalities) {
 			panic(vm.NewGoError(fmt.Errorf(
-				"attachToContext: %s files are not supported by the current model. Supported types: %s. Use readFile() for text-based files",
+				"attachToContext: %s files are not supported by the current model. Supported types: %s. Use storage_{slug}.get(...) for text-based files",
 				info.ContentType, strings.Join(run.supportedModalities, ", "))))
 		}
 
@@ -447,7 +467,9 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		// Airlock's attachref resolver picks this up on the LLM-stream and
 		// session-append paths, canonicalizes to llm/agents/<id>/K, and
 		// either presigns a URL or inlines base64. Keeps the agent-side
-		// call flat-latency even for huge attachments.
+		// call flat-latency even for huge attachments. The sentinel uses the
+		// full {zone}/{key} path so the resolver can presign the right S3
+		// object — same shape that lands in S3 for any storage zone write.
 		run.mu.Lock()
 		run.pendingAttachments = append(run.pendingAttachments, tool.Attachment{
 			Data:     "s3ref:" + key,

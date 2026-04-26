@@ -28,17 +28,17 @@ func TestConnectionHandleProxy(t *testing.T) {
 	}
 }
 
-func TestAgentStoreAndLoadFile(t *testing.T) {
+func TestStorageZonePutAndGet(t *testing.T) {
 	a, _ := testAgent(t)
+	zone := a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
 
-	// Store
-	err := a.StoreFile(context.Background(), "test.txt", strings.NewReader("hello"), "text/plain")
-	if err != nil {
+	// Put
+	if err := zone.Put(context.Background(), "test.txt", strings.NewReader("hello"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Load
-	rc, err := a.LoadFile(context.Background(), "test.txt")
+	// Get
+	rc, err := zone.Get(context.Background(), "test.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
