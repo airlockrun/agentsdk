@@ -35,15 +35,15 @@ type Agent struct {
 	sensitiveM   sync.RWMutex
 
 	tools    map[string]*registeredTool
-	webhooks map[string]webhookEntry
-	crons    map[string]cronEntry
-	auths         map[string]ConnectionDef
-	mcps          map[string]MCPDef
-	routes        map[string]routeEntry
-	topics map[string]TopicDef
+	webhooks map[string]*Webhook
+	crons    map[string]*Cron
+	routes   map[string]*Route
+	auths    map[string]*Connection
+	mcps     map[string]*MCP
+	topics   map[string]*Topic
 
-	extraPrompts []ExtraPromptSpec // access-scoped system prompt fragments; see AddExtraPrompt
-	modelSlots   []ModelSlotDef    // named model slots; see RegisterModel
+	extraPrompts []*ExtraPrompt   // access-scoped system prompt fragments; see AddExtraPrompt
+	modelSlots   []*ModelSlot     // named model slots; see RegisterModel
 
 	// Airlock-owned state: rendered/discovered server-side at sync time and
 	// pushed back via SyncResponse. /refresh re-runs sync to pick up changes
@@ -119,12 +119,12 @@ func New(cfg Config) *Agent {
 		httpClient:   &http.Client{},
 		sensitiveSet: make(map[string]struct{}),
 		tools:        make(map[string]*registeredTool),
-		webhooks:     make(map[string]webhookEntry),
-		crons:        make(map[string]cronEntry),
-		auths:        make(map[string]ConnectionDef),
-		mcps:         make(map[string]MCPDef),
-		routes:        make(map[string]routeEntry),
-		topics: make(map[string]TopicDef),
+		webhooks: make(map[string]*Webhook),
+		crons:    make(map[string]*Cron),
+		routes:   make(map[string]*Route),
+		auths:    make(map[string]*Connection),
+		mcps:     make(map[string]*MCP),
+		topics:   make(map[string]*Topic),
 		convVMConfig: DefaultConversationVMConfig(),
 	}
 	a.client = newAirlockClient(apiURL, token, a.httpClient)

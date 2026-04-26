@@ -9,10 +9,10 @@ import (
 )
 
 // LLM returns a streaming language model. Capability defaults to CapText
-// if ModelDef.Capability is empty. Pass the returned model the same ctx
+// if ModelOpts.Capability is empty. Pass the returned model the same ctx
 // when calling Stream.
-func (a *Agent) LLM(ctx context.Context, slug string, def ModelDef) stream.Model {
-	cap := def.Capability
+func (a *Agent) LLM(ctx context.Context, slug string, opts ModelOpts) stream.Model {
+	cap := opts.Capability
 	if cap == "" {
 		cap = CapText
 	}
@@ -26,7 +26,7 @@ func (a *Agent) LLM(ctx context.Context, slug string, def ModelDef) stream.Model
 }
 
 // ImageModel returns an image generation model proxied through Airlock.
-func (a *Agent) ImageModel(ctx context.Context, slug string, def ModelDef) model.ImageModel {
+func (a *Agent) ImageModel(ctx context.Context, slug string, opts ModelOpts) model.ImageModel {
 	_ = a.runForCall(ctx)
 	return proxy.ImageModel(proxy.Options{
 		BaseURL:    a.client.baseURL,
@@ -37,7 +37,7 @@ func (a *Agent) ImageModel(ctx context.Context, slug string, def ModelDef) model
 }
 
 // EmbeddingModel returns an embedding model proxied through Airlock.
-func (a *Agent) EmbeddingModel(ctx context.Context, slug string, def ModelDef) model.EmbeddingModel {
+func (a *Agent) EmbeddingModel(ctx context.Context, slug string, opts ModelOpts) model.EmbeddingModel {
 	_ = a.runForCall(ctx)
 	return proxy.EmbeddingModel(proxy.Options{
 		BaseURL:    a.client.baseURL,
@@ -48,7 +48,7 @@ func (a *Agent) EmbeddingModel(ctx context.Context, slug string, def ModelDef) m
 }
 
 // SpeechModel returns a text-to-speech model proxied through Airlock.
-func (a *Agent) SpeechModel(ctx context.Context, slug string, def ModelDef) model.SpeechModel {
+func (a *Agent) SpeechModel(ctx context.Context, slug string, opts ModelOpts) model.SpeechModel {
 	_ = a.runForCall(ctx)
 	return proxy.SpeechModel(proxy.Options{
 		BaseURL:    a.client.baseURL,
@@ -59,7 +59,7 @@ func (a *Agent) SpeechModel(ctx context.Context, slug string, def ModelDef) mode
 }
 
 // TranscriptionModel returns a speech-to-text model proxied through Airlock.
-func (a *Agent) TranscriptionModel(ctx context.Context, slug string, def ModelDef) model.TranscriptionModel {
+func (a *Agent) TranscriptionModel(ctx context.Context, slug string, opts ModelOpts) model.TranscriptionModel {
 	_ = a.runForCall(ctx)
 	return proxy.TranscriptionModel(proxy.Options{
 		BaseURL:    a.client.baseURL,

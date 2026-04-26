@@ -9,9 +9,9 @@ import (
 func TestAddExtraPrompt_Accumulates(t *testing.T) {
 	a, _ := testAgent(t)
 
-	a.AddExtraPrompt("all-access baseline")
-	a.AddExtraPrompt("admin-only ops", AccessAdmin)
-	a.AddExtraPrompt("members only", AccessAdmin, AccessUser)
+	a.AddExtraPrompt(&ExtraPrompt{Text: "all-access baseline"})
+	a.AddExtraPrompt(&ExtraPrompt{Text: "admin-only ops", Access: []Access{AccessAdmin}})
+	a.AddExtraPrompt(&ExtraPrompt{Text: "members only", Access: []Access{AccessAdmin, AccessUser}})
 
 	if got := len(a.extraPrompts); got != 3 {
 		t.Fatalf("len(extraPrompts) = %d, want 3", got)
@@ -36,8 +36,8 @@ func TestAddExtraPrompt_Accumulates(t *testing.T) {
 func TestAddExtraPrompt_SyncPayload(t *testing.T) {
 	a, mock := testAgent(t)
 
-	a.AddExtraPrompt("hello everyone")
-	a.AddExtraPrompt("hello admin", AccessAdmin)
+	a.AddExtraPrompt(&ExtraPrompt{Text: "hello everyone"})
+	a.AddExtraPrompt(&ExtraPrompt{Text: "hello admin", Access: []Access{AccessAdmin}})
 
 	a.syncWithAirlock(context.Background())
 

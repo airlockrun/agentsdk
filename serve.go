@@ -50,8 +50,8 @@ func (a *Agent) Serve() {
 	// Each route gets a lazy-run installed in ctx — a run is only created
 	// if the handler actually makes a model call. Wrap with logging
 	// middleware so panics surface in docker logs.
-	for key, entry := range a.routes {
-		mux.HandleFunc(key, routeLogging(a.wrapRoute(key, entry.handler)))
+	for key, route := range a.routes {
+		mux.HandleFunc(key, routeLogging(a.wrapRoute(key, route.Handler)))
 	}
 
 	server := &http.Server{
@@ -76,13 +76,13 @@ func (a *Agent) Serve() {
 
 func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	entry, ok := a.webhooks[name]
+	wh, ok := a.webhooks[name]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	timeout := entry.opts.Timeout
+	timeout := wh.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
@@ -116,7 +116,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := entry.handler(ctx, data, ew); err != nil {
+	if err := wh.Handler(ctx, data, ew); err != nil {
 		status := "error"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"
@@ -130,13 +130,13 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	entry, ok := a.crons[name]
+	cr, ok := a.crons[name]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	timeout := entry.opts.Timeout
+	timeout := cr.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
@@ -163,7 +163,7 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	if err := entry.handler(ctx, ew); err != nil {
+	if err := cr.Handler(ctx, ew); err != nil {
 		status := "error"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"
@@ -257,8 +257,8 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(webhooks)
 
 	crons := make([]cronInfo, 0, len(a.crons))
-	for name, entry := range a.crons {
-		crons = append(crons, cronInfo{Name: name, Schedule: entry.schedule})
+	for name, cr := range a.crons {
+		crons = append(crons, cronInfo{Name: name, Schedule: cr.Schedule})
 	}
 
 	tools := make([]string, 0, len(a.tools))

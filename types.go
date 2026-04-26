@@ -22,53 +22,69 @@ const defaultTimeout = 2 * time.Minute
 // agent.X(ctx, ...) call the body makes.
 type WebhookHandlerFunc func(ctx context.Context, data []byte, ew *EventWriter) error
 
-// WebhookOpts configures webhook verification and execution.
-type WebhookOpts struct {
-	Verify      string        `json:"verify"`      // "hmac", "token", "none" (default: "none")
-	Header      string        `json:"header"`      // e.g. "X-Hub-Signature-256" (for hmac mode)
-	Timeout     time.Duration `json:"-"`           // max execution time (default: 2 min)
-	Description string        `json:"description"` // human-readable description
-}
-
-// webhookEntry holds a registered webhook handler and its options.
-type webhookEntry struct {
-	handler WebhookHandlerFunc
-	opts    WebhookOpts
-}
-
 // CronHandlerFunc handles cron-triggered requests.
 type CronHandlerFunc func(ctx context.Context, ew *EventWriter) error
 
 // RouteHandlerFunc handles custom HTTP routes registered via RegisterRoute.
 type RouteHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request)
 
-// CronOpts configures cron execution.
-type CronOpts struct {
-	Timeout     time.Duration // max execution time (default: 2 min)
-	Description string        // human-readable description
+// --- Webhook ---
+
+// Webhook is the self-contained declaration registered via agent.RegisterWebhook.
+// Agents serve incoming HTTP at /webhook/{Path} on their container.
+type Webhook struct {
+	Path        string             // unique per agent
+	Handler     WebhookHandlerFunc // required
+	Verify      string             // "hmac" | "token" | "none" (default: "none")
+	Header      string             // header carrying the signature/token (hmac/token modes)
+	Timeout     time.Duration      // max execution time (default: 2 min)
+	Description string
+	Access      Access // who may invoke; default AccessUser
 }
 
-// cronEntry holds a registered cron handler and its options.
-type cronEntry struct {
-	schedule string
-	handler  CronHandlerFunc
-	opts     CronOpts
+// --- Cron ---
+
+// Cron is the self-contained declaration registered via agent.RegisterCron.
+// Crons fire by schedule, never by user action — no Access field.
+type Cron struct {
+	Name        string          // unique per agent
+	Schedule    string          // standard cron expression, e.g. "0 9 * * *"
+	Handler     CronHandlerFunc // required
+	Timeout     time.Duration   // max execution time (default: 2 min)
+	Description string
 }
 
-// --- Connection definitions ---
+// --- Route ---
 
-// ConnectionDef defines an outgoing service connection registered with Airlock.
-type ConnectionDef struct {
+// Route is the self-contained declaration registered via agent.RegisterRoute.
+// Custom HTTP routes served by the agent and proxied by Airlock via subdomain
+// routing. The (Method, Path) pair must be unique per agent.
+type Route struct {
+	Method      string           // "GET", "POST", ...
+	Path        string           // e.g. "/spotify"
+	Handler     RouteHandlerFunc // required
+	Access      Access           // required: AccessAdmin, AccessUser, or AccessPublic
+	Description string
+}
+
+// --- Connection ---
+
+// Connection is the self-contained declaration registered via
+// agent.RegisterConnection — an outgoing service Airlock proxies for the agent
+// with credentials it manages.
+type Connection struct {
+	Slug              string        `json:"-"` // unique per agent; binds as conn_{slug} in run_js — sent in URL, not body
 	Name              string        `json:"name"`
 	Description       string        `json:"description"`
-	AuthMode          string        `json:"authMode"`
+	BaseURL           string        `json:"baseUrl,omitempty"`
+	AuthMode          string        `json:"authMode"` // "oauth" | "token" | "none"
 	AuthURL           string        `json:"authUrl,omitempty"`
 	TokenURL          string        `json:"tokenUrl,omitempty"`
-	BaseURL           string        `json:"baseUrl,omitempty"`
 	Scopes            []string      `json:"scopes,omitempty"`
 	AuthInjection     AuthInjection `json:"authInjection"`
 	SetupInstructions string        `json:"setupInstructions,omitempty"`
-	LLMHint           string        `json:"llmHint,omitempty"` // injected into run_js tool description
+	LLMHint           string        `json:"llmHint,omitempty"` // appended to the connection block in the system prompt
+	Access            Access        `json:"access,omitempty"`  // who may invoke conn_{slug}; default AccessUser
 }
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
@@ -160,12 +176,22 @@ type FileRef struct {
 	Size        int64  `json:"size"`
 }
 
-// --- Topics ---
+// --- Topic ---
 
-// TopicDef defines a topic that an agent can publish notifications to.
+// Topic is the self-contained declaration registered via agent.RegisterTopic.
+// Conversations subscribe to a topic via topic_{slug}.subscribe() in run_js;
+// builders publish via the *TopicHandle returned by RegisterTopic.
+type Topic struct {
+	Slug        string
+	Description string
+	Access      Access // who may subscribe via topic_{slug}.subscribe(); default AccessUser
+}
+
+// TopicDef is the wire format sent in SyncRequest.
 type TopicDef struct {
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
+	Access      string `json:"access"`
 }
 
 // --- Display parts (printToUser / topic publish) ---
@@ -231,9 +257,9 @@ func ResolveDisplayPart(p *DisplayPart) {
 	}
 }
 
-// --- Route access levels ---
+// --- Access levels ---
 
-// Access defines who can reach an agent route.
+// Access defines who can reach a tool, connection, MCP, topic, or storage zone.
 type Access string
 
 const (
@@ -242,28 +268,20 @@ const (
 	AccessPublic Access = "public"
 )
 
-// RouteOpts configures a custom HTTP route.
-type RouteOpts struct {
-	Access      Access // required: AccessAdmin, AccessUser, or AccessPublic
-	Description string // human-readable description (e.g. "Spotify control page")
-}
+// --- MCP ---
 
-// routeEntry holds a registered custom HTTP route.
-type routeEntry struct {
-	handler RouteHandlerFunc
-	opts    RouteOpts
-}
-
-// --- MCP server definitions ---
-
-// MCPDef defines an MCP server dependency registered with Airlock.
-type MCPDef struct {
+// MCP is the self-contained declaration registered via agent.RegisterMCP.
+// Slug binds as mcp_{slug} in run_js; the builder uses the returned *MCPHandle
+// to call tools from Go.
+type MCP struct {
+	Slug     string   `json:"-"` // sent in URL, not body
 	Name     string   `json:"name"`
 	URL      string   `json:"url"`
-	AuthMode string   `json:"authMode"` // "oauth_discovery", "oauth", "token", "none"
+	AuthMode string   `json:"authMode"` // "oauth_discovery" | "oauth" | "token" | "none"
 	AuthURL  string   `json:"authUrl,omitempty"`
 	TokenURL string   `json:"tokenUrl,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
+	Access   Access   `json:"access,omitempty"` // who may invoke mcp_{slug}; default AccessUser
 }
 
 // MCPServerSync is the MCP server definition sent in SyncRequest.
@@ -275,6 +293,7 @@ type MCPServerSync struct {
 	AuthURL  string   `json:"authUrl,omitempty"`
 	TokenURL string   `json:"tokenUrl,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
+	Access   string   `json:"access"`
 }
 
 // MCPToolSchema is a discovered MCP tool schema returned in SyncResponse.
@@ -327,26 +346,35 @@ type SyncRequest struct {
 	ModelSlots   []ModelSlotDef    `json:"modelSlots,omitempty"`
 }
 
-// ExtraPromptSpec is a single AddExtraPrompt fragment in the sync payload.
-// Access is empty when the fragment applies to every access level.
+// ExtraPrompt is the self-contained declaration passed to agent.AddExtraPrompt.
+// The Text fragment is appended to the system prompt for runs whose caller
+// access matches one of the listed Access levels. Empty Access slice means
+// "applies to every access level."
+type ExtraPrompt struct {
+	Text   string
+	Access []Access
+}
+
+// ExtraPromptSpec is the wire format sent in SyncRequest.
 type ExtraPromptSpec struct {
 	Text   string   `json:"text"`
 	Access []Access `json:"access,omitempty"`
 }
 
-// ModelSlotDef is a single named model slot declared via RegisterModel.
-// The agent uses `Slug` at runtime (e.g. `agent.LLM(ctx, slug, ...)`);
-// the admin binds a specific model to the slug in the Airlock UI. When no
-// model is bound, calls fall through to the agent's per-capability default
-// and then to the system default for that capability.
+// ModelSlotDef is the wire format sent in SyncRequest. The agent uses Slug
+// at runtime (e.g. `agent.LLM(ctx, slug, ...)`); the admin binds a specific
+// model to the slug in the Airlock UI. When no model is bound, calls fall
+// through to the agent's per-capability default and then to the system
+// default for that capability.
 type ModelSlotDef struct {
 	Slug        string `json:"slug"`
 	Capability  string `json:"capability"`
 	Description string `json:"description,omitempty"`
 }
 
-// ModelSlotOpts configures a RegisterModel call.
-type ModelSlotOpts struct {
+// ModelSlot is the self-contained declaration registered via agent.RegisterModel.
+type ModelSlot struct {
+	Slug        string
 	Capability  ModelCapability // required: CapText, CapVision, CapImage, CapSpeech, CapTranscription, CapEmbedding
 	Description string          // human-readable hint shown in the admin UI
 }
@@ -442,8 +470,8 @@ const (
 	CapTranscription ModelCapability = "transcription"    // speech-to-text
 )
 
-// ModelDef configures a model request. Used with run.LLM(), run.ImageModel(), etc.
-type ModelDef struct {
+// ModelOpts configures a model request. Used with agent.LLM(), agent.ImageModel(), etc.
+type ModelOpts struct {
 	// Capability selects the model sub-type. Only meaningful for run.LLM()
 	// (distinguishes text vs vision). For other methods, the method name
 	// determines the capability and this field is ignored.

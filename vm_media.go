@@ -39,7 +39,7 @@ func (r *run) transcribeAudio(ctx context.Context, key string, opts model.Transc
 		opts.MimeType = info.ContentType
 	}
 
-	stt := r.agent.TranscriptionModel(ctx, "", ModelDef{Capability: CapTranscription})
+	stt := r.agent.TranscriptionModel(ctx, "", ModelOpts{Capability: CapTranscription})
 	return goai.Transcribe(ctx, goai.TranscribeInput{
 		Model:           stt,
 		Audio:           audio,
@@ -56,7 +56,7 @@ func (r *run) transcribeAudio(ctx context.Context, key string, opts model.Transc
 // when empty). Returns the key + metadata for downstream printToUser /
 // attachToContext calls.
 func (r *run) generateImage(ctx context.Context, prompt, saveAs string, opts model.ImageCallOptions) (*mediaResult, error) {
-	m := r.agent.ImageModel(ctx, "", ModelDef{Capability: CapImage})
+	m := r.agent.ImageModel(ctx, "", ModelOpts{Capability: CapImage})
 	res, err := goai.GenerateImage(ctx, goai.ImageInput{
 		Model:           m,
 		Prompt:          prompt,
@@ -86,7 +86,7 @@ func (r *run) generateImage(ctx context.Context, prompt, saveAs string, opts mod
 // generateSpeech runs `text` through the system-default TTS model and writes
 // the audio bytes to agent storage at `saveAs` (auto-named when empty).
 func (r *run) generateSpeech(ctx context.Context, text, saveAs string, opts model.SpeechCallOptions) (*mediaResult, error) {
-	m := r.agent.SpeechModel(ctx, "", ModelDef{Capability: CapSpeech})
+	m := r.agent.SpeechModel(ctx, "", ModelOpts{Capability: CapSpeech})
 	res, err := goai.GenerateSpeech(ctx, goai.SpeechInput{
 		Model:           m,
 		Text:            text,
@@ -107,7 +107,7 @@ func (r *run) generateSpeech(ctx context.Context, text, saveAs string, opts mode
 // embed proxies the embedding call through Airlock. Texts are small enough
 // that the inline-bytes round-trip is fine.
 func (r *run) embed(ctx context.Context, texts []string) ([][]float64, error) {
-	m := r.agent.EmbeddingModel(ctx, "", ModelDef{Capability: CapEmbedding})
+	m := r.agent.EmbeddingModel(ctx, "", ModelOpts{Capability: CapEmbedding})
 	res, err := goai.Embed(ctx, goai.EmbedInput{
 		Model:  m,
 		Values: texts,

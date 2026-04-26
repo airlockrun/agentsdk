@@ -26,49 +26,51 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		}
 	}
 
-	// Build sync payload.
+	// Build sync payload — convert builder structs to wire formats.
 	webhooks := make([]WebhookDef, 0, len(a.webhooks))
-	for path, entry := range a.webhooks {
-		timeout := entry.opts.Timeout
+	for _, w := range a.webhooks {
+		timeout := w.Timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
 		webhooks = append(webhooks, WebhookDef{
-			Path:        path,
-			Verify:      entry.opts.Verify,
-			Header:      entry.opts.Header,
+			Path:        w.Path,
+			Verify:      w.Verify,
+			Header:      w.Header,
 			TimeoutMs:   timeout.Milliseconds(),
-			Description: entry.opts.Description,
+			Description: w.Description,
 		})
 	}
 	crons := make([]CronEntry, 0, len(a.crons))
-	for name, entry := range a.crons {
-		timeout := entry.opts.Timeout
+	for _, c := range a.crons {
+		timeout := c.Timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
 		crons = append(crons, CronEntry{
-			Name:        name,
-			Schedule:    entry.schedule,
+			Name:        c.Name,
+			Schedule:    c.Schedule,
 			TimeoutMs:   timeout.Milliseconds(),
-			Description: entry.opts.Description,
+			Description: c.Description,
 		})
 	}
 	routes := make([]RouteDef, 0, len(a.routes))
-	for key, entry := range a.routes {
-		// key is "METHOD /path" — split back into method and path.
-		method, path, _ := strings.Cut(key, " ")
+	for _, r := range a.routes {
 		routes = append(routes, RouteDef{
-			Path:        path,
-			Method:      method,
-			Access:      string(entry.opts.Access),
-			Description: entry.opts.Description,
+			Path:        r.Path,
+			Method:      r.Method,
+			Access:      string(r.Access),
+			Description: r.Description,
 		})
 	}
 
 	topics := make([]TopicDef, 0, len(a.topics))
-	for _, def := range a.topics {
-		topics = append(topics, def)
+	for _, t := range a.topics {
+		topics = append(topics, TopicDef{
+			Slug:        t.Slug,
+			Description: t.Description,
+			Access:      string(t.Access),
+		})
 	}
 
 	tools := make([]SyncToolDef, 0, len(a.tools))
@@ -92,15 +94,33 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	}
 
 	mcpServers := make([]MCPServerSync, 0, len(a.mcps))
-	for slug, def := range a.mcps {
+	for _, m := range a.mcps {
 		mcpServers = append(mcpServers, MCPServerSync{
-			Slug:     slug,
-			Name:     def.Name,
-			URL:      def.URL,
-			AuthMode: def.AuthMode,
-			AuthURL:  def.AuthURL,
-			TokenURL: def.TokenURL,
-			Scopes:   def.Scopes,
+			Slug:     m.Slug,
+			Name:     m.Name,
+			URL:      m.URL,
+			AuthMode: m.AuthMode,
+			AuthURL:  m.AuthURL,
+			TokenURL: m.TokenURL,
+			Scopes:   m.Scopes,
+			Access:   string(m.Access),
+		})
+	}
+
+	extraPrompts := make([]ExtraPromptSpec, 0, len(a.extraPrompts))
+	for _, ep := range a.extraPrompts {
+		extraPrompts = append(extraPrompts, ExtraPromptSpec{
+			Text:   ep.Text,
+			Access: ep.Access,
+		})
+	}
+
+	modelSlots := make([]ModelSlotDef, 0, len(a.modelSlots))
+	for _, s := range a.modelSlots {
+		modelSlots = append(modelSlots, ModelSlotDef{
+			Slug:        s.Slug,
+			Capability:  string(s.Capability),
+			Description: s.Description,
 		})
 	}
 
@@ -113,8 +133,8 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		Routes:       routes,
 		Topics:       topics,
 		MCPServers:   mcpServers,
-		ExtraPrompts: a.extraPrompts,
-		ModelSlots:   a.modelSlots,
+		ExtraPrompts: extraPrompts,
+		ModelSlots:   modelSlots,
 	}
 
 	var syncResp SyncResponse

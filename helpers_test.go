@@ -17,9 +17,12 @@ func testAgent(t *testing.T) (*Agent, *MockAirlock) {
 		httpClient:   &http.Client{},
 		sensitiveSet: make(map[string]struct{}),
 		tools:        make(map[string]*registeredTool),
-		webhooks:     make(map[string]webhookEntry),
-		crons:        make(map[string]cronEntry),
-		auths:        make(map[string]ConnectionDef),
+		webhooks:     make(map[string]*Webhook),
+		crons:        make(map[string]*Cron),
+		auths:        make(map[string]*Connection),
+		mcps:         make(map[string]*MCP),
+		topics:       make(map[string]*Topic),
+		routes:       make(map[string]*Route),
 		convVMConfig: DefaultConversationVMConfig(),
 	}
 	a.client = newAirlockClient(url, "test-token", a.httpClient)

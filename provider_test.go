@@ -19,7 +19,7 @@ func TestAgentLLM(t *testing.T) {
 	a, mock := testAgent(t)
 	ctx := withBoundRun(a)
 
-	m := a.LLM(ctx, "ocr", ModelDef{Capability: CapVision, Description: "Extract text"})
+	m := a.LLM(ctx, "ocr", ModelOpts{Capability: CapVision, Description: "Extract text"})
 	if m == nil {
 		t.Fatal("expected non-nil model")
 	}
@@ -54,7 +54,7 @@ func TestAgentLLMDefaultCapability(t *testing.T) {
 	a, mock := testAgent(t)
 	ctx := withBoundRun(a)
 
-	m := a.LLM(ctx, "summarize", ModelDef{})
+	m := a.LLM(ctx, "summarize", ModelOpts{})
 	events, err := m.Stream(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestAgentImageModel(t *testing.T) {
 	a, mock := testAgent(t)
 	ctx := withBoundRun(a)
 
-	m := a.ImageModel(ctx, "render", ModelDef{Description: "Generate chart"})
+	m := a.ImageModel(ctx, "render", ModelOpts{Description: "Generate chart"})
 	result, err := m.Generate(ctx, model.ImageCallOptions{Prompt: "a chart"})
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestAgentEmbeddingModel(t *testing.T) {
 	a, mock := testAgent(t)
 	ctx := withBoundRun(a)
 
-	m := a.EmbeddingModel(ctx, "index", ModelDef{})
+	m := a.EmbeddingModel(ctx, "index", ModelOpts{})
 	result, err := m.Embed(ctx, model.EmbedCallOptions{Values: []string{"hello"}})
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestAgentSpeechModel(t *testing.T) {
 	a, mock := testAgent(t)
 	ctx := withBoundRun(a)
 
-	m := a.SpeechModel(ctx, "narrate", ModelDef{Description: "Narrate summary"})
+	m := a.SpeechModel(ctx, "narrate", ModelOpts{Description: "Narrate summary"})
 	_, err := m.Generate(ctx, model.SpeechCallOptions{Text: "hello world"})
 	if err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestAgentTranscriptionModel(t *testing.T) {
 	a, mock := testAgent(t)
 	ctx := withBoundRun(a)
 
-	m := a.TranscriptionModel(ctx, "stt", ModelDef{})
+	m := a.TranscriptionModel(ctx, "stt", ModelOpts{})
 	result, err := m.Transcribe(ctx, model.TranscribeCallOptions{Audio: []byte("fake-audio")})
 	if err != nil {
 		t.Fatal(err)
