@@ -148,6 +148,13 @@ func (a *Agent) Log(ctx context.Context, msg string) {
 	a.logger.Info(msg)
 }
 
+// Logf is the printf-style sibling of Log — formats with fmt.Sprintf and
+// records the result. Use Log for plain strings, Logf when you'd otherwise
+// reach for fmt.Sprintf.
+func (a *Agent) Logf(ctx context.Context, format string, args ...any) {
+	a.Log(ctx, fmt.Sprintf(format, args...))
+}
+
 // DB returns a lazily-initialized *sql.DB from AIRLOCK_DB_URL.
 // Returns nil if the env var is not set (DB is optional).
 func (a *Agent) DB() *sql.DB {

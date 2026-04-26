@@ -99,7 +99,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Slug:     m.Slug,
 			Name:     m.Name,
 			URL:      m.URL,
-			AuthMode: m.AuthMode,
+			AuthMode: string(m.AuthMode),
 			AuthURL:  m.AuthURL,
 			TokenURL: m.TokenURL,
 			Scopes:   m.Scopes,

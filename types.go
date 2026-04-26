@@ -76,8 +76,8 @@ type Connection struct {
 	Slug              string        `json:"-"` // unique per agent; binds as conn_{slug} in run_js — sent in URL, not body
 	Name              string        `json:"name"`
 	Description       string        `json:"description"`
-	BaseURL           string        `json:"baseUrl,omitempty"`
-	AuthMode          string        `json:"authMode"` // "oauth" | "token" | "none"
+	BaseURL           string         `json:"baseUrl,omitempty"`
+	AuthMode          ConnectionAuth `json:"authMode"`
 	AuthURL           string        `json:"authUrl,omitempty"`
 	TokenURL          string        `json:"tokenUrl,omitempty"`
 	Scopes            []string      `json:"scopes,omitempty"`
@@ -268,6 +268,30 @@ const (
 	AccessPublic Access = "public"
 )
 
+// --- Auth modes ---
+
+// ConnectionAuth enumerates the supported authentication strategies for an
+// outgoing service Connection.
+type ConnectionAuth string
+
+const (
+	ConnectionAuthOAuth ConnectionAuth = "oauth"
+	ConnectionAuthToken ConnectionAuth = "token"
+	ConnectionAuthNone  ConnectionAuth = "none"
+)
+
+// MCPAuth enumerates the supported authentication strategies for an MCP
+// server. MCPAuthOAuthDiscovery is MCP-specific (RFC 9728 server-advertised
+// OAuth endpoints) and not available on Connection.
+type MCPAuth string
+
+const (
+	MCPAuthOAuth          MCPAuth = "oauth"
+	MCPAuthOAuthDiscovery MCPAuth = "oauth_discovery"
+	MCPAuthToken          MCPAuth = "token"
+	MCPAuthNone           MCPAuth = "none"
+)
+
 // --- MCP ---
 
 // MCP is the self-contained declaration registered via agent.RegisterMCP.
@@ -277,7 +301,7 @@ type MCP struct {
 	Slug     string   `json:"-"` // sent in URL, not body
 	Name     string   `json:"name"`
 	URL      string   `json:"url"`
-	AuthMode string   `json:"authMode"` // "oauth_discovery" | "oauth" | "token" | "none"
+	AuthMode MCPAuth  `json:"authMode"`
 	AuthURL  string   `json:"authUrl,omitempty"`
 	TokenURL string   `json:"tokenUrl,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
