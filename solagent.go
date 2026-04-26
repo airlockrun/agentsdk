@@ -18,7 +18,7 @@ func newSolAgent(a *Agent, run *run, supportedModalities []string) *agent.Agent 
 		Model:             "", // caller sets model or passes Model override
 		Tools:             buildSolTools(a, run, supportedModalities),
 		MaxSteps:          maxToolSteps,
-		SystemPrompt:      a.systemPrompt, // rendered by Airlock during sync
+		SystemPrompt:      a.systemPromptSnapshot(), // rendered by Airlock during sync; mutex-guarded so /refresh updates are visible
 		EnvironmentPrompt: buildEnvironmentPrompt(run),
 		HistoryPolicy: agent.HistoryPolicy{
 			// Keep attached images/files visible for 3 user turns, then

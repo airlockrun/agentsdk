@@ -355,6 +355,11 @@ type ModelSlotOpts struct {
 type SyncResponse struct {
 	SystemPrompt  string          `json:"systemPrompt"`
 	MCPAuthStatus []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
+	// MCPSchemas carries discovered tool schemas per MCP server slug.
+	// Airlock populates these from its server-side discovery cache so the
+	// agent's VM can install one typed JS method per tool on each
+	// `mcp_{slug}` object — no per-run discovery round-trips.
+	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
 }
 
 // SyncToolDef describes a registered tool sent during sync. Carries the

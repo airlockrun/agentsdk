@@ -45,7 +45,12 @@ type Agent struct {
 	extraPrompts []ExtraPromptSpec // access-scoped system prompt fragments; see AddExtraPrompt
 	modelSlots   []ModelSlotDef    // named model slots; see RegisterModel
 
-	systemPrompt string // rendered by Airlock during sync
+	// Airlock-owned state: rendered/discovered server-side at sync time and
+	// pushed back via SyncResponse. /refresh re-runs sync to pick up changes
+	// (e.g. MCP OAuth completion) without restarting the container.
+	syncMu       sync.RWMutex
+	systemPrompt string                       // rendered by Airlock
+	mcpSchemas   map[string][]MCPToolSchema   // server slug → discovered tools
 
 	// Deps holds application-level dependencies (connection handles, MCP handles, etc.).
 	// The builder defines their own typed struct and assigns it here.
@@ -253,6 +258,42 @@ func (a *Agent) GetAttachment(ctx context.Context, fileID string) (io.ReadCloser
 		return nil, fmt.Errorf("agentsdk: get attachment %s: status %d", fileID, resp.StatusCode)
 	}
 	return resp.Body, nil
+}
+
+// systemPromptSnapshot returns the cached system prompt last rendered by
+// Airlock. Mutex-guarded so concurrent /refresh writes don't race the read.
+// Lowercase deliberately — builders never need this; only solagent.go reads
+// it when assembling the Sol agent for a run.
+func (a *Agent) systemPromptSnapshot() string {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	return a.systemPrompt
+}
+
+// snapshotMCPSchemas returns a value-copy of the MCP schema map. Callers
+// (e.g. vm.go) work against the snapshot for the duration of a run so a
+// concurrent /refresh can't mutate the map mid-iteration.
+func (a *Agent) snapshotMCPSchemas() map[string][]MCPToolSchema {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	if a.mcpSchemas == nil {
+		return nil
+	}
+	out := make(map[string][]MCPToolSchema, len(a.mcpSchemas))
+	for k, v := range a.mcpSchemas {
+		out[k] = v
+	}
+	return out
+}
+
+// applySyncResponse atomically replaces the cached system prompt + MCP
+// schemas with what Airlock returned from a sync round-trip. Called both
+// at startup (from syncWithAirlock in sync.go) and on /refresh.
+func (a *Agent) applySyncResponse(prompt string, schemas map[string][]MCPToolSchema) {
+	a.syncMu.Lock()
+	a.systemPrompt = prompt
+	a.mcpSchemas = schemas
+	a.syncMu.Unlock()
 }
 
 func requireEnv(key string) string {

@@ -9,19 +9,20 @@ import (
 )
 
 // syncWithAirlock registers connections, MCP servers, webhooks, crons, topics, and event subscriptions with Airlock.
-// Called by Serve() before starting the HTTP server. Panics on failure.
-func (a *Agent) syncWithAirlock(ctx context.Context) {
+// Called by Serve() at startup (via syncOrPanic) and by the /refresh handler.
+// Returns the error so /refresh can propagate it; startup panics via the wrapper.
+func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	// Register each connection.
 	for slug, def := range a.auths {
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/connections/"+slug, def, nil); err != nil {
-			panic("agentsdk: failed to register connection " + slug + ": " + err.Error())
+			return fmt.Errorf("register connection %s: %w", slug, err)
 		}
 	}
 
 	// Register each MCP server.
 	for slug, def := range a.mcps {
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/mcp-servers/"+slug, def, nil); err != nil {
-			panic("agentsdk: failed to register MCP server " + slug + ": " + err.Error())
+			return fmt.Errorf("register MCP server %s: %w", slug, err)
 		}
 	}
 
@@ -74,11 +75,11 @@ func (a *Agent) syncWithAirlock(ctx context.Context) {
 	for _, t := range a.tools {
 		inRaw, err := json.Marshal(t.InputSchema)
 		if err != nil {
-			panic(fmt.Sprintf("agentsdk: sync: marshal input schema for tool %q: %v", t.Name, err))
+			return fmt.Errorf("marshal input schema for tool %q: %w", t.Name, err)
 		}
 		outRaw, err := json.Marshal(t.OutputSchema)
 		if err != nil {
-			panic(fmt.Sprintf("agentsdk: sync: marshal output schema for tool %q: %v", t.Name, err))
+			return fmt.Errorf("marshal output schema for tool %q: %w", t.Name, err)
 		}
 		tools = append(tools, SyncToolDef{
 			Name:          t.Name,
@@ -122,17 +123,27 @@ func (a *Agent) syncWithAirlock(ctx context.Context) {
 		// surface a pointer to the remediation so the operator sees it in
 		// docker logs alongside the error persisted in the agent's UI.
 		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "incompatible") {
-			panic("agentsdk: sync rejected by Airlock (" + err.Error() + "); this container is out of date — rebuild the agent from the admin UI")
+			return fmt.Errorf("sync rejected by Airlock (%w); this container is out of date — rebuild the agent from the admin UI", err)
 		}
-		panic("agentsdk: failed to sync with Airlock: " + err.Error())
+		return fmt.Errorf("sync with Airlock: %w", err)
 	}
 
-	a.systemPrompt = syncResp.SystemPrompt
+	a.applySyncResponse(syncResp.SystemPrompt, syncResp.MCPSchemas)
 
 	// Log MCP auth issues.
 	for _, status := range syncResp.MCPAuthStatus {
 		if !status.Authorized {
 			log.Printf("MCP server %q: authorization required (%s)", status.Slug, status.AuthURL)
 		}
+	}
+	return nil
+}
+
+// syncOrPanic is the startup wrapper that turns sync failures into panics —
+// preserves the historical "container exits if it can't register" behaviour
+// so a misconfigured agent fails loud instead of running in a degraded state.
+func (a *Agent) syncOrPanic(ctx context.Context) {
+	if err := a.syncWithAirlock(ctx); err != nil {
+		panic("agentsdk: " + err.Error())
 	}
 }

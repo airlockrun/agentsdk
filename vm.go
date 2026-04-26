@@ -1,6 +1,7 @@
 package agentsdk
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -604,58 +605,37 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	})
 
 	// Register mcp_{slug} objects for each registered MCP server.
+	// Schemas come from Airlock via SyncResponse and live in agent.mcpSchemas;
+	// we snapshot once per VM build so /refresh writes during a run can't
+	// mutate the map mid-iteration. We expose one typed method per discovered
+	// tool plus callTool/listTools as escape hatches for tools added after
+	// start or for stringly-typed dispatch.
+	mcpSchemas := run.agent.snapshotMCPSchemas()
 	for slug, def := range run.agent.mcps {
 		handle := &MCPHandle{slug: slug, agent: run.agent}
-		_ = def // used only for registration; handle talks to Airlock
+		_ = def
 
 		obj := vm.NewObject()
 		mcpSlug := slug // capture for closures
 
+		// One method per discovered tool: mcp_github.search_repos({...}).
+		// The LLM sees these as typed declarations in the per-run env
+		// prompt, so the call site is type-aware.
+		for _, schema := range mcpSchemas[slug] {
+			toolName := schema.Name
+			obj.Set(toolName, func(call goja.FunctionCall) goja.Value {
+				return invokeMCPTool(vm, run.ctx, handle, mcpSlug, toolName, call.Argument(0))
+			})
+		}
+
+		// callTool: stringly-typed escape hatch — useful for tools added
+		// to the server after run start, or for dynamic dispatch.
 		obj.Set("callTool", func(call goja.FunctionCall) goja.Value {
 			toolName := call.Argument(0).String()
 			if toolName == "" {
 				panic(vm.NewGoError(fmt.Errorf("mcp_%s.callTool: tool name is required", mcpSlug)))
 			}
-
-			var args map[string]any
-			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
-				args, _ = call.Arguments[1].Export().(map[string]any)
-			}
-
-			resp, err := handle.CallTool(run.ctx, toolName, args)
-			if err != nil {
-				if ae, ok := IsAuthRequired(err); ok {
-					errObj := vm.NewObject()
-					errObj.Set("authRequired", true)
-					errObj.Set("slug", ae.Slug)
-					errObj.Set("serverName", mcpSlug)
-					panic(vm.ToValue(errObj))
-				}
-				panic(vm.NewGoError(fmt.Errorf("mcp_%s.callTool: %w", mcpSlug, err)))
-			}
-			if resp.IsError {
-				text := "MCP tool error"
-				if len(resp.Content) > 0 {
-					text = resp.Content[0].Text
-				}
-				panic(vm.NewGoError(fmt.Errorf("mcp_%s.callTool %s: %s", mcpSlug, toolName, text)))
-			}
-
-			// Combine text content.
-			var out strings.Builder
-			for _, c := range resp.Content {
-				if c.Type == "text" {
-					out.WriteString(c.Text)
-				}
-			}
-
-			// Try to parse as JSON for nicer JS consumption.
-			raw := out.String()
-			var parsed any
-			if jsonErr := json.Unmarshal([]byte(raw), &parsed); jsonErr == nil {
-				return vm.ToValue(parsed)
-			}
-			return vm.ToValue(raw)
+			return invokeMCPTool(vm, run.ctx, handle, mcpSlug, toolName, call.Argument(1))
 		})
 
 		obj.Set("listTools", func(call goja.FunctionCall) goja.Value {
@@ -670,7 +650,6 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				}
 				panic(vm.NewGoError(fmt.Errorf("mcp_%s.listTools: %w", mcpSlug, err)))
 			}
-			// Return simplified tool info for JS.
 			result := make([]map[string]any, len(tools))
 			for i, t := range tools {
 				entry := map[string]any{
@@ -678,9 +657,9 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 					"description": t.Description,
 				}
 				if len(t.InputSchema) > 0 {
-					var schema any
-					json.Unmarshal(t.InputSchema, &schema)
-					entry["inputSchema"] = schema
+					var schemaAny any
+					json.Unmarshal(t.InputSchema, &schemaAny)
+					entry["inputSchema"] = schemaAny
 				}
 				result[i] = entry
 			}
@@ -691,6 +670,46 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	}
 
 	return vm
+}
+
+// invokeMCPTool runs an MCP tool call from a JS binding and translates the
+// result back to a JS value. Shared between the typed per-tool methods and
+// the stringly-typed callTool fallback.
+func invokeMCPTool(vm *goja.Runtime, ctx context.Context, handle *MCPHandle, mcpSlug, toolName string, argsArg goja.Value) goja.Value {
+	var args any
+	if argsArg != nil && !goja.IsUndefined(argsArg) && !goja.IsNull(argsArg) {
+		args = argsArg.Export()
+	}
+	resp, err := handle.CallTool(ctx, toolName, args)
+	if err != nil {
+		if ae, ok := IsAuthRequired(err); ok {
+			errObj := vm.NewObject()
+			errObj.Set("authRequired", true)
+			errObj.Set("slug", ae.Slug)
+			errObj.Set("serverName", mcpSlug)
+			panic(vm.ToValue(errObj))
+		}
+		panic(vm.NewGoError(fmt.Errorf("mcp_%s.%s: %w", mcpSlug, toolName, err)))
+	}
+	if resp.IsError {
+		text := "MCP tool error"
+		if len(resp.Content) > 0 {
+			text = resp.Content[0].Text
+		}
+		panic(vm.NewGoError(fmt.Errorf("mcp_%s.%s: %s", mcpSlug, toolName, text)))
+	}
+	var out strings.Builder
+	for _, c := range resp.Content {
+		if c.Type == "text" {
+			out.WriteString(c.Text)
+		}
+	}
+	raw := out.String()
+	var parsed any
+	if jsonErr := json.Unmarshal([]byte(raw), &parsed); jsonErr == nil {
+		return vm.ToValue(parsed)
+	}
+	return vm.ToValue(raw)
 }
 
 // parseDisplayParts converts a goja Value to []DisplayPart.

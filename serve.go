@@ -27,8 +27,10 @@ func (a *Agent) Serve() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Sync with Airlock before accepting requests.
-	a.syncWithAirlock(ctx)
+	// Sync with Airlock before accepting requests. syncOrPanic preserves the
+	// historical "fail loud at boot" behaviour; the underlying syncWithAirlock
+	// is also called from /refresh where errors propagate to Airlock.
+	a.syncOrPanic(ctx)
 
 	// Start conversation VM garbage collection.
 	a.startConvVMGC(a.convVMConfig)
@@ -41,6 +43,7 @@ func (a *Agent) Serve() {
 	mux.HandleFunc("POST /prompt", handlePrompt(a))
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
 	mux.HandleFunc("POST /cron/{name}", a.handleCron)
+	mux.HandleFunc("POST /refresh", a.handleRefresh)
 	mux.HandleFunc("GET /health", a.handleHealth)
 
 	// Mount custom routes registered via RegisterRoute.
@@ -226,6 +229,19 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 		sw.wroteHeader = true
 	}
 	return sw.ResponseWriter.Write(b)
+}
+
+// handleRefresh re-runs syncWithAirlock so the cached system prompt and MCP
+// schemas pick up server-side changes (typically OAuth completion for an MCP
+// server). Synchronous: the response only returns once sync has applied, so
+// callers (Airlock dispatcher) know the agent is in the new state on 200.
+func (a *Agent) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := a.syncWithAirlock(r.Context()); err != nil {
+		log.Printf("agentsdk: /refresh sync failed: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {

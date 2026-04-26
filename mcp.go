@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/airlockrun/goai/tool"
@@ -16,11 +17,17 @@ type MCPHandle struct {
 	agent *Agent
 }
 
-// CallTool calls a tool on this MCP server via Airlock's proxy.
-func (h *MCPHandle) CallTool(ctx context.Context, toolName string, args map[string]any) (*MCPToolCallResponse, error) {
-	argsJSON, err := json.Marshal(args)
+// CallTool calls a tool on this MCP server via Airlock's proxy. Args
+// encoding mirrors ConnectionHandle.Request:
+//
+//	nil                           — sent as {} (MCP requires a JSON object)
+//	[]byte, string, json.RawMessage — assumed to be valid JSON, sent as-is
+//	io.Reader                     — fully read, assumed JSON, sent as-is
+//	anything else                 — JSON-marshalled
+func (h *MCPHandle) CallTool(ctx context.Context, toolName string, args any) (*MCPToolCallResponse, error) {
+	argsJSON, err := encodeMCPArgs(args)
 	if err != nil {
-		return nil, fmt.Errorf("MCPHandle.CallTool: marshal args: %w", err)
+		return nil, fmt.Errorf("MCPHandle.CallTool: encode args: %w", err)
 	}
 	req := MCPToolCallRequest{
 		Tool:      toolName,
@@ -31,6 +38,39 @@ func (h *MCPHandle) CallTool(ctx context.Context, toolName string, args map[stri
 		return nil, fmt.Errorf("MCPHandle.CallTool %s/%s: %w", h.slug, toolName, err)
 	}
 	return &resp, nil
+}
+
+func encodeMCPArgs(args any) (json.RawMessage, error) {
+	switch v := args.(type) {
+	case nil:
+		return json.RawMessage("{}"), nil
+	case json.RawMessage:
+		if len(v) == 0 {
+			return json.RawMessage("{}"), nil
+		}
+		return v, nil
+	case []byte:
+		if len(v) == 0 {
+			return json.RawMessage("{}"), nil
+		}
+		return json.RawMessage(v), nil
+	case string:
+		if v == "" {
+			return json.RawMessage("{}"), nil
+		}
+		return json.RawMessage(v), nil
+	case io.Reader:
+		b, err := io.ReadAll(v)
+		if err != nil {
+			return nil, err
+		}
+		if len(b) == 0 {
+			return json.RawMessage("{}"), nil
+		}
+		return json.RawMessage(b), nil
+	default:
+		return json.Marshal(v)
+	}
 }
 
 // ListTools fetches the current tool schemas from this MCP server via Airlock.

@@ -1,4 +1,15 @@
-package agentsdk
+// Package tsrender produces the TypeScript .d.ts blocks that Airlock
+// embeds into the agent system prompt: typed signatures for registered
+// tools, and per-server `declare const mcp_{slug}: {...}` namespaces for
+// MCP tools.
+//
+// The package is split out from agentsdk's main API surface so builders
+// (agentsdk consumers) don't see these types in their import autocomplete
+// or godoc — agentsdk's main package stays focused on the builder API
+// (RegisterTool, MCPHandle, etc.). The rendering here is shared between
+// agentsdk's tests and the airlock module's prompt template; both import
+// this package directly.
+package tsrender
 
 import (
 	"encoding/json"
@@ -9,9 +20,10 @@ import (
 	"github.com/airlockrun/goai/schema"
 )
 
-// ToolRender is the data RenderToolDecls consumes. Airlock builds this from
-// the hydrated DB/sync payload; the agent builds it from registeredTool.
-// Both paths go through the same renderer so the LLM sees one format.
+// ToolRender is the data RenderToolDecls consumes. Airlock builds this
+// from the hydrated DB/sync payload; the agent assembles it from the
+// registered-tool schemas in tests. Both paths go through the same
+// renderer so the LLM sees one format.
 type ToolRender struct {
 	Name          string
 	Description   string
@@ -20,8 +32,8 @@ type ToolRender struct {
 	InputExamples []json.RawMessage
 }
 
-// RenderToolDecls emits a TypeScript .d.ts-style block describing each tool.
-// Output is suitable for direct inclusion in an LLM prompt.
+// RenderToolDecls emits a TypeScript .d.ts-style block describing each
+// tool. Output is suitable for direct inclusion in an LLM prompt.
 func RenderToolDecls(tools []ToolRender) string {
 	if len(tools) == 0 {
 		return ""
@@ -201,22 +213,50 @@ func literalType(v any) string {
 	return "any"
 }
 
-// renderRegisteredTools adapts []*registeredTool into []ToolRender for the
-// renderer. Used by the agent-side path when we want to render locally.
-func renderRegisteredTools(tools []*registeredTool) string {
-	items := make([]ToolRender, 0, len(tools))
-	for _, t := range tools {
-		inRaw, _ := json.Marshal(t.InputSchema)
-		outRaw, _ := json.Marshal(t.OutputSchema)
-		items = append(items, ToolRender{
-			Name:          t.Name,
-			Description:   t.Description,
-			InputSchema:   inRaw,
-			OutputSchema:  outRaw,
-			InputExamples: t.InputExamples,
-		})
+// MCPToolRender carries the bits Airlock has cached about an MCP tool.
+// Only the input shape is typed — MCP doesn't define an output schema, so
+// the rendered return type is always `unknown` (caller does runtime parsing).
+type MCPToolRender struct {
+	Name        string
+	Description string
+	InputSchema json.RawMessage
+}
+
+// RenderMCPNamespace emits a typed `declare const mcp_{slug}: { ... };`
+// block describing each discovered MCP tool as a method on the namespace
+// object. Mirrors the JS binding shape installed by agentsdk's vm.go so
+// the LLM's call site and the runtime stay in lockstep.
+//
+//	declare const mcp_github: {
+//	  /** Search for GitHub repositories. */
+//	  search_repos(args: { query: string }): unknown;
+//	  ...
+//	};
+func RenderMCPNamespace(slug string, tools []MCPToolRender) string {
+	if len(tools) == 0 {
+		return ""
 	}
-	// Stable ordering by name.
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-	return RenderToolDecls(items)
+	// Stable ordering so the rendered prompt doesn't churn between syncs.
+	sorted := make([]MCPToolRender, len(tools))
+	copy(sorted, tools)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
+	var b strings.Builder
+	b.WriteString("declare const mcp_")
+	b.WriteString(slug)
+	b.WriteString(": {\n")
+	for _, t := range sorted {
+		if desc := strings.TrimSpace(t.Description); desc != "" {
+			b.WriteString("  /** ")
+			b.WriteString(strings.ReplaceAll(desc, "\n", " "))
+			b.WriteString(" */\n")
+		}
+		b.WriteString("  ")
+		b.WriteString(t.Name)
+		b.WriteString("(args: ")
+		b.WriteString(tsTypeFromSchema(decodeSchema(t.InputSchema), 1))
+		b.WriteString("): unknown;\n")
+	}
+	b.WriteString("};\n")
+	return b.String()
 }
