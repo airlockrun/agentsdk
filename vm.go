@@ -22,8 +22,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	// Bind registered tools. Each RegisterTool(&Tool[In, Out]{...}) becomes
 	// a typed JS global: JS input → json.Marshal → decode into In → typed
 	// Execute → Out → json.Marshal → JSON.parse → JS value. Errors surface
-	// as JS throws via vm.NewGoError.
+	// as JS throws via vm.NewGoError. Tools whose declared Access exceeds
+	// the run's callerAccess are simply not bound — invisible to the LLM.
 	for _, t := range agent.tools {
+		if !accessSatisfies(run.callerAccess, t.Access) {
+			continue
+		}
 		t := t // capture
 		vm.Set(t.Name, func(call goja.FunctionCall) goja.Value {
 			var argJS any
@@ -78,7 +82,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	}
 
 	// Register conn_{slug} objects for each registered connection.
-	for slug := range run.agent.auths {
+	// Skip any whose required Access exceeds the run's callerAccess.
+	for slug, conn := range run.agent.auths {
+		if !accessSatisfies(run.callerAccess, conn.Access) {
+			continue
+		}
 		handle := &ConnectionHandle{slug: slug, agent: run.agent}
 
 		obj := vm.NewObject()
@@ -256,7 +264,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	})
 
 	// Register topic_{slug} objects for each registered topic.
-	for slug := range agent.topics {
+	// Skip any whose required Access exceeds the run's callerAccess.
+	for slug, topic := range agent.topics {
+		if !accessSatisfies(run.callerAccess, topic.Access) {
+			continue
+		}
 		topicObj := vm.NewObject()
 		topicSlug := slug // capture for closure
 
@@ -611,9 +623,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	// tool plus callTool/listTools as escape hatches for tools added after
 	// start or for stringly-typed dispatch.
 	mcpSchemas := run.agent.snapshotMCPSchemas()
-	for slug, def := range run.agent.mcps {
+	for slug, mcp := range run.agent.mcps {
+		if !accessSatisfies(run.callerAccess, mcp.Access) {
+			continue
+		}
 		handle := &MCPHandle{slug: slug, agent: run.agent}
-		_ = def
 
 		obj := vm.NewObject()
 		mcpSlug := slug // capture for closures

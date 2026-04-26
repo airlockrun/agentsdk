@@ -96,6 +96,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	bridgeID := r.Header.Get("X-Bridge-ID")
 
 	run := newRun(a, runID, bridgeID, "", ctx)
+	run.callerAccess = AccessAdmin // webhook is a trusted server trigger
 	ctx = contextWithRun(ctx, run)
 	ew := newEventWriter(w)
 
@@ -150,6 +151,7 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 	bridgeID := r.Header.Get("X-Bridge-ID")
 
 	run := newRun(a, runID, bridgeID, "", ctx)
+	run.callerAccess = AccessAdmin // cron is a trusted scheduled trigger
 	ctx = contextWithRun(ctx, run)
 	ew := newEventWriter(w)
 

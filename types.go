@@ -160,6 +160,13 @@ type PromptInput struct {
 	// dispatch. The agent appends this to its sync-cached system prompt.
 	ExtraSystemPrompt string `json:"extraSystemPrompt,omitempty"`
 
+	// CallerAccess is the resolved per-(agent, user) access level for the
+	// triggering caller. agentsdk uses it to gate which conn_/mcp_/topic_/
+	// storage_ JS bindings (and registered tools) are exposed to the run.
+	// Airlock sets this from trigger.ResolveAgentAccess. For trusted server
+	// triggers (webhooks, crons) Airlock sends AccessAdmin.
+	CallerAccess Access `json:"callerAccess,omitempty"`
+
 	// ForceCompact tells the agent to skip the thinking loop and run a
 	// user-triggered compaction instead. Message is ignored when set. The
 	// agent loads conversation history, asks the model to summarize it,
@@ -266,6 +273,12 @@ const (
 	AccessAdmin  Access = "admin"
 	AccessUser   Access = "user"
 	AccessPublic Access = "public"
+	// AccessInternal is the strictest level — builder Go code only. Items
+	// registered with AccessInternal are never exposed to the JS runtime
+	// and are never reachable from external callers regardless of role.
+	// Use it when you have, say, a storage zone that holds builder-only
+	// caches you don't want the LLM to discover, mutate, or list.
+	AccessInternal Access = "internal"
 )
 
 // --- Auth modes ---

@@ -40,6 +40,13 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		bridgeID := r.Header.Get("X-Bridge-ID")
 
 		run := newRun(agent, runID, bridgeID, input.ConversationID, ctx)
+		// Stash the per-turn access level for vm.go's bind-time gating.
+		// Empty defaults to AccessUser (safest broad default for a /prompt).
+		if input.CallerAccess != "" {
+			run.callerAccess = input.CallerAccess
+		} else {
+			run.callerAccess = AccessUser
+		}
 		ctx = contextWithRun(ctx, run)
 
 		// Build prompt text from user message + file metadata.

@@ -17,6 +17,7 @@ type run struct {
 	bridgeID            string
 	conversationID      string
 	supportedModalities []string
+	callerAccess        Access // resolved per-turn access level (default AccessAdmin for trusted triggers)
 	ctx                 context.Context
 	actions             []Action
 	logs                []string
@@ -36,6 +37,10 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 		bridgeID:       bridgeID,
 		conversationID: conversationID,
 		ctx:            ctx,
+		// Default to admin — webhook/cron/route handlers and tests are
+		// trusted contexts. /prompt overrides this with the per-turn
+		// CallerAccess from PromptInput.
+		callerAccess: AccessAdmin,
 	}
 }
 
