@@ -98,13 +98,23 @@ func (h *StorageHandle) CopyTo(ctx context.Context, src string, dstZone *Storage
 	return h.agent.storageCopy(ctx, h.zoneKey(src), dstZone.zoneKey(dst))
 }
 
-// PublicURL returns a URL at which the given key is fetchable
-// unauthenticated, or "" if this zone isn't AccessPublic-readable or
-// Airlock isn't configured with an agent subdomain (the only host where
-// public zones are served). Re-resolves on the next sync if the agent's
+// URL returns the URL at which the given key is fetchable on the agent's
+// subdomain. Whether a request to that URL succeeds depends on the zone's
+// Read level and the caller's auth state:
+//
+//   - AccessPublic:  served unauthenticated.
+//   - AccessUser:    requires a valid agent-subdomain session cookie + agent
+//                    membership; the proxy redirects through the login flow
+//                    when the cookie is absent (so a click in chat triggers
+//                    sign-in and lands back on the file).
+//   - AccessAdmin:   same, but requires admin role on the agent.
+//   - AccessInternal: returns "" — the URL form is not served at all.
+//
+// Returns "" when no agent subdomain is configured (i.e. there is no
+// public-reachable URL form). Re-resolves on the next sync if the agent's
 // slug or the configured domain changes.
-func (h *StorageHandle) PublicURL(key string) string {
-	if h.read != AccessPublic {
+func (h *StorageHandle) URL(key string) string {
+	if h.read == AccessInternal {
 		return ""
 	}
 	base := h.agent.publicStorageBaseSnapshot()
