@@ -458,11 +458,10 @@ type SyncResponse struct {
 	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
 	// PublicStorageBase is the URL prefix at which storage zones are reachable
 	// on the agent's subdomain, ending without a trailing slash;
-	// *StorageHandle.URL appends "/{slug}/{key}". Set to
-	// https://{slug}.{agentDomain}/__air/storage when an agent subdomain is
-	// configured, empty otherwise. The proxy enforces the zone's Read access
-	// at fetch time — public zones serve unauthenticated, user/admin zones
-	// require subdomain login (redirect-on-missing-cookie).
+	// *StorageHandle.URL appends "/{slug}/{key}". Of the form
+	// https://{slug}.{agentDomain}/__air/storage. The proxy enforces the
+	// zone's Read access at fetch time — public zones serve unauthenticated,
+	// user/admin zones require subdomain login (redirect-on-missing-cookie).
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
 

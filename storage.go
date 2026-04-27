@@ -110,18 +110,13 @@ func (h *StorageHandle) CopyTo(ctx context.Context, src string, dstZone *Storage
 //   - AccessAdmin:   same, but requires admin role on the agent.
 //   - AccessInternal: returns "" — the URL form is not served at all.
 //
-// Returns "" when no agent subdomain is configured (i.e. there is no
-// public-reachable URL form). Re-resolves on the next sync if the agent's
-// slug or the configured domain changes.
+// Re-resolves on the next sync if the agent's slug or the configured
+// domain changes.
 func (h *StorageHandle) URL(key string) string {
 	if h.read == AccessInternal {
 		return ""
 	}
-	base := h.agent.publicStorageBaseSnapshot()
-	if base == "" {
-		return ""
-	}
-	return base + "/" + h.slug + "/" + strings.TrimLeft(key, "/")
+	return h.agent.publicStorageBaseSnapshot() + "/" + h.slug + "/" + strings.TrimLeft(key, "/")
 }
 
 func stripPrefix(s, p string) string {
