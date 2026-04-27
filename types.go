@@ -456,6 +456,13 @@ type SyncResponse struct {
 	// agent's VM can install one typed JS method per tool on each
 	// `mcp_{slug}` object — no per-run discovery round-trips.
 	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
+	// PublicStorageBase is the URL prefix at which AccessPublic storage zones
+	// are reachable, ending without a trailing slash; *StorageHandle.PublicURL
+	// appends "/{slug}/{key}". When agentDomain is configured Airlock returns
+	// the subdomain form (https://{slug}.{agentDomain}/__air/storage); else
+	// the host-level fallback (https://{publicURL}/storage/{agentID}). May be
+	// empty if no public-reachable URL is configured.
+	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
 
 // SyncToolDef describes a registered tool sent during sync. Carries the

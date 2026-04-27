@@ -159,7 +159,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		return fmt.Errorf("sync with Airlock: %w", err)
 	}
 
-	a.applySyncResponse(syncResp.SystemPrompt, syncResp.MCPSchemas)
+	a.applySyncResponse(syncResp)
 
 	// Log MCP auth issues.
 	for _, status := range syncResp.MCPAuthStatus {

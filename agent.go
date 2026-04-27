@@ -49,9 +49,10 @@ type Agent struct {
 	// Airlock-owned state: rendered/discovered server-side at sync time and
 	// pushed back via SyncResponse. /refresh re-runs sync to pick up changes
 	// (e.g. MCP OAuth completion) without restarting the container.
-	syncMu       sync.RWMutex
-	systemPrompt string                       // rendered by Airlock
-	mcpSchemas   map[string][]MCPToolSchema   // server slug → discovered tools
+	syncMu            sync.RWMutex
+	systemPrompt      string                     // rendered by Airlock
+	mcpSchemas        map[string][]MCPToolSchema // server slug → discovered tools
+	publicStorageBase string                     // base URL for AccessPublic zone reads (subdomain or host-level fallback)
 
 	// Deps holds application-level dependencies (connection handles, MCP handles, etc.).
 	// The builder defines their own typed struct and assigns it here.
@@ -228,13 +229,23 @@ func (a *Agent) snapshotMCPSchemas() map[string][]MCPToolSchema {
 }
 
 // applySyncResponse atomically replaces the cached system prompt + MCP
-// schemas with what Airlock returned from a sync round-trip. Called both
-// at startup (from syncWithAirlock in sync.go) and on /refresh.
-func (a *Agent) applySyncResponse(prompt string, schemas map[string][]MCPToolSchema) {
+// schemas + public storage base URL with what Airlock returned from a
+// sync round-trip. Called both at startup (from syncWithAirlock in
+// sync.go) and on /refresh.
+func (a *Agent) applySyncResponse(resp SyncResponse) {
 	a.syncMu.Lock()
-	a.systemPrompt = prompt
-	a.mcpSchemas = schemas
+	a.systemPrompt = resp.SystemPrompt
+	a.mcpSchemas = resp.MCPSchemas
+	a.publicStorageBase = resp.PublicStorageBase
 	a.syncMu.Unlock()
+}
+
+// publicStorageBaseSnapshot returns the cached public-storage base URL.
+// Mutex-guarded so concurrent /refresh writes don't race the read.
+func (a *Agent) publicStorageBaseSnapshot() string {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	return a.publicStorageBase
 }
 
 func requireEnv(key string) string {
