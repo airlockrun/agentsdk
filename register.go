@@ -15,7 +15,7 @@ import "fmt"
 //	    Execute:     doSearch,
 //	    Access:      agentsdk.AccessUser,
 //	})
-func (a *Agent) RegisterTool(def ToolDef) {
+func (a *Agent) RegisterTool(def AnyTool) {
 	rt := def.toRegistered()
 	if _, exists := a.tools[rt.Name]; exists {
 		panic("agentsdk: duplicate RegisterTool: " + rt.Name)

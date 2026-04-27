@@ -8,10 +8,12 @@ import (
 	"github.com/airlockrun/goai/schema"
 )
 
-// ToolDef is the sealed interface produced by *Tool[In, Out]. The unexported
+// AnyTool is the sealed interface produced by *Tool[In, Out]. The unexported
 // toRegistered method means only generic Tool values can satisfy it —
-// authors cannot roll their own ToolDef implementations.
-type ToolDef interface {
+// authors cannot roll their own AnyTool implementations. Used as the
+// argument type for RegisterTool so a heterogeneous set of generic Tool
+// values can share one entry point.
+type AnyTool interface {
 	toRegistered() *registeredTool
 }
 

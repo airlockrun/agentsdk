@@ -151,21 +151,34 @@ func New(cfg Config) *Agent {
 	return a
 }
 
-// Log records a message scoped to the current handler invocation. Visible
-// in the Runs UI alongside the actions the handler performed.
-func (a *Agent) Log(ctx context.Context, msg string) {
+// Log records a message scoped to the current handler invocation at the
+// given level. Visible in the Runs UI alongside the actions the handler
+// performed; level controls how the UI surfaces it (color/filter).
+//
+// Use LogLevelInfo for normal progress, LogLevelWarn for recoverable
+// concerns, and LogLevelError for failures the handler chose not to
+// raise. The argument shape is uniform — pick a level rather than reaching
+// for severity-named methods.
+func (a *Agent) Log(ctx context.Context, level LogLevel, msg string) {
 	if r := a.runForCall(ctx); r != nil {
-		r.logAppend(msg)
+		r.logAppend(level, msg)
 		return
 	}
-	a.logger.Info(msg)
+	switch level {
+	case LogLevelError:
+		a.logger.Error(msg)
+	case LogLevelWarn:
+		a.logger.Warn(msg)
+	default:
+		a.logger.Info(msg)
+	}
 }
 
 // Logf is the printf-style sibling of Log — formats with fmt.Sprintf and
 // records the result. Use Log for plain strings, Logf when you'd otherwise
 // reach for fmt.Sprintf.
-func (a *Agent) Logf(ctx context.Context, format string, args ...any) {
-	a.Log(ctx, fmt.Sprintf(format, args...))
+func (a *Agent) Logf(ctx context.Context, level LogLevel, format string, args ...any) {
+	a.Log(ctx, level, fmt.Sprintf(format, args...))
 }
 
 // DB returns a lazily-initialized *sql.DB from AIRLOCK_DB_URL.

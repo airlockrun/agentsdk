@@ -73,23 +73,39 @@ type Route struct {
 // agent.RegisterConnection — an outgoing service Airlock proxies for the agent
 // with credentials it manages.
 type Connection struct {
-	Slug              string        `json:"-"` // unique per agent; binds as conn_{slug} in run_js — sent in URL, not body
-	Name              string        `json:"name"`
-	Description       string        `json:"description"`
+	Slug              string         // unique per agent; binds as conn_{slug} in run_js
+	Name              string
+	Description       string
+	BaseURL           string
+	AuthMode          ConnectionAuth
+	AuthURL           string
+	TokenURL          string
+	Scopes            []string
+	AuthInjection     AuthInjection
+	SetupInstructions string
+	LLMHint           string // appended to the connection block in the system prompt
+	Access            Access // who may invoke conn_{slug}; default AccessUser
+}
+
+// ConnectionDef is the wire format used by PUT /api/agent/connections/{slug}.
+// Slug is sent in the URL, not the body.
+type ConnectionDef struct {
+	Name              string         `json:"name"`
+	Description       string         `json:"description"`
 	BaseURL           string         `json:"baseUrl,omitempty"`
 	AuthMode          ConnectionAuth `json:"authMode"`
-	AuthURL           string        `json:"authUrl,omitempty"`
-	TokenURL          string        `json:"tokenUrl,omitempty"`
-	Scopes            []string      `json:"scopes,omitempty"`
-	AuthInjection     AuthInjection `json:"authInjection"`
-	SetupInstructions string        `json:"setupInstructions,omitempty"`
-	LLMHint           string        `json:"llmHint,omitempty"` // appended to the connection block in the system prompt
-	Access            Access        `json:"access,omitempty"`  // who may invoke conn_{slug}; default AccessUser
+	AuthURL           string         `json:"authUrl,omitempty"`
+	TokenURL          string         `json:"tokenUrl,omitempty"`
+	Scopes            []string       `json:"scopes,omitempty"`
+	AuthInjection     AuthInjection  `json:"authInjection"`
+	SetupInstructions string         `json:"setupInstructions,omitempty"`
+	LLMHint           string         `json:"llmHint,omitempty"`
+	Access            Access         `json:"access,omitempty"`
 }
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
 type AuthInjection struct {
-	Type string `json:"type"` // "bearer", "api_key_header", "bot_token_url_prefix"
+	Type string `json:"type"`           // "bearer", "api_key_header", "bot_token_url_prefix"
 	Name string `json:"name,omitempty"` // header name for api_key_header (default: "X-API-Key")
 }
 
@@ -97,12 +113,12 @@ type AuthInjection struct {
 
 // Action records a single operation performed during a Run.
 type Action struct {
-	Type      string    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
-	Duration  int64     `json:"durationMs"`
-	Request   any       `json:"request,omitempty"`
-	Response  any       `json:"response,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	Type       string    `json:"type"`
+	Timestamp  time.Time `json:"timestamp"`
+	DurationMs int64     `json:"durationMs"`
+	Request    any       `json:"request,omitempty"`
+	Response   any       `json:"response,omitempty"`
+	Error      string    `json:"error,omitempty"`
 }
 
 // --- Storage ---
@@ -205,11 +221,11 @@ type Storage struct {
 	Description string // shown in the system prompt's storage zones section
 }
 
-// StorageZoneDef is the wire format sent in SyncRequest.
-type StorageZoneDef struct {
+// StorageDef is the wire format sent in SyncRequest.
+type StorageDef struct {
 	Slug        string `json:"slug"`
-	Read        string `json:"read"`
-	Write       string `json:"write"`
+	Read        Access `json:"read"`
+	Write       Access `json:"write"`
 	Description string `json:"description"`
 }
 
@@ -228,7 +244,7 @@ type Topic struct {
 type TopicDef struct {
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
-	Access      string `json:"access"`
+	Access      Access `json:"access"`
 }
 
 // --- Display parts (printToUser / topic publish) ---
@@ -341,26 +357,28 @@ const (
 // Slug binds as mcp_{slug} in run_js; the builder uses the returned *MCPHandle
 // to call tools from Go.
 type MCP struct {
-	Slug     string   `json:"-"` // sent in URL, not body
+	Slug     string // unique per agent; binds as mcp_{slug} in run_js
+	Name     string
+	URL      string
+	AuthMode MCPAuth
+	AuthURL  string
+	TokenURL string
+	Scopes   []string
+	Access   Access // who may invoke mcp_{slug}; default AccessUser
+}
+
+// MCPDef is the wire format used by PUT /api/agent/mcp-servers/{slug} and
+// (with Slug populated) by SyncRequest.MCPServers. Slug is sent in the URL
+// for the per-slug PUT and in the body for the bulk sync.
+type MCPDef struct {
+	Slug     string   `json:"slug,omitempty"`
 	Name     string   `json:"name"`
 	URL      string   `json:"url"`
 	AuthMode MCPAuth  `json:"authMode"`
 	AuthURL  string   `json:"authUrl,omitempty"`
 	TokenURL string   `json:"tokenUrl,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
-	Access   Access   `json:"access,omitempty"` // who may invoke mcp_{slug}; default AccessUser
-}
-
-// MCPServerSync is the MCP server definition sent in SyncRequest.
-type MCPServerSync struct {
-	Slug     string   `json:"slug"`
-	Name     string   `json:"name"`
-	URL      string   `json:"url"`
-	AuthMode string   `json:"authMode"`
-	AuthURL  string   `json:"authUrl,omitempty"`
-	TokenURL string   `json:"tokenUrl,omitempty"`
-	Scopes   []string `json:"scopes,omitempty"`
-	Access   string   `json:"access"`
+	Access   Access   `json:"access,omitempty"`
 }
 
 // MCPToolSchema is a discovered MCP tool schema returned in SyncResponse.
@@ -373,10 +391,10 @@ type MCPToolSchema struct {
 
 // MCPAuthStatus reports auth state for an MCP server.
 type MCPAuthStatus struct {
-	Slug       string `json:"slug"`
-	AuthMode   string `json:"authMode"`
-	Authorized bool   `json:"authorized"`
-	AuthURL    string `json:"authUrl,omitempty"`
+	Slug       string  `json:"slug"`
+	AuthMode   MCPAuth `json:"authMode"`
+	Authorized bool    `json:"authorized"`
+	AuthURL    string  `json:"authUrl,omitempty"`
 }
 
 // MCPToolCallRequest is the body for POST /api/agent/mcp/{slug}/tools/call.
@@ -401,17 +419,17 @@ type MCPContent struct {
 
 // SyncRequest is the body for PUT /api/agent/sync.
 type SyncRequest struct {
-	Version      string            `json:"version"`
-	Description  string            `json:"description,omitempty"`
-	Tools        []SyncToolDef     `json:"tools,omitempty"`
-	Webhooks     []WebhookDef      `json:"webhooks"`
-	Crons        []CronEntry       `json:"crons"`
-	Routes       []RouteDef        `json:"routes,omitempty"`
-	Topics       []TopicDef        `json:"topics,omitempty"`
-	MCPServers   []MCPServerSync   `json:"mcpServers,omitempty"`
-	Storages     []StorageZoneDef  `json:"storages,omitempty"`
-	ExtraPrompts []ExtraPromptSpec `json:"extraPrompts,omitempty"`
-	ModelSlots   []ModelSlotDef    `json:"modelSlots,omitempty"`
+	Version      string           `json:"version"`
+	Description  string           `json:"description,omitempty"`
+	Tools        []ToolDef        `json:"tools,omitempty"`
+	Webhooks     []WebhookDef     `json:"webhooks"`
+	Crons        []CronDef        `json:"crons"`
+	Routes       []RouteDef       `json:"routes,omitempty"`
+	Topics       []TopicDef       `json:"topics,omitempty"`
+	MCPServers   []MCPDef         `json:"mcpServers,omitempty"`
+	Storages     []StorageDef     `json:"storages,omitempty"`
+	ExtraPrompts []ExtraPromptDef `json:"extraPrompts,omitempty"`
+	ModelSlots   []ModelSlotDef   `json:"modelSlots,omitempty"`
 }
 
 // ExtraPrompt is the self-contained declaration passed to agent.AddExtraPrompt.
@@ -423,8 +441,8 @@ type ExtraPrompt struct {
 	Access []Access
 }
 
-// ExtraPromptSpec is the wire format sent in SyncRequest.
-type ExtraPromptSpec struct {
+// ExtraPromptDef is the wire format sent in SyncRequest.
+type ExtraPromptDef struct {
 	Text   string   `json:"text"`
 	Access []Access `json:"access,omitempty"`
 }
@@ -465,13 +483,13 @@ type SyncResponse struct {
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
 
-// SyncToolDef describes a registered tool sent during sync. Carries the
-// JSON schemas for input and output so Airlock can render TypeScript
-// signatures in the system prompt and surface them in the UI.
-type SyncToolDef struct {
+// ToolDef describes a registered tool sent during sync. Carries the JSON
+// schemas for input and output so Airlock can render TypeScript signatures
+// in the system prompt and surface them in the UI.
+type ToolDef struct {
 	Name          string            `json:"name"`
 	Description   string            `json:"description"`
-	Access        string            `json:"access"` // "admin", "user", "public"
+	Access        Access            `json:"access"`
 	InputSchema   json.RawMessage   `json:"inputSchema,omitempty"`
 	OutputSchema  json.RawMessage   `json:"outputSchema,omitempty"`
 	InputExamples []json.RawMessage `json:"inputExamples,omitempty"`
@@ -481,7 +499,7 @@ type SyncToolDef struct {
 type RouteDef struct {
 	Path        string `json:"path"`
 	Method      string `json:"method"`
-	Access      string `json:"access"`
+	Access      Access `json:"access"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -494,8 +512,8 @@ type WebhookDef struct {
 	Description string `json:"description,omitempty"`
 }
 
-// CronEntry is a cron job definition sent during sync.
-type CronEntry struct {
+// CronDef is a cron job definition sent during sync.
+type CronDef struct {
 	Name        string `json:"name"`
 	Schedule    string `json:"schedule"`
 	TimeoutMs   int64  `json:"timeoutMs"`
@@ -582,6 +600,23 @@ type CreateRunResponse struct {
 	RunID string `json:"runId"`
 }
 
+// LogLevel categorizes a builder-emitted log line. UI can color/filter on it;
+// the wire format stores it explicitly so the level isn't lost in a flat string.
+type LogLevel string
+
+const (
+	LogLevelInfo  LogLevel = "info"
+	LogLevelWarn  LogLevel = "warn"
+	LogLevelError LogLevel = "error"
+)
+
+// LogEntry is one builder-emitted line: a level and a message. The wire
+// format used by /api/agent/run/complete; also the in-memory shape on the run.
+type LogEntry struct {
+	Level   LogLevel `json:"level"`
+	Message string   `json:"message"`
+}
+
 // RunCompleteRequest is the body for POST /api/agent/run/complete.
 type RunCompleteRequest struct {
 	RunID      string          `json:"runId"`
@@ -589,7 +624,7 @@ type RunCompleteRequest struct {
 	Error      string          `json:"error,omitempty"`
 	PanicTrace string          `json:"panicTrace,omitempty"`
 	Actions    json.RawMessage `json:"actions"`
-	Logs       []string        `json:"logs,omitempty"`
+	Logs       []LogEntry      `json:"logs,omitempty"`
 	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 }
 

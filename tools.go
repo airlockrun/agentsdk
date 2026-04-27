@@ -190,13 +190,26 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 		len(output)/1024, truncatePreviewLen/1024, relKey, relKey)
 }
 
-// combineJSOutput merges console.log output with the return value,
-// similar to how a browser console shows logged output then the expression result.
-func combineJSOutput(logs []string, result string) string {
+// combineJSOutput merges console.log output with the return value, similar
+// to how a browser console shows logged output then the expression result.
+// Levels above info are prefixed so the LLM can distinguish a console.warn
+// from a plain log; info lines come through verbatim.
+func combineJSOutput(logs []LogEntry, result string) string {
 	if len(logs) == 0 {
 		return result
 	}
-	combined := strings.Join(logs, "\n")
+	parts := make([]string, len(logs))
+	for i, l := range logs {
+		switch l.Level {
+		case LogLevelWarn:
+			parts[i] = "[warn] " + l.Message
+		case LogLevelError:
+			parts[i] = "[error] " + l.Message
+		default:
+			parts[i] = l.Message
+		}
+	}
+	combined := strings.Join(parts, "\n")
 	if result != "" {
 		combined += "\n" + result
 	}

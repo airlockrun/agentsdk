@@ -75,8 +75,8 @@ func TestVM(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(run.logs) != 1 || run.logs[0] != "hello from JS" {
-			t.Fatalf("expected log entry, got %v", run.logs)
+		if len(run.logs) != 1 || run.logs[0].Message != "hello from JS" || run.logs[0].Level != LogLevelInfo {
+			t.Fatalf("expected info log entry, got %v", run.logs)
 		}
 	})
 

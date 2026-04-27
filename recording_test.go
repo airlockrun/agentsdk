@@ -10,7 +10,7 @@ func TestRunComplete(t *testing.T) {
 	a, mock := testAgent(t)
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	run.logAppend("test log")
+	run.logAppend(LogLevelInfo, "test log")
 	run.recordAction("proxy", "req", "resp", nil, 100)
 
 	err := run.complete(context.Background(), "success", "", "")
@@ -24,10 +24,10 @@ func TestRunComplete(t *testing.T) {
 	}
 
 	var body struct {
-		RunID   string   `json:"runId"`
-		Status  string   `json:"status"`
-		Actions []Action `json:"actions"`
-		Logs    []string `json:"logs"`
+		RunID   string     `json:"runId"`
+		Status  string     `json:"status"`
+		Actions []Action   `json:"actions"`
+		Logs    []LogEntry `json:"logs"`
 	}
 	json.Unmarshal(reqs[0].Body, &body)
 	if body.RunID != "run-1" {

@@ -13,14 +13,36 @@ import (
 // Returns the error so /refresh can propagate it; startup panics via the wrapper.
 func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	// Register each connection.
-	for slug, def := range a.auths {
+	for slug, c := range a.auths {
+		def := ConnectionDef{
+			Name:              c.Name,
+			Description:       c.Description,
+			BaseURL:           c.BaseURL,
+			AuthMode:          c.AuthMode,
+			AuthURL:           c.AuthURL,
+			TokenURL:          c.TokenURL,
+			Scopes:            c.Scopes,
+			AuthInjection:     c.AuthInjection,
+			SetupInstructions: c.SetupInstructions,
+			LLMHint:           c.LLMHint,
+			Access:            c.Access,
+		}
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/connections/"+slug, def, nil); err != nil {
 			return fmt.Errorf("register connection %s: %w", slug, err)
 		}
 	}
 
 	// Register each MCP server.
-	for slug, def := range a.mcps {
+	for slug, m := range a.mcps {
+		def := MCPDef{
+			Name:     m.Name,
+			URL:      m.URL,
+			AuthMode: m.AuthMode,
+			AuthURL:  m.AuthURL,
+			TokenURL: m.TokenURL,
+			Scopes:   m.Scopes,
+			Access:   m.Access,
+		}
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/mcp-servers/"+slug, def, nil); err != nil {
 			return fmt.Errorf("register MCP server %s: %w", slug, err)
 		}
@@ -41,13 +63,13 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: w.Description,
 		})
 	}
-	crons := make([]CronEntry, 0, len(a.crons))
+	crons := make([]CronDef, 0, len(a.crons))
 	for _, c := range a.crons {
 		timeout := c.Timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
-		crons = append(crons, CronEntry{
+		crons = append(crons, CronDef{
 			Name:        c.Name,
 			Schedule:    c.Schedule,
 			TimeoutMs:   timeout.Milliseconds(),
@@ -59,7 +81,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		routes = append(routes, RouteDef{
 			Path:        r.Path,
 			Method:      r.Method,
-			Access:      string(r.Access),
+			Access:      r.Access,
 			Description: r.Description,
 		})
 	}
@@ -69,11 +91,11 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		topics = append(topics, TopicDef{
 			Slug:        t.Slug,
 			Description: t.Description,
-			Access:      string(t.Access),
+			Access:      t.Access,
 		})
 	}
 
-	tools := make([]SyncToolDef, 0, len(a.tools))
+	tools := make([]ToolDef, 0, len(a.tools))
 	for _, t := range a.tools {
 		inRaw, err := json.Marshal(t.InputSchema)
 		if err != nil {
@@ -83,44 +105,44 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("marshal output schema for tool %q: %w", t.Name, err)
 		}
-		tools = append(tools, SyncToolDef{
+		tools = append(tools, ToolDef{
 			Name:          t.Name,
 			Description:   t.Description,
-			Access:        string(t.Access),
+			Access:        t.Access,
 			InputSchema:   inRaw,
 			OutputSchema:  outRaw,
 			InputExamples: t.InputExamples,
 		})
 	}
 
-	mcpServers := make([]MCPServerSync, 0, len(a.mcps))
+	mcpServers := make([]MCPDef, 0, len(a.mcps))
 	for _, m := range a.mcps {
-		mcpServers = append(mcpServers, MCPServerSync{
+		mcpServers = append(mcpServers, MCPDef{
 			Slug:     m.Slug,
 			Name:     m.Name,
 			URL:      m.URL,
-			AuthMode: string(m.AuthMode),
+			AuthMode: m.AuthMode,
 			AuthURL:  m.AuthURL,
 			TokenURL: m.TokenURL,
 			Scopes:   m.Scopes,
-			Access:   string(m.Access),
+			Access:   m.Access,
 		})
 	}
 
-	extraPrompts := make([]ExtraPromptSpec, 0, len(a.extraPrompts))
+	extraPrompts := make([]ExtraPromptDef, 0, len(a.extraPrompts))
 	for _, ep := range a.extraPrompts {
-		extraPrompts = append(extraPrompts, ExtraPromptSpec{
+		extraPrompts = append(extraPrompts, ExtraPromptDef{
 			Text:   ep.Text,
 			Access: ep.Access,
 		})
 	}
 
-	storages := make([]StorageZoneDef, 0, len(a.storages))
+	storages := make([]StorageDef, 0, len(a.storages))
 	for _, s := range a.storages {
-		storages = append(storages, StorageZoneDef{
+		storages = append(storages, StorageDef{
 			Slug:        s.Slug,
-			Read:        string(s.Read),
-			Write:       string(s.Write),
+			Read:        s.Read,
+			Write:       s.Write,
 			Description: s.Description,
 		})
 	}

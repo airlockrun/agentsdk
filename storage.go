@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/url"
 	"strings"
+
+	"go.uber.org/zap"
 )
 
 // reservedTmpSlug is the framework-owned scratch zone used by run_js
@@ -108,13 +110,17 @@ func (h *StorageHandle) CopyTo(ctx context.Context, src string, dstZone *Storage
 //                    when the cookie is absent (so a click in chat triggers
 //                    sign-in and lands back on the file).
 //   - AccessAdmin:   same, but requires admin role on the agent.
-//   - AccessInternal: returns "" — the URL form is not served at all.
+//   - AccessInternal: the proxy 404s the URL — internal zones are builder-Go
+//                     only. URL still composes a string so callers don't get
+//                     silent empty hrefs, but a warning is logged so the
+//                     mistake is visible.
 //
 // Re-resolves on the next sync if the agent's slug or the configured
 // domain changes.
 func (h *StorageHandle) URL(key string) string {
 	if h.read == AccessInternal {
-		return ""
+		h.agent.logger.Warn("StorageHandle.URL called on AccessInternal zone — the URL will 404",
+			zap.String("zone", h.slug), zap.String("key", key))
 	}
 	return h.agent.publicStorageBaseSnapshot() + "/" + h.slug + "/" + strings.TrimLeft(key, "/")
 }

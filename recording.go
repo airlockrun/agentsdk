@@ -9,11 +9,11 @@ import (
 // recordAction appends an action to the run's action log.
 func (r *run) recordAction(actionType string, request any, response any, err error, duration time.Duration) {
 	a := Action{
-		Type:      actionType,
-		Timestamp: time.Now(),
-		Duration:  duration.Milliseconds(),
-		Request:   request,
-		Response:  response,
+		Type:       actionType,
+		Timestamp:  time.Now(),
+		DurationMs: duration.Milliseconds(),
+		Request:    request,
+		Response:   response,
 	}
 	if err != nil {
 		a.Error = err.Error()
@@ -51,7 +51,7 @@ func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, panicT
 		Error      string          `json:"error,omitempty"`
 		PanicTrace string          `json:"panicTrace,omitempty"`
 		Actions    []Action        `json:"actions"`
-		Logs       []string        `json:"logs,omitempty"`
+		Logs       []LogEntry      `json:"logs,omitempty"`
 		Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 	}{
 		RunID:      r.id,

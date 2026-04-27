@@ -310,21 +310,26 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		vm.Set("topic_"+slug, topicObj)
 	}
 
-	logFn := func(call goja.FunctionCall) goja.Value {
-		msg := formatJSValue(vm, call.Argument(0))
-		run.logAppend(msg)
-		run.mu.Lock()
-		run.pendingLogs = append(run.pendingLogs, msg)
-		run.mu.Unlock()
-		return goja.Undefined()
+	makeLogFn := func(level LogLevel) func(goja.FunctionCall) goja.Value {
+		return func(call goja.FunctionCall) goja.Value {
+			msg := formatJSValue(vm, call.Argument(0))
+			run.logAppend(level, msg)
+			run.mu.Lock()
+			run.pendingLogs = append(run.pendingLogs, LogEntry{Level: level, Message: msg})
+			run.mu.Unlock()
+			return goja.Undefined()
+		}
 	}
+	logFn := makeLogFn(LogLevelInfo)
 	vm.Set("log", logFn)
 
-	// Alias console.log so LLMs that generate console.log() just work.
+	// Alias console.log/warn/error so LLMs that generate console.log() just
+	// work. console.warn/error map to the matching LogLevel so severity is
+	// preserved in the run timeline.
 	console := vm.NewObject()
 	console.Set("log", logFn)
-	console.Set("warn", logFn)
-	console.Set("error", logFn)
+	console.Set("warn", makeLogFn(LogLevelWarn))
+	console.Set("error", makeLogFn(LogLevelError))
 	vm.Set("console", console)
 
 	// HTTP requests via Airlock proxy.
