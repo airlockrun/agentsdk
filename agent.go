@@ -28,7 +28,7 @@ type Agent struct {
 	httpClient  *http.Client
 	client      *airlockClient
 
-	db     *sql.DB
+	db     *AgentDB
 	dbOnce sync.Once
 
 	sensitiveSet map[string]struct{}
@@ -181,9 +181,14 @@ func (a *Agent) Logf(ctx context.Context, level LogLevel, format string, args ..
 	a.Log(ctx, level, fmt.Sprintf(format, args...))
 }
 
-// DB returns a lazily-initialized *sql.DB from AIRLOCK_DB_URL.
-// Returns nil if the env var is not set (DB is optional).
-func (a *Agent) DB() *sql.DB {
+// DB returns a lazily-initialized *AgentDB from AIRLOCK_DB_URL. Returns
+// nil if the env var is not set (DB is optional).
+//
+// AgentDB implements the same DBTX interface that sqlc-generated New()
+// takes, so `mygen.New(agent.DB())` works unchanged. The wrapper is the
+// extension point through which the framework can later record query
+// activity onto the run carried by ctx.
+func (a *Agent) DB() *AgentDB {
 	a.dbOnce.Do(func() {
 		dsn := os.Getenv("AIRLOCK_DB_URL")
 		if dsn == "" {
@@ -193,7 +198,7 @@ func (a *Agent) DB() *sql.DB {
 		if err != nil {
 			panic("agentsdk: failed to open database: " + err.Error())
 		}
-		a.db = db
+		a.db = &AgentDB{db: db, agent: a}
 	})
 	return a.db
 }
