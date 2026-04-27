@@ -2,7 +2,12 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/airlockrun/goai/tool"
 )
 
 type doubleIn struct {
@@ -192,4 +197,46 @@ func TestVM(t *testing.T) {
 			t.Fatalf("expected test.txt:42 (zone prefix stripped), got %s", result)
 		}
 	})
+}
+
+// TestRunJSInterruptOnCtxCancel verifies that cancelling the run's ctx
+// aborts a runaway JS loop via goja.Runtime.Interrupt — without this, an
+// infinite while(true) in LLM-generated code spins at 100% CPU forever.
+func TestRunJSInterruptOnCtxCancel(t *testing.T) {
+	a, _ := testAgent(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run := newRun(a, "run-1", "", "", ctx)
+
+	// Cancel after a short delay so the JS is mid-loop when interrupted.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	runJS := buildRunJSTool(a, run)
+	input, _ := json.Marshal(runJSInput{Code: "while(true){}"})
+
+	type out struct {
+		res tool.Result
+		err error
+	}
+	resCh := make(chan out, 1)
+	go func() {
+		r, err := runJS.Execute(ctx, input, tool.CallOptions{ToolCallID: "tc-1"})
+		resCh <- out{r, err}
+	}()
+
+	select {
+	case r := <-resCh:
+		// run_js swallows the executeJS error into the Output string
+		// ("Error: ..."). Either an error returned OR an error-prefixed
+		// output is acceptable — both prove the loop was interrupted.
+		if r.err == nil && !strings.Contains(r.res.Output, "Error:") {
+			t.Fatalf("expected interruption error, got Output=%q err=%v", r.res.Output, r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run_js did not return within 2s after ctx cancel — interrupt did not fire")
+	}
 }

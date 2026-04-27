@@ -81,8 +81,25 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			run.pendingLogs = nil
 			run.mu.Unlock()
 
+			// Cancel the VM if the run's ctx fires (handlePrompt's WithTimeout,
+			// or Airlock disconnecting). Without this, an infinite-loop or
+			// runaway algorithm in LLM-generated JS spins at 100% CPU forever
+			// — the goroutine outlives the request and bleeds into subsequent
+			// prompts. goja.Interrupt aborts the in-flight RunString with an
+			// *InterruptedError that propagates out as a regular error.
+			vm := run.vmRuntime()
+			done := make(chan struct{})
+			go func() {
+				select {
+				case <-run.ctx.Done():
+					vm.Interrupt(run.ctx.Err())
+				case <-done:
+				}
+			}()
+
 			start := time.Now()
-			result, err := executeJS(run.vmRuntime(), args.Code)
+			result, err := executeJS(vm, args.Code)
+			close(done)
 			duration := time.Since(start)
 
 			// Drain logs from this execution.
