@@ -143,10 +143,18 @@ func (r *run) storeMediaResult(ctx context.Context, category, saveAs string, dat
 		zone = &StorageHandle{slug: reservedTmpSlug, read: AccessUser, write: AccessUser, agent: r.agent}
 		relKey = strings.TrimPrefix(saveAs, reservedTmpSlug+"/")
 	} else {
+		zoneSlug, key, hasSlash := strings.Cut(saveAs, "/")
+		if !hasSlash || zoneSlug == "" || key == "" {
+			return nil, fmt.Errorf(
+				"saveAs: missing zone — pass {zone: \"tmp\", key: %q} or \"tmp/%s\"",
+				saveAs, saveAs)
+		}
 		var ok bool
 		zone, relKey, ok = r.agent.findStorageByKey(saveAs)
 		if !ok {
-			return nil, fmt.Errorf("storeMediaResult: %q must be a {storage}/{key} path under a registered zone", saveAs)
+			return nil, fmt.Errorf(
+				"saveAs: unknown zone %q — registered zones are %s",
+				zoneSlug, listZoneSlugs(r.agent))
 		}
 	}
 	if err := zone.Put(ctx, relKey, bytes.NewReader(data), mimeType); err != nil {

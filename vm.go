@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/airlockrun/goai/model"
@@ -13,6 +14,118 @@ import (
 	"github.com/airlockrun/sol/websearch"
 	"github.com/dop251/goja"
 )
+
+// storageKeyArg parses a storage_<slug>.{get,put,...} key argument as
+// either a relative-key string or a {zone, key} StorageRef object. Refs
+// whose zone doesn't match ownSlug are rejected with a hint pointing at
+// the right binding.
+func storageKeyArg(vm *goja.Runtime, val goja.Value, ownSlug string) (string, error) {
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		return "", fmt.Errorf("key is required")
+	}
+	if obj, ok := val.Export().(map[string]any); ok {
+		zoneAny, hasZone := obj["zone"]
+		keyAny, hasKey := obj["key"]
+		if !hasZone || !hasKey {
+			return "", fmt.Errorf("ref object must have {zone, key}")
+		}
+		zone, _ := zoneAny.(string)
+		key, _ := keyAny.(string)
+		if zone == "" || key == "" {
+			return "", fmt.Errorf("ref object must have non-empty zone and key")
+		}
+		if zone != ownSlug {
+			return "", fmt.Errorf("ref points at zone %q — call storage_%s instead", zone, zone)
+		}
+		return key, nil
+	}
+	return val.String(), nil
+}
+
+// listZoneSlugs returns a comma-separated list of registered zone slugs
+// the caller can see (read or write), wrapped for use in error messages.
+// Filters out AccessInternal zones and ones the caller has no access to,
+// so the message doesn't leak hidden zones.
+func listZoneSlugs(agent *Agent) string {
+	if len(agent.storages) == 0 {
+		return "(none)"
+	}
+	slugs := make([]string, 0, len(agent.storages))
+	for slug := range agent.storages {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs)
+	return strings.Join(slugs, ", ")
+}
+
+// mediaResultToJS shapes a *mediaResult as the JS-facing
+// { file: {zone, key}, mimeType, size } structure. The composed Key on
+// mediaResult is split back into zone + relative key so the LLM gets a
+// proper StorageRef object that pairs with storage_<zone>.get(file.key)
+// and attachToContext(file).
+func mediaResultToJS(vm *goja.Runtime, res *mediaResult) goja.Value {
+	zone, key, _ := strings.Cut(res.Key, "/")
+	ref := vm.NewObject()
+	ref.Set("zone", zone)
+	ref.Set("key", key)
+	out := vm.NewObject()
+	out.Set("file", ref)
+	out.Set("mimeType", res.MimeType)
+	out.Set("size", res.Size)
+	return out
+}
+
+// storageRefToComposed normalizes a JS value (relative-key string or
+// {zone, key} ref) to the composed "zone/key" form that findStorageByKey
+// understands. Used by attachToContext, printToUser source, and other
+// surfaces that route via zone slug rather than a bound handle.
+func storageRefToComposed(vm *goja.Runtime, val goja.Value) (string, error) {
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		return "", fmt.Errorf("ref is required")
+	}
+	if obj, ok := val.Export().(map[string]any); ok {
+		zoneAny, hasZone := obj["zone"]
+		keyAny, hasKey := obj["key"]
+		if !hasZone || !hasKey {
+			return "", fmt.Errorf("ref object must have {zone, key}")
+		}
+		zone, _ := zoneAny.(string)
+		key, _ := keyAny.(string)
+		if zone == "" || key == "" {
+			return "", fmt.Errorf("ref object must have non-empty zone and key")
+		}
+		return zone + "/" + key, nil
+	}
+	s := val.String()
+	if s == "" {
+		return "", fmt.Errorf("ref is required")
+	}
+	return s, nil
+}
+
+// storageRefArg parses a {zone, key} StorageRef object — used for the
+// destination of cross-zone copyTo. Plain strings are not accepted here:
+// a destination must always carry an explicit zone.
+func storageRefArg(vm *goja.Runtime, val goja.Value) (zone, key string, err error) {
+	if val == nil || goja.IsUndefined(val) || goja.IsNull(val) {
+		return "", "", fmt.Errorf("ref is required")
+	}
+	obj, ok := val.Export().(map[string]any)
+	if !ok {
+		return "", "", fmt.Errorf("ref must be an object {zone, key}")
+	}
+	zoneAny, hasZone := obj["zone"]
+	keyAny, hasKey := obj["key"]
+	if !hasZone || !hasKey {
+		return "", "", fmt.Errorf("ref object must have {zone, key}")
+	}
+	zone, _ = zoneAny.(string)
+	key, _ = keyAny.(string)
+	if zone == "" || key == "" {
+		return "", "", fmt.Errorf("ref object must have non-empty zone and key")
+	}
+	return zone, key, nil
+}
 
 // newVM creates a fresh goja Runtime for a Run, binding all registered
 // Go functions and built-in bindings.
@@ -191,6 +304,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	// the caller satisfies Read; Put/Delete/Copy only when the caller
 	// satisfies Write. AccessInternal on either axis blocks that axis from
 	// JS entirely. Zones where the caller can do nothing aren't bound at all.
+	//
+	// Methods that take a key accept either a relative-key string or a
+	// {zone, key} StorageRef object. Refs whose zone doesn't match the
+	// binding's slug error with a clear hint pointing at the right
+	// storage_<other> object — so a ref handed back from a tool result
+	// can be passed through directly without prefix-stripping.
 	for slug, zone := range agent.storages {
 		canRead := zone.Read != AccessInternal && accessSatisfies(run.callerAccess, zone.Read)
 		canWrite := zone.Write != AccessInternal && accessSatisfies(run.callerAccess, zone.Write)
@@ -202,7 +321,10 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 
 		if canWrite {
 			obj.Set("put", func(call goja.FunctionCall) goja.Value {
-				key := call.Argument(0).String()
+				key, err := storageKeyArg(vm, call.Argument(0), handle.slug)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.put: %w", handle.slug, err)))
+				}
 				data := call.Argument(1).String()
 				contentType := call.Argument(2).String()
 				if err := handle.Put(run.ctx, key, strings.NewReader(data), contentType); err != nil {
@@ -212,7 +334,10 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			})
 
 			obj.Set("delete", func(call goja.FunctionCall) goja.Value {
-				key := call.Argument(0).String()
+				key, err := storageKeyArg(vm, call.Argument(0), handle.slug)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.delete: %w", handle.slug, err)))
+				}
 				if err := handle.Delete(run.ctx, key); err != nil {
 					panic(vm.NewGoError(err))
 				}
@@ -220,9 +345,41 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			})
 
 			obj.Set("copy", func(call goja.FunctionCall) goja.Value {
-				src := call.Argument(0).String()
-				dst := call.Argument(1).String()
+				src, err := storageKeyArg(vm, call.Argument(0), handle.slug)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.copy: %w", handle.slug, err)))
+				}
+				dst, err := storageKeyArg(vm, call.Argument(1), handle.slug)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.copy: %w", handle.slug, err)))
+				}
 				if err := handle.Copy(run.ctx, src, dst); err != nil {
+					panic(vm.NewGoError(err))
+				}
+				return goja.Undefined()
+			})
+
+			// copyTo(src, dstRef) — cross-zone server-side copy. dstRef must
+			// be a {zone, key} object referencing a registered zone the
+			// caller has Write access to.
+			obj.Set("copyTo", func(call goja.FunctionCall) goja.Value {
+				src, err := storageKeyArg(vm, call.Argument(0), handle.slug)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.copyTo: %w", handle.slug, err)))
+				}
+				dstZoneSlug, dstKey, err := storageRefArg(vm, call.Argument(1))
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.copyTo: dstRef: %w", handle.slug, err)))
+				}
+				dstZoneCfg, ok := agent.storages[dstZoneSlug]
+				if !ok {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.copyTo: unknown destination zone %q", handle.slug, dstZoneSlug)))
+				}
+				if dstZoneCfg.Write == AccessInternal || !accessSatisfies(run.callerAccess, dstZoneCfg.Write) {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.copyTo: caller has no write access to zone %q", handle.slug, dstZoneSlug)))
+				}
+				dstHandle := &StorageHandle{slug: dstZoneSlug, read: dstZoneCfg.Read, write: dstZoneCfg.Write, agent: agent}
+				if err := handle.CopyTo(run.ctx, src, dstHandle, dstKey); err != nil {
 					panic(vm.NewGoError(err))
 				}
 				return goja.Undefined()
@@ -231,7 +388,10 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 
 		if canRead {
 			obj.Set("get", func(call goja.FunctionCall) goja.Value {
-				key := call.Argument(0).String()
+				key, err := storageKeyArg(vm, call.Argument(0), handle.slug)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.get: %w", handle.slug, err)))
+				}
 				rc, err := handle.Get(run.ctx, key)
 				if err != nil {
 					panic(vm.NewGoError(err))
@@ -245,7 +405,10 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			})
 
 			obj.Set("stat", func(call goja.FunctionCall) goja.Value {
-				key := call.Argument(0).String()
+				key, err := storageKeyArg(vm, call.Argument(0), handle.slug)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("storage_%s.stat: %w", handle.slug, err)))
+				}
 				info, err := handle.Stat(run.ctx, key)
 				if err != nil {
 					panic(vm.NewGoError(err))
@@ -261,7 +424,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			obj.Set("list", func(call goja.FunctionCall) goja.Value {
 				prefix := ""
 				if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
-					prefix = call.Argument(0).String()
+					var err error
+					prefix, err = storageKeyArg(vm, call.Argument(0), handle.slug)
+					if err != nil {
+						panic(vm.NewGoError(fmt.Errorf("storage_%s.list: %w", handle.slug, err)))
+					}
 				}
 				files, err := handle.List(run.ctx, prefix)
 				if err != nil {
@@ -379,9 +546,29 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if v := opts.Get("timeout"); v != nil && !goja.IsUndefined(v) {
 				req.Timeout = int(v.ToInteger())
 			}
-			if v := opts.Get("saveAs"); v != nil && !goja.IsUndefined(v) {
-				// saveAs: Airlock saves response body directly to S3 (binary-safe).
-				req.SaveAs = v.String()
+			if v := opts.Get("saveAs"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+				// saveAs accepts a {zone, key} StorageRef (preferred) or a
+				// composed "zone/key" string. Validate that the zone is
+				// registered and the caller has Write access — Airlock just
+				// writes wherever we tell it; the gate lives here.
+				composed, err := storageRefToComposed(vm, v)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("httpRequest: saveAs: %w", err)))
+				}
+				zoneSlug, key, ok := strings.Cut(composed, "/")
+				if !ok || zoneSlug == "" || key == "" {
+					panic(vm.NewGoError(fmt.Errorf(
+						"httpRequest: saveAs: missing zone — pass {zone: \"tmp\", key: %q} or \"tmp/%s\"",
+						composed, composed)))
+				}
+				zoneCfg, ok := agent.storages[zoneSlug]
+				if !ok {
+					panic(vm.NewGoError(fmt.Errorf("httpRequest: saveAs: unknown zone %q — registered zones are %s", zoneSlug, listZoneSlugs(agent))))
+				}
+				if zoneCfg.Write == AccessInternal || !accessSatisfies(run.callerAccess, zoneCfg.Write) {
+					panic(vm.NewGoError(fmt.Errorf("httpRequest: saveAs: caller has no write access to zone %q", zoneSlug)))
+				}
+				req.SaveAs = composed
 			}
 			if v := opts.Get("raw"); v != nil && !goja.IsUndefined(v) {
 				// raw: skip HTML→markdown conversion (default is to convert HTML).
@@ -400,7 +587,14 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		result.Set("contentType", resp.ContentType)
 		result.Set("size", resp.Size)
 		if resp.SavedTo != "" {
-			result.Set("savedTo", resp.SavedTo)
+			// Airlock returns the composed "zone/key" form; expose it as a
+			// {zone, key} StorageRef so the LLM can pass it directly to
+			// storage_<zone>.get(...) or attachToContext(...).
+			zoneSlug, key, _ := strings.Cut(resp.SavedTo, "/")
+			ref := vm.NewObject()
+			ref.Set("zone", zoneSlug)
+			ref.Set("key", key)
+			result.Set("savedTo", ref)
 		}
 		if resp.Note != "" {
 			result.Set("note", resp.Note)
@@ -437,13 +631,15 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		return vm.ToValue(resp)
 	})
 
-	// attachToContext(key) — load an S3 file so the model can see it on the
-	// next turn. Idempotent per run. Bytes are collected on run.pendingAttachments
-	// and drained into the run_js tool.Result by buildRunJSTool.
+	// attachToContext(ref) — load an S3 file so the model can see it on the
+	// next turn. Accepts either a {zone, key} StorageRef object (preferred,
+	// matches what tool returns hand back) or a composed "zone/key" string.
+	// Idempotent per run; bytes are collected on run.pendingAttachments and
+	// drained into the run_js tool.Result by buildRunJSTool.
 	vm.Set("attachToContext", func(call goja.FunctionCall) goja.Value {
-		key := call.Argument(0).String()
-		if key == "" {
-			panic(vm.NewGoError(fmt.Errorf("attachToContext: key is required")))
+		key, err := storageRefToComposed(vm, call.Argument(0))
+		if err != nil {
+			panic(vm.NewGoError(fmt.Errorf("attachToContext: %w", err)))
 		}
 
 		// Idempotent: skip if already attached this run.
@@ -527,8 +723,10 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		return out
 	})
 
-	// generateImage(prompt, opts?) → { key, mimeType, size }
-	// opts: { saveAs?, size?, aspectRatio?, seed? }
+	// generateImage(prompt, opts?) → { file: {zone, key}, mimeType, size }
+	// opts: { saveAs?, size?, aspectRatio?, seed? } — saveAs accepts a
+	// {zone, key} StorageRef or a "zone/key" string; omitted writes to
+	// the framework's tmp zone with an auto-generated key.
 	vm.Set("generateImage", func(call goja.FunctionCall) goja.Value {
 		prompt := call.Argument(0).String()
 		if prompt == "" {
@@ -538,8 +736,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		var opts model.ImageCallOptions
 		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
 			o := call.Arguments[1].ToObject(vm)
-			if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) {
-				saveAs = v.String()
+			if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+				composed, err := storageRefToComposed(vm, v)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("generateImage: saveAs: %w", err)))
+				}
+				saveAs = composed
 			}
 			if v := o.Get("size"); v != nil && !goja.IsUndefined(v) {
 				opts.Size = v.String()
@@ -556,15 +758,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		if err != nil {
 			panic(vm.NewGoError(fmt.Errorf("generateImage: %w", err)))
 		}
-		out := vm.NewObject()
-		out.Set("key", res.Key)
-		out.Set("mimeType", res.MimeType)
-		out.Set("size", res.Size)
-		return out
+		return mediaResultToJS(vm, res)
 	})
 
-	// speak(text, opts?) → { key, mimeType, size }
-	// opts: { saveAs?, voice?, outputFormat?, speed? }
+	// speak(text, opts?) → { file: {zone, key}, mimeType, size }
+	// opts: { saveAs?, voice?, outputFormat?, speed? } — saveAs accepts
+	// a {zone, key} StorageRef or a "zone/key" string.
 	vm.Set("speak", func(call goja.FunctionCall) goja.Value {
 		text := call.Argument(0).String()
 		if text == "" {
@@ -574,8 +773,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		var opts model.SpeechCallOptions
 		if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
 			o := call.Arguments[1].ToObject(vm)
-			if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) {
-				saveAs = v.String()
+			if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
+				composed, err := storageRefToComposed(vm, v)
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("speak: saveAs: %w", err)))
+				}
+				saveAs = composed
 			}
 			if v := o.Get("voice"); v != nil && !goja.IsUndefined(v) {
 				opts.Voice = v.String()
@@ -592,11 +795,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		if err != nil {
 			panic(vm.NewGoError(fmt.Errorf("speak: %w", err)))
 		}
-		out := vm.NewObject()
-		out.Set("key", res.Key)
-		out.Set("mimeType", res.MimeType)
-		out.Set("size", res.Size)
-		return out
+		return mediaResultToJS(vm, res)
 	})
 
 	// embed(texts) → number[][]
@@ -796,8 +995,20 @@ func mapToDisplayPart(m map[string]any) DisplayPart {
 	if v, ok := m["text"].(string); ok {
 		p.Text = v
 	}
-	if v, ok := m["source"].(string); ok {
-		p.Source = v
+	// `source` accepts a composed "zone/key" string or a {zone, key} ref
+	// object (the shape returned by tool/savedTo results). Both normalize
+	// to the composed form that DisplayPart.Source carries.
+	if raw, ok := m["source"]; ok && raw != nil {
+		switch v := raw.(type) {
+		case string:
+			p.Source = v
+		case map[string]any:
+			zone, _ := v["zone"].(string)
+			key, _ := v["key"].(string)
+			if zone != "" && key != "" {
+				p.Source = zone + "/" + key
+			}
+		}
 	}
 	if v, ok := m["url"].(string); ok {
 		p.URL = v

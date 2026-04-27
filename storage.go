@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/url"
@@ -9,6 +10,64 @@ import (
 
 	"go.uber.org/zap"
 )
+
+// StorageRef is a typed reference to a file in a registered Storage zone.
+// The fields are unexported so refs can only come from a *StorageHandle —
+// either via handle.Ref(key), or by JSON-unmarshaling a wire-format
+// {"zone": "...", "key": "..."} that the framework hands back (e.g.
+// httpRequest savedTo, generateImage result, builder tool returns).
+//
+// Use it as the field type on builder Out structs so the LLM sees an
+// unambiguous {zone, key} shape:
+//
+//	type FetchOut struct {
+//	    File agentsdk.StorageRef `json:"file"`
+//	}
+//
+// The corresponding JS binding is `storage_<zone>` — JS code reads the
+// referenced file with storage_X.get(ref) (the binding validates the ref's
+// zone matches its own slug).
+type StorageRef struct {
+	zone string
+	key  string
+}
+
+// Zone returns the zone slug.
+func (r StorageRef) Zone() string { return r.zone }
+
+// Key returns the file key relative to the zone.
+func (r StorageRef) Key() string { return r.key }
+
+// String returns the composed "zone/key" form, useful for logging.
+func (r StorageRef) String() string {
+	if r.zone == "" {
+		return ""
+	}
+	return r.zone + "/" + r.key
+}
+
+// MarshalJSON encodes the ref as {"zone":"...","key":"..."}.
+func (r StorageRef) MarshalJSON() ([]byte, error) {
+	return json.Marshal(storageRefWire{Zone: r.zone, Key: r.key})
+}
+
+// UnmarshalJSON decodes {"zone":"...","key":"..."}. The framework trusts
+// the input here — validation happens at use time (when a JS binding
+// receives a ref, or when builder code looks the zone up).
+func (r *StorageRef) UnmarshalJSON(data []byte) error {
+	var w storageRefWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	r.zone = w.Zone
+	r.key = w.Key
+	return nil
+}
+
+type storageRefWire struct {
+	Zone string `json:"zone"`
+	Key  string `json:"key"`
+}
 
 // reservedTmpSlug is the framework-owned scratch zone used by run_js
 // output truncation and media generation. Builders may register a
@@ -31,6 +90,14 @@ type StorageHandle struct {
 // Slug returns the zone's slug. Useful when constructing public URLs
 // (storage.airlock.example.com/storage/{agentID}/{slug}/{key}).
 func (h *StorageHandle) Slug() string { return h.slug }
+
+// Ref returns a typed StorageRef for `key` in this zone. This is the only
+// public way to construct a StorageRef — builder code that returns file
+// references from tool Out structs goes through here, so a ref can never
+// claim a zone that the handle doesn't represent.
+func (h *StorageHandle) Ref(key string) StorageRef {
+	return StorageRef{zone: h.slug, key: key}
+}
 
 // ReadAccess returns the zone's required level for reads.
 func (h *StorageHandle) ReadAccess() Access { return h.read }

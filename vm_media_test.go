@@ -76,8 +76,8 @@ func TestGenerateImageBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"key": "uploads/out.png"`) {
-		t.Fatalf("expected key in result, got %s", out)
+	if !strings.Contains(out, `"zone": "uploads"`) || !strings.Contains(out, `"key": "out.png"`) {
+		t.Fatalf("expected file ref {zone:uploads, key:out.png} in result, got %s", out)
 	}
 	if !strings.Contains(out, `"mimeType": "image/png"`) {
 		t.Fatalf("expected mimeType in result, got %s", out)
@@ -112,8 +112,8 @@ func TestGenerateImageAutoKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Auto-generated key lives in the framework's tmp zone.
-	if !strings.Contains(out, `"key": "tmp/generated/image-`) {
-		t.Fatalf("expected auto key under tmp/generated/, got %s", out)
+	if !strings.Contains(out, `"zone": "tmp"`) || !strings.Contains(out, `"key": "generated/image-`) {
+		t.Fatalf("expected file ref under tmp/generated/, got %s", out)
 	}
 	storagePuts := mock.RequestsByPath("/api/agent/storage/tmp/generated/image-")
 	if len(storagePuts) == 0 {
@@ -130,8 +130,8 @@ func TestSpeakBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"key": "uploads/voice.mp3"`) {
-		t.Fatalf("expected key in result, got %s", out)
+	if !strings.Contains(out, `"zone": "uploads"`) || !strings.Contains(out, `"key": "voice.mp3"`) {
+		t.Fatalf("expected file ref {zone:uploads, key:voice.mp3} in result, got %s", out)
 	}
 
 	reqs := mock.RequestsByPath("/api/agent/llm/speech")
