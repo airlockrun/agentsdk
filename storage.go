@@ -100,9 +100,9 @@ func (h *StorageHandle) CopyTo(ctx context.Context, src string, dstZone *Storage
 
 // PublicURL returns a URL at which the given key is fetchable
 // unauthenticated, or "" if this zone isn't AccessPublic-readable or
-// Airlock has no public-reachable URL configured. The URL prefers the
-// agent-subdomain form when agentDomain is configured (and updates if
-// the agent's slug changes — base is refreshed on the next sync).
+// Airlock isn't configured with an agent subdomain (the only host where
+// public zones are served). Re-resolves on the next sync if the agent's
+// slug or the configured domain changes.
 func (h *StorageHandle) PublicURL(key string) string {
 	if h.read != AccessPublic {
 		return ""

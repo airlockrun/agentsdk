@@ -458,10 +458,9 @@ type SyncResponse struct {
 	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
 	// PublicStorageBase is the URL prefix at which AccessPublic storage zones
 	// are reachable, ending without a trailing slash; *StorageHandle.PublicURL
-	// appends "/{slug}/{key}". When agentDomain is configured Airlock returns
-	// the subdomain form (https://{slug}.{agentDomain}/__air/storage); else
-	// the host-level fallback (https://{publicURL}/storage/{agentID}). May be
-	// empty if no public-reachable URL is configured.
+	// appends "/{slug}/{key}". Set to https://{slug}.{agentDomain}/__air/storage
+	// when an agent subdomain is configured, empty otherwise — public zones
+	// are only addressable on the agent's subdomain.
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
 
