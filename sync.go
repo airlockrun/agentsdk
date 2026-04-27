@@ -119,7 +119,8 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	for _, s := range a.storages {
 		storages = append(storages, StorageZoneDef{
 			Slug:        s.Slug,
-			Access:      string(s.Access),
+			Read:        string(s.Read),
+			Write:       string(s.Write),
 			Description: s.Description,
 		})
 	}

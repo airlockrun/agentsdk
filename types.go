@@ -187,21 +187,29 @@ type FileRef struct {
 
 // Storage is the self-contained declaration registered via agent.RegisterStorage.
 // Each zone owns an S3 prefix ("{Slug}/") and a JS binding (storage_{slug});
-// AccessInternal zones are reachable only from builder Go code and never
+// AccessInternal axes are reachable only from builder Go code and never
 // surface in run_js. The framework auto-registers a reserved zone "tmp"
-// at AccessUser; builder calls with Slug="tmp" silently no-op (returning
-// the framework handle) so frameworks and builders share the same
-// scratch area without conflict.
+// at Read=Write=AccessUser; builder calls with Slug="tmp" silently no-op
+// (returning the framework handle) so frameworks and builders share the
+// same scratch area without conflict.
+//
+// Read and Write are independent — "Read: AccessUser, Write: AccessAdmin"
+// (admin-curated, user-readable) and "Read: AccessAdmin, Write: AccessUser"
+// (user-fed inbox processed only by admins) are both valid. The JS
+// `storage_{slug}` object exposes Get/Stat/List only when Read satisfies
+// the caller, and Put/Delete/Copy only when Write does.
 type Storage struct {
 	Slug        string
-	Access      Access // who may invoke storage_{slug} from JS; default AccessUser
+	Read        Access // gates Get/Stat/List + the public route; default AccessUser
+	Write       Access // gates Put/Delete/Copy/CopyTo; default AccessUser
 	Description string // shown in the system prompt's storage zones section
 }
 
 // StorageZoneDef is the wire format sent in SyncRequest.
 type StorageZoneDef struct {
 	Slug        string `json:"slug"`
-	Access      string `json:"access"`
+	Read        string `json:"read"`
+	Write       string `json:"write"`
 	Description string `json:"description"`
 }
 

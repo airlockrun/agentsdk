@@ -170,15 +170,18 @@ func (a *Agent) RegisterStorage(s *Storage) *StorageHandle {
 		// reference `agent.RegisterStorage(&Storage{Slug: "tmp"})`
 		// without colliding with the framework's auto-registration.
 		if s.Slug == reservedTmpSlug {
-			return &StorageHandle{slug: existing.Slug, access: existing.Access, agent: a}
+			return &StorageHandle{slug: existing.Slug, read: existing.Read, write: existing.Write, agent: a}
 		}
 		panic("agentsdk: duplicate RegisterStorage: " + s.Slug)
 	}
-	if s.Access == "" {
-		s.Access = AccessUser
+	if s.Read == "" {
+		s.Read = AccessUser
+	}
+	if s.Write == "" {
+		s.Write = AccessUser
 	}
 	a.storages[s.Slug] = s
-	return &StorageHandle{slug: s.Slug, access: s.Access, agent: a}
+	return &StorageHandle{slug: s.Slug, read: s.Read, write: s.Write, agent: a}
 }
 
 // RegisterMCP registers a remote MCP server dependency and returns a handle

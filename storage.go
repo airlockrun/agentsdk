@@ -20,17 +20,21 @@ const reservedTmpSlug = "tmp"
 // handle prepends "{slug}/" before talking to Airlock. List returns keys
 // stripped of the prefix as well, so callers see relative paths.
 type StorageHandle struct {
-	slug   string
-	access Access
-	agent  *Agent
+	slug  string
+	read  Access // who may invoke Get/Stat/List from JS (and the public route)
+	write Access // who may invoke Put/Delete/Copy from JS
+	agent *Agent
 }
 
 // Slug returns the zone's slug. Useful when constructing public URLs
 // (storage.airlock.example.com/storage/{agentID}/{slug}/{key}).
 func (h *StorageHandle) Slug() string { return h.slug }
 
-// Access returns the zone's required access level.
-func (h *StorageHandle) Access() Access { return h.access }
+// ReadAccess returns the zone's required level for reads.
+func (h *StorageHandle) ReadAccess() Access { return h.read }
+
+// WriteAccess returns the zone's required level for writes.
+func (h *StorageHandle) WriteAccess() Access { return h.write }
 
 func (h *StorageHandle) zoneKey(rel string) string {
 	rel = strings.TrimLeft(rel, "/")
@@ -191,5 +195,5 @@ func (a *Agent) findStorageByKey(key string) (*StorageHandle, string, bool) {
 	if !ok {
 		return nil, "", false
 	}
-	return &StorageHandle{slug: slug, access: zone.Access, agent: a}, rel, true
+	return &StorageHandle{slug: slug, read: zone.Read, write: zone.Write, agent: a}, rel, true
 }

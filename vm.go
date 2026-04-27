@@ -187,84 +187,89 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	})
 
 	// Register storage_{slug} objects for each registered Storage zone.
-	// Skip AccessInternal (never reachable from JS) and any zone whose
-	// required Access exceeds the run's caller level.
+	// Read and Write are gated independently — Get/Stat/List bind only when
+	// the caller satisfies Read; Put/Delete/Copy only when the caller
+	// satisfies Write. AccessInternal on either axis blocks that axis from
+	// JS entirely. Zones where the caller can do nothing aren't bound at all.
 	for slug, zone := range agent.storages {
-		if zone.Access == AccessInternal {
+		canRead := zone.Read != AccessInternal && accessSatisfies(run.callerAccess, zone.Read)
+		canWrite := zone.Write != AccessInternal && accessSatisfies(run.callerAccess, zone.Write)
+		if !canRead && !canWrite {
 			continue
 		}
-		if !accessSatisfies(run.callerAccess, zone.Access) {
-			continue
-		}
-		handle := &StorageHandle{slug: slug, access: zone.Access, agent: agent}
+		handle := &StorageHandle{slug: slug, read: zone.Read, write: zone.Write, agent: agent}
 		obj := vm.NewObject()
 
-		obj.Set("put", func(call goja.FunctionCall) goja.Value {
-			key := call.Argument(0).String()
-			data := call.Argument(1).String()
-			contentType := call.Argument(2).String()
-			if err := handle.Put(run.ctx, key, strings.NewReader(data), contentType); err != nil {
-				panic(vm.NewGoError(err))
-			}
-			return goja.Undefined()
-		})
+		if canWrite {
+			obj.Set("put", func(call goja.FunctionCall) goja.Value {
+				key := call.Argument(0).String()
+				data := call.Argument(1).String()
+				contentType := call.Argument(2).String()
+				if err := handle.Put(run.ctx, key, strings.NewReader(data), contentType); err != nil {
+					panic(vm.NewGoError(err))
+				}
+				return goja.Undefined()
+			})
 
-		obj.Set("get", func(call goja.FunctionCall) goja.Value {
-			key := call.Argument(0).String()
-			rc, err := handle.Get(run.ctx, key)
-			if err != nil {
-				panic(vm.NewGoError(err))
-			}
-			defer rc.Close()
-			b, err := io.ReadAll(rc)
-			if err != nil {
-				panic(vm.NewGoError(err))
-			}
-			return vm.ToValue(string(b))
-		})
+			obj.Set("delete", func(call goja.FunctionCall) goja.Value {
+				key := call.Argument(0).String()
+				if err := handle.Delete(run.ctx, key); err != nil {
+					panic(vm.NewGoError(err))
+				}
+				return goja.Undefined()
+			})
 
-		obj.Set("delete", func(call goja.FunctionCall) goja.Value {
-			key := call.Argument(0).String()
-			if err := handle.Delete(run.ctx, key); err != nil {
-				panic(vm.NewGoError(err))
-			}
-			return goja.Undefined()
-		})
+			obj.Set("copy", func(call goja.FunctionCall) goja.Value {
+				src := call.Argument(0).String()
+				dst := call.Argument(1).String()
+				if err := handle.Copy(run.ctx, src, dst); err != nil {
+					panic(vm.NewGoError(err))
+				}
+				return goja.Undefined()
+			})
+		}
 
-		obj.Set("stat", func(call goja.FunctionCall) goja.Value {
-			key := call.Argument(0).String()
-			info, err := handle.Stat(run.ctx, key)
-			if err != nil {
-				panic(vm.NewGoError(err))
-			}
-			res := vm.NewObject()
-			res.Set("key", info.Key)
-			res.Set("size", info.Size)
-			res.Set("contentType", info.ContentType)
-			res.Set("lastModified", info.LastModified.Format("2006-01-02T15:04:05Z"))
-			return res
-		})
+		if canRead {
+			obj.Set("get", func(call goja.FunctionCall) goja.Value {
+				key := call.Argument(0).String()
+				rc, err := handle.Get(run.ctx, key)
+				if err != nil {
+					panic(vm.NewGoError(err))
+				}
+				defer rc.Close()
+				b, err := io.ReadAll(rc)
+				if err != nil {
+					panic(vm.NewGoError(err))
+				}
+				return vm.ToValue(string(b))
+			})
 
-		obj.Set("list", func(call goja.FunctionCall) goja.Value {
-			prefix := ""
-			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
-				prefix = call.Argument(0).String()
-			}
-			files, err := handle.List(run.ctx, prefix)
-			if err != nil {
-				panic(vm.NewGoError(err))
-			}
-			return vm.ToValue(files)
-		})
+			obj.Set("stat", func(call goja.FunctionCall) goja.Value {
+				key := call.Argument(0).String()
+				info, err := handle.Stat(run.ctx, key)
+				if err != nil {
+					panic(vm.NewGoError(err))
+				}
+				res := vm.NewObject()
+				res.Set("key", info.Key)
+				res.Set("size", info.Size)
+				res.Set("contentType", info.ContentType)
+				res.Set("lastModified", info.LastModified.Format("2006-01-02T15:04:05Z"))
+				return res
+			})
 
-		obj.Set("copy", func(call goja.FunctionCall) goja.Value {
-			src := call.Argument(0).String()
-			dst := call.Argument(1).String()
-			if err := handle.Copy(run.ctx, src, dst); err != nil {
-				panic(vm.NewGoError(err))
-			}
-			return goja.Undefined()
-		})
+			obj.Set("list", func(call goja.FunctionCall) goja.Value {
+				prefix := ""
+				if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
+					prefix = call.Argument(0).String()
+				}
+				files, err := handle.List(run.ctx, prefix)
+				if err != nil {
+					panic(vm.NewGoError(err))
+				}
+				return vm.ToValue(files)
+			})
+		}
 
 		vm.Set("storage_"+slug, obj)
 	}

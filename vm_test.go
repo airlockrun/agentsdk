@@ -82,7 +82,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("storage_X.copy calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
 		_, err := executeJS(run.vmRuntime(), `storage_uploads.copy("a.txt", "b.txt")`)
 		if err != nil {
@@ -99,7 +99,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("storage_X.delete calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
 		_, err := executeJS(run.vmRuntime(), `storage_uploads.delete("a.txt")`)
 		if err != nil {
@@ -116,7 +116,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("storage_X.list returns array", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), `JSON.stringify(storage_uploads.list())`)
 		if err != nil {
@@ -129,7 +129,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("storage_X.put calls backend with zone prefix", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
 		_, err := executeJS(run.vmRuntime(), `storage_uploads.put("test.txt", "hello", "text/plain")`)
 		if err != nil {
@@ -143,7 +143,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("storage_X.get calls backend with zone prefix", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), `storage_uploads.get("test.txt")`)
 		if err != nil {
@@ -182,7 +182,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("storage_X.stat returns metadata with relative key", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), `var fi = storage_uploads.stat("test.txt"); fi.key + ":" + fi.size`)
 		if err != nil {

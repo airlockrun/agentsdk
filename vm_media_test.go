@@ -13,7 +13,7 @@ import (
 
 func TestTranscribeAudioBinding(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+	a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 	run := newRun(a, "run-1", "", "", context.Background())
 
 	out, err := executeJS(run.vmRuntime(), `transcribeAudio("uploads/voice.ogg", { language: "en", prompt: "meeting" })`)
@@ -69,7 +69,7 @@ func TestTranscribeAudioBinding(t *testing.T) {
 
 func TestGenerateImageBinding(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+	a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 	run := newRun(a, "run-1", "", "", context.Background())
 
 	out, err := executeJS(run.vmRuntime(), `generateImage("a sunset", { saveAs: "uploads/out.png", size: "1024x1024" })`)
@@ -123,7 +123,7 @@ func TestGenerateImageAutoKey(t *testing.T) {
 
 func TestSpeakBinding(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+	a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 	run := newRun(a, "run-1", "", "", context.Background())
 
 	out, err := executeJS(run.vmRuntime(), `speak("hello world", { saveAs: "uploads/voice.mp3", voice: "alloy" })`)

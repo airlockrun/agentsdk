@@ -143,7 +143,8 @@ func New(cfg Config) *Agent {
 	// same handle.
 	a.storages[reservedTmpSlug] = &Storage{
 		Slug:        reservedTmpSlug,
-		Access:      AccessUser,
+		Read:        AccessUser,
+		Write:       AccessUser,
 		Description: "Ephemeral run output (auto-managed by the framework — truncated tool output, generated media).",
 	}
 	return a

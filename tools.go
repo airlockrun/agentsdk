@@ -172,7 +172,7 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 	// Save full output to the framework-owned tmp zone. The LLM reads it
 	// back via storage_tmp.get(...) inside run_js.
 	relKey := "output-" + randomHex(4) + ".txt"
-	tmp := &StorageHandle{slug: reservedTmpSlug, access: AccessUser, agent: run.agent}
+	tmp := &StorageHandle{slug: reservedTmpSlug, read: AccessUser, write: AccessUser, agent: run.agent}
 	if err := tmp.Put(ctx, relKey, strings.NewReader(output), "text/plain"); err != nil {
 		// If save fails, just truncate without a key.
 		return output[:truncatePreviewLen] + fmt.Sprintf(

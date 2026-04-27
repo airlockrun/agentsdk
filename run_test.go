@@ -30,7 +30,7 @@ func TestConnectionHandleProxy(t *testing.T) {
 
 func TestStorageZonePutAndGet(t *testing.T) {
 	a, _ := testAgent(t)
-	zone := a.RegisterStorage(&Storage{Slug: "uploads", Access: AccessUser})
+	zone := a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 
 	// Put
 	if err := zone.Put(context.Background(), "test.txt", strings.NewReader("hello"), "text/plain"); err != nil {

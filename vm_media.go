@@ -140,7 +140,7 @@ func (r *run) storeMediaResult(ctx context.Context, category, saveAs string, dat
 	var relKey string
 	if saveAs == "" {
 		saveAs = reservedTmpSlug + "/generated/" + category + "-" + randomHex(4) + extForMime(mimeType, category)
-		zone = &StorageHandle{slug: reservedTmpSlug, access: AccessUser, agent: r.agent}
+		zone = &StorageHandle{slug: reservedTmpSlug, read: AccessUser, write: AccessUser, agent: r.agent}
 		relKey = strings.TrimPrefix(saveAs, reservedTmpSlug+"/")
 	} else {
 		var ok bool
