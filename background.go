@@ -41,7 +41,7 @@ func (a *Agent) backgroundRunFor(ctx context.Context) *run {
 		if stale || overflowed {
 			// Flush out of band; no failure path matters — completion is
 			// observational, not correctness-critical.
-			go a.bg.run.complete(context.Background(), "success", "", "")
+			go a.bg.run.complete(context.Background(), "success", "", "", "")
 			a.bg.run = nil
 		}
 	}
@@ -71,7 +71,7 @@ func (a *Agent) startBackgroundFlusher() {
 					r := a.bg.run
 					a.bg.run = nil
 					a.bg.mu.Unlock()
-					_ = r.complete(context.Background(), "success", "", "")
+					_ = r.complete(context.Background(), "success", "", "", "")
 					continue
 				}
 				a.bg.mu.Unlock()
@@ -93,7 +93,7 @@ func (a *Agent) stopBackgroundFlusher() {
 	a.bg.run = nil
 	a.bg.mu.Unlock()
 	if r != nil {
-		_ = r.complete(context.Background(), "success", "", "")
+		_ = r.complete(context.Background(), "success", "", "", "")
 	}
 }
 

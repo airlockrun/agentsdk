@@ -105,7 +105,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			trace := string(debug.Stack())
 			errMsg := fmt.Sprintf("%v", rec)
 			ew.WriteError(fmt.Errorf("%s", errMsg))
-			run.complete(ctx, "error", errMsg, trace)
+			run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
 			return
 		}
 	}()
@@ -113,7 +113,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		ew.WriteError(err)
-		run.complete(ctx, "error", err.Error(), "")
+		run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
 		return
 	}
 
@@ -123,10 +123,10 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			status = "timeout"
 		}
 		ew.WriteError(err)
-		run.complete(ctx, status, err.Error(), "")
+		run.complete(ctx, status, err.Error(), ErrorKindAgent, "")
 		return
 	}
-	run.complete(ctx, "success", "", "")
+	run.complete(ctx, "success", "", "", "")
 }
 
 func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
@@ -160,7 +160,7 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 			trace := string(debug.Stack())
 			errMsg := fmt.Sprintf("%v", rec)
 			ew.WriteError(fmt.Errorf("%s", errMsg))
-			run.complete(ctx, "error", errMsg, trace)
+			run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
 			return
 		}
 	}()
@@ -171,10 +171,10 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 			status = "timeout"
 		}
 		ew.WriteError(err)
-		run.complete(ctx, status, err.Error(), "")
+		run.complete(ctx, status, err.Error(), ErrorKindAgent, "")
 		return
 	}
-	run.complete(ctx, "success", "", "")
+	run.complete(ctx, "success", "", "", "")
 }
 
 // wrapRoute converts a RouteHandlerFunc into http.HandlerFunc, installing
@@ -185,7 +185,7 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 		ctx := contextWithLazyRun(r.Context(), lazy)
 		defer func() {
 			if run := lazy.materialized(); run != nil {
-				_ = run.complete(ctx, "success", "", "")
+				_ = run.complete(ctx, "success", "", "", "")
 			}
 		}()
 		handler(ctx, w, r)

@@ -22,12 +22,23 @@ func TestToolDescription(t *testing.T) {
 		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
 	})
 
-	desc := buildToolDescription(a)
+	desc := buildToolDescription(a, AccessAdmin)
 	if !strings.Contains(desc, "conn_{slug}.request(") {
 		t.Fatal("expected built-in bindings in description")
 	}
 	if strings.Contains(desc, "check_gmail") || strings.Contains(desc, "send_slack") {
 		t.Fatal("tool names should not appear in run_js description — Airlock renders them")
+	}
+	if !strings.Contains(desc, "queryDB(") {
+		t.Fatal("admin description should include queryDB")
+	}
+
+	// Non-admin callers must not see queryDB / execDB advertised — they
+	// aren't bound in the VM either, so leaving them in the prompt would
+	// just invite the LLM to fail.
+	userDesc := buildToolDescription(a, AccessUser)
+	if strings.Contains(userDesc, "queryDB(") || strings.Contains(userDesc, "execDB(") {
+		t.Fatal("AccessUser description must not advertise queryDB/execDB")
 	}
 }
 

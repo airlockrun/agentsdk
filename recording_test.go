@@ -13,7 +13,7 @@ func TestRunComplete(t *testing.T) {
 	run.logAppend(LogLevelInfo, "test log")
 	run.recordAction("proxy", "req", "resp", nil, 100)
 
-	err := run.complete(context.Background(), "success", "", "")
+	err := run.complete(context.Background(), "success", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestRunComplete_SurvivesCancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel: represents Airlock closing /prompt mid-stream
 
-	if err := run.complete(ctx, "error", "simulated", ""); err != nil {
+	if err := run.complete(ctx, "error", "simulated", ErrorKindAgent, ""); err != nil {
 		t.Fatalf("complete with cancelled ctx should still succeed, got: %v", err)
 	}
 

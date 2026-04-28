@@ -38,7 +38,7 @@ func buildSolTools(agent *Agent, run *run, supportedModalities []string) tool.Se
 // buildRunJSTool creates the run_js tool for a given agent and run.
 func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 	return tool.New("run_js").
-		Description(buildToolDescription(agent)).
+		Description(buildToolDescription(agent, run.callerAccess)).
 		SchemaFromStruct(runJSInput{}).
 		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
 			var args runJSInput
@@ -240,10 +240,14 @@ func randomHex(n int) string {
 }
 
 // buildToolDescription generates the run_js tool description including the function manifest.
-func buildToolDescription(agent *Agent) string {
+// callerAccess gates admin-only bindings (queryDB/execDB) so they're not advertised
+// to AccessUser / AccessPublic runs that wouldn't be able to call them anyway.
+func buildToolDescription(agent *Agent, callerAccess Access) string {
 	var b strings.Builder
-	b.WriteString("Execute JavaScript code. The value of the last expression is returned — do NOT use a top-level `return` statement (it's a syntax error outside a function). Write the value you want as the final expression. Example: `const r = httpRequest(url); r` returns `r`. `return r;` does NOT work.\n\n")
-	b.WriteString("Variables declared with var/let/const persist across run_js calls within the same turn, so you can build up state incrementally.\n\n")
+	b.WriteString("Execute JavaScript code. The runtime is ES5.1 with select ES6 features (let/const, arrow functions, classes, destructuring, template literals, Map/Set) — there is NO `async`/`await` and NO Promises; using `await` is a syntax error. All bindings below are synchronous: call them directly, e.g. `const r = httpRequest(url)` not `await httpRequest(url)`.\n\n")
+	b.WriteString("The value of the last expression is returned — do NOT use a top-level `return` statement (it's a syntax error outside a function). Write the value you want as the final expression. Example: `const r = httpRequest(url); r` returns `r`. `return r;` does NOT work.\n\n")
+	b.WriteString("Variables declared with var/let/const persist across run_js calls within the same turn (the VM is reset only on the next user message), so you can build up state incrementally. Prefer `var` for top-level names — re-declaring a `let` or `const` with the same name in a follow-up run_js call throws SyntaxError. Reuse `var` names freely; reserve `let`/`const` for names you won't redeclare.\n\n")
+	b.WriteString("Prefer ONE run_js call over many when it's safe. If a sequence is read-only or strictly additive (list → filter → look up one item → format), do it in a single call: fewer turns, less chance of stale state between calls, cheaper for the user. Split into multiple calls only when an earlier result must be inspected before deciding what to do next, or when an action is destructive enough that you want a confirmation gate between steps. Example: `const items = listX(); const target = items.find(i => i.name === 'foo'); if (!target.enabled) { updateX(target.id, {enabled: true}); } target` — one call, not three.\n\n")
 	b.WriteString("IMPORTANT: request_confirmation parameter usage:\n")
 	b.WriteString("- Set request_confirmation=true ONLY for code that modifies external data (sending messages, deleting records, spending money).\n")
 	b.WriteString("- Read-only operations, data lookups, and computations must NEVER use request_confirmation — just execute them.\n")
@@ -254,26 +258,57 @@ func buildToolDescription(agent *Agent) string {
 	b.WriteString("\nBuilt-in bindings:\n")
 	b.WriteString("- conn_{slug}.request(method, path, body?) → string — raw HTTP via connection\n")
 	b.WriteString("- conn_{slug}.requestJSON(method, path, body?) → object — JSON HTTP via connection\n")
-	b.WriteString("- mcp_{slug}.callTool(toolName, args?) → result — call MCP tool\n")
-	b.WriteString("- mcp_{slug}.listTools() → [{name, description, inputSchema}, ...] — discover MCP tools\n")
-	b.WriteString("- queryDB(sql, ...params) → [{...}, ...]\n")
-	b.WriteString("- execDB(sql, ...params) → {rowsAffected: N}\n")
-	b.WriteString("- writeFile(key, data, contentType)\n")
-	b.WriteString("- readFile(key) → string\n")
-	b.WriteString("- fileInfo(key) → {key, size, contentType, lastModified}\n")
-	b.WriteString("- copyFile(srcKey, dstKey) — server-side copy\n")
-	b.WriteString("- removeFile(key) — delete file\n")
-	b.WriteString("- listFiles(prefix?) → [{key, size, lastModified}, ...]\n")
-	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}\n")
+	b.WriteString("- mcp_{slug}.<tool_name>(args?) — call MCP tool. The per-tool typed methods are declared in the run-env prompt; one method per tool the server advertised at sync time.\n")
+	if accessSatisfies(callerAccess, AccessAdmin) {
+		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — admin-only; not exposed to AccessUser / AccessPublic callers.\n")
+		b.WriteString("- execDB(sql, ...params) → {rowsAffected: N} — admin-only; not exposed to AccessUser / AccessPublic callers.\n")
+	}
+	b.WriteString("- storage_{slug}.get(key) → string — read a file's contents as a string. `key` is a relative key string or a {zone, key} ref handed back from another call.\n")
+	b.WriteString("- storage_{slug}.put(key, data, contentType) — write a file.\n")
+	b.WriteString("- storage_{slug}.stat(key) → {key, size, contentType, lastModified}\n")
+	b.WriteString("- storage_{slug}.list(prefix?) → [{key, size, contentType, lastModified}, ...]\n")
+	b.WriteString("- storage_{slug}.copy(srcKey, dstKey) — server-side copy within this zone.\n")
+	b.WriteString("- storage_{slug}.copyTo(srcKey, dstRef) — server-side copy to a different zone; dstRef is a {zone, key} object.\n")
+	b.WriteString("- storage_{slug}.delete(key)\n")
+	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}. `source` accepts a {zone, key} ref or a \"zone/key\" string.\n")
 	b.WriteString("- log(message)\n")
 	b.WriteString("- webSearch(query, count?) → {results: [{title, url, snippet}], synthesis?, provider}\n")
-	b.WriteString("- httpRequest(url, opts?) → {status, headers, body, contentType, size, savedTo?} — HTML responses are converted to markdown by default; binary and large responses auto-saved to S3 (use readFile or attachToContext on savedTo). Opts: {method, headers, body, timeout, saveAs, raw}.\n")
-	b.WriteString("- attachToContext(key) → string — load an S3 file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files (CSV, JSON, etc.) use readFile instead.\n")
-	b.WriteString("- transcribeAudio(key, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. opts: {language?, prompt?, mimeType?}.\n")
-	b.WriteString("- generateImage(prompt, opts?) → {key, mimeType, size} — text-to-image; result auto-saved to S3, pass `key` to printToUser({source: key, ...}). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
-	b.WriteString("- speak(text, opts?) → {key, mimeType, size} — text-to-speech; result auto-saved to S3, pass `key` to printToUser({source: key, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
+	b.WriteString("- httpRequest(url, opts?) → {status, headers, body, contentType, size, savedTo?} — HTML responses are converted to markdown by default; binary and large responses auto-saved to S3. `savedTo` is a {zone, key} ref — pass it to storage_{zone}.get(...) to read text, or attachToContext(...) to view it next turn. Opts: {method, headers, body, timeout, saveAs, raw}; `saveAs` accepts a {zone, key} ref or \"zone/key\" string.\n")
+	b.WriteString("- attachToContext(ref) → string — load an S3 file as an image/file part so you can actually see it on the NEXT turn. `ref` is a {zone, key} object or a \"zone/key\" string. Idempotent per run. For text files (CSV, JSON, etc.) use storage_{zone}.get(...) instead.\n")
+	b.WriteString("- transcribeAudio(ref, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. `ref` is a {zone, key} object or \"zone/key\" string. opts: {language?, prompt?, mimeType?}.\n")
+	b.WriteString("- generateImage(prompt, opts?) → {file: {zone, key}, mimeType, size} — text-to-image; result auto-saved to S3, pass `file` to printToUser({source: file, ...}) or storage_{zone}.get(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
+	b.WriteString("- speak(text, opts?) → {file: {zone, key}, mimeType, size} — text-to-speech; result auto-saved to S3, pass `file` to printToUser({source: file, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
 	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
 	b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities; current agent keeps running until the new build is ready.\n")
+
+	// Storage zone bindings — which storage_{slug} objects are actually
+	// available, and on which axes (read/write). The framework
+	// auto-registers a "tmp" zone, so this section is always non-empty.
+	if len(agent.storages) > 0 {
+		b.WriteString("\nStorage zones registered for this agent:\n")
+		for slug, zone := range agent.storages {
+			axes := ""
+			switch {
+			case zone.Read != AccessInternal && zone.Write != AccessInternal:
+				axes = "read+write"
+			case zone.Read != AccessInternal:
+				axes = "read-only"
+			case zone.Write != AccessInternal:
+				axes = "write-only"
+			default:
+				axes = "internal"
+			}
+			desc := zone.Description
+			if desc == "" && slug == reservedTmpSlug {
+				desc = "framework scratch zone for transient files (httpRequest savedTo, generateImage results, etc.)"
+			}
+			if desc != "" {
+				b.WriteString(fmt.Sprintf("- storage_%s (%s) — %s\n", slug, axes, desc))
+			} else {
+				b.WriteString(fmt.Sprintf("- storage_%s (%s)\n", slug, axes))
+			}
+		}
+	}
 
 	// Topic bindings.
 	if len(agent.topics) > 0 {

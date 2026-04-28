@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	goai "github.com/airlockrun/goai"
@@ -69,22 +70,32 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		if len(input.Files) > 0 {
 			var fileInfo string
 			for _, f := range input.Files {
-				fileInfo += fmt.Sprintf("- %s (%s, %d bytes) — key: %q\n", f.Filename, f.ContentType, f.Size, f.ID)
+				zone, key, ok := strings.Cut(f.ID, "/")
+				if !ok {
+					// Defensive: airlock currently always emits "{zone}/{key}".
+					// If a future caller passes a bare key, surface it as-is.
+					zone, key = reservedTmpSlug, f.ID
+				}
+				fileInfo += fmt.Sprintf("- %s (%s, %d bytes) — zone: %q, key: %q\n", f.Filename, f.ContentType, f.Size, zone, key)
 			}
-			note := fmt.Sprintf("Attached files:\n%sUse readFile(key) in run_js to read text contents, or use attachToContext(key) in run_js to load images/files into your visual context.", fileInfo)
+			note := fmt.Sprintf("Attached files:\n%sUse storage_{zone}.get(key) in run_js to read text contents, or attachToContext({zone, key}) to load images/files into your visual context for the next turn.", fileInfo)
 			prompt += "\n\n[" + note + "]"
 		}
 
 		ew := newEventWriter(w)
 
-		// Panic recovery — record error and complete the run.
+		// Panic recovery — record error and complete the run. Panics in the
+		// /prompt path are tagged "agent": the LLM/sol path returns errors
+		// (caught at the runner.Run / runner.Compact sites below) rather
+		// than panicking, so a panic here implies an SDK bug or, more
+		// commonly, agent code panicking through the goja VM bridge.
 		defer func() {
 			if rec := recover(); rec != nil {
 				trace := string(debug.Stack())
 				errMsg := fmt.Sprintf("%v", rec)
 				log.Printf("agentsdk: prompt panic: %s\n%s", errMsg, trace)
 				ew.WriteError(fmt.Errorf("%s", errMsg))
-				run.complete(ctx, "error", errMsg, trace)
+				run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
 				return
 			}
 		}()
@@ -163,7 +174,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			run.teardownStore()
 			if err != nil {
 				ew.WriteError(err)
-				run.complete(ctx, "error", err.Error(), "")
+				run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
 				return
 			}
 			ew.writeLine(ndjsonLine{
@@ -176,7 +187,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 				Type: "finish",
 				Data: map[string]any{"finishReason": "stop"},
 			})
-			run.complete(ctx, "success", "", "")
+			run.complete(ctx, "success", "", "", "")
 			return
 		}
 
@@ -238,10 +249,14 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 }
 
 // handleRunResult processes the Sol RunResult and completes the agentsdk run.
+// All run-level error paths here originate from sol's runner — LLM stream
+// failures, model lookup, internal sol errors — so they're tagged platform.
+// Agent code that throws inside run_js never propagates here; goja errors
+// are caught at the tool boundary and returned as tool.Result.
 func handleRunResult(ctx context.Context, run *run, ew *EventWriter, result *sol.RunResult, err error) {
 	if err != nil {
 		ew.WriteError(err)
-		run.complete(ctx, "error", err.Error(), "")
+		run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
 		return
 	}
 
@@ -262,15 +277,16 @@ func handleRunResult(ctx context.Context, run *run, ew *EventWriter, result *sol
 			"suspensionContext": result.SuspensionContext,
 			"compactionState":   result.CompactionState,
 		})
-		run.completeWithCheckpoint(ctx, "suspended", "", "", checkpoint)
+		run.completeWithCheckpoint(ctx, "suspended", "", "", "", checkpoint)
 	case sol.RunCancelled:
-		run.complete(ctx, "error", "run cancelled", "")
+		// Cancellation is user-initiated, neither platform nor agent fault.
+		run.complete(ctx, "error", "run cancelled", "", "")
 	case sol.RunFailed:
 		errMsg := ""
 		if result.Error != nil {
 			errMsg = result.Error.Error()
 		}
-		run.complete(ctx, "error", errMsg, "")
+		run.complete(ctx, "error", errMsg, ErrorKindPlatform, "")
 	default:
 		// Emit finish event so Airlock publishes run.complete to WS subscribers.
 		// Shape matches ai-sdk v3 usage (inputTokens.total / outputTokens.total)
@@ -286,7 +302,7 @@ func handleRunResult(ctx context.Context, run *run, ew *EventWriter, result *sol
 			Type: "finish",
 			Data: finishPayload,
 		})
-		run.complete(ctx, "success", "", "")
+		run.complete(ctx, "success", "", "", "")
 	}
 }
 

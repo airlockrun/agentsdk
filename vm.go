@@ -257,47 +257,55 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		vm.Set("conn_"+slug, obj)
 	}
 
-	vm.Set("queryDB", func(call goja.FunctionCall) goja.Value {
-		db := agent.DB()
-		if db == nil {
-			panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
-		}
-		query := call.Argument(0).String()
-		params := make([]any, len(call.Arguments)-1)
-		for i := 1; i < len(call.Arguments); i++ {
-			params[i-1] = call.Arguments[i].Export()
-		}
-		rows, err := db.QueryContext(run.ctx, query, params...)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		defer rows.Close()
-		result, err := rowsToMaps(rows)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		return vm.ToValue(result)
-	})
+	// queryDB / execDB are admin-only. AccessUser / AccessPublic callers
+	// shouldn't be able to coax the LLM into running arbitrary SQL — for
+	// user-facing data access, builders register typed tools that wrap
+	// queryDB internally and enforce row-level filtering. Gate is bind-time
+	// so the bindings simply don't exist for non-admin runs and can't be
+	// reached even via prompt injection.
+	if accessSatisfies(run.callerAccess, AccessAdmin) {
+		vm.Set("queryDB", func(call goja.FunctionCall) goja.Value {
+			db := agent.DB()
+			if db == nil {
+				panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
+			}
+			query := call.Argument(0).String()
+			params := make([]any, len(call.Arguments)-1)
+			for i := 1; i < len(call.Arguments); i++ {
+				params[i-1] = call.Arguments[i].Export()
+			}
+			rows, err := db.QueryContext(run.ctx, query, params...)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			defer rows.Close()
+			result, err := rowsToMaps(rows)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			return vm.ToValue(result)
+		})
 
-	vm.Set("execDB", func(call goja.FunctionCall) goja.Value {
-		db := agent.DB()
-		if db == nil {
-			panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
-		}
-		query := call.Argument(0).String()
-		params := make([]any, len(call.Arguments)-1)
-		for i := 1; i < len(call.Arguments); i++ {
-			params[i-1] = call.Arguments[i].Export()
-		}
-		res, err := db.ExecContext(run.ctx, query, params...)
-		if err != nil {
-			panic(vm.NewGoError(err))
-		}
-		affected, _ := res.RowsAffected()
-		obj := vm.NewObject()
-		obj.Set("rowsAffected", affected)
-		return vm.ToValue(obj)
-	})
+		vm.Set("execDB", func(call goja.FunctionCall) goja.Value {
+			db := agent.DB()
+			if db == nil {
+				panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
+			}
+			query := call.Argument(0).String()
+			params := make([]any, len(call.Arguments)-1)
+			for i := 1; i < len(call.Arguments); i++ {
+				params[i-1] = call.Arguments[i].Export()
+			}
+			res, err := db.ExecContext(run.ctx, query, params...)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			affected, _ := res.RowsAffected()
+			obj := vm.NewObject()
+			obj.Set("rowsAffected", affected)
+			return vm.ToValue(obj)
+		})
+	}
 
 	// Register storage_{slug} objects for each registered Storage zone.
 	// Read and Write are gated independently — Get/Stat/List bind only when
@@ -850,9 +858,10 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	// Register mcp_{slug} objects for each registered MCP server.
 	// Schemas come from Airlock via SyncResponse and live in agent.mcpSchemas;
 	// we snapshot once per VM build so /refresh writes during a run can't
-	// mutate the map mid-iteration. We expose one typed method per discovered
-	// tool plus callTool/listTools as escape hatches for tools added after
-	// start or for stringly-typed dispatch.
+	// mutate the map mid-iteration. The LLM sees one typed method per
+	// discovered tool — schemas already appear as declarations in the
+	// per-run env prompt, so within a run there's nothing further to
+	// discover.
 	mcpSchemas := run.agent.snapshotMCPSchemas()
 	for slug, mcp := range run.agent.mcps {
 		if !accessSatisfies(run.callerAccess, mcp.Access) {
@@ -863,53 +872,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		obj := vm.NewObject()
 		mcpSlug := slug // capture for closures
 
-		// One method per discovered tool: mcp_github.search_repos({...}).
-		// The LLM sees these as typed declarations in the per-run env
-		// prompt, so the call site is type-aware.
 		for _, schema := range mcpSchemas[slug] {
 			toolName := schema.Name
 			obj.Set(toolName, func(call goja.FunctionCall) goja.Value {
 				return invokeMCPTool(vm, run.ctx, handle, mcpSlug, toolName, call.Argument(0))
 			})
 		}
-
-		// callTool: stringly-typed escape hatch — useful for tools added
-		// to the server after run start, or for dynamic dispatch.
-		obj.Set("callTool", func(call goja.FunctionCall) goja.Value {
-			toolName := call.Argument(0).String()
-			if toolName == "" {
-				panic(vm.NewGoError(fmt.Errorf("mcp_%s.callTool: tool name is required", mcpSlug)))
-			}
-			return invokeMCPTool(vm, run.ctx, handle, mcpSlug, toolName, call.Argument(1))
-		})
-
-		obj.Set("listTools", func(call goja.FunctionCall) goja.Value {
-			tools, err := handle.ListTools(run.ctx)
-			if err != nil {
-				if ae, ok := IsAuthRequired(err); ok {
-					errObj := vm.NewObject()
-					errObj.Set("authRequired", true)
-					errObj.Set("slug", ae.Slug)
-					errObj.Set("serverName", mcpSlug)
-					panic(vm.ToValue(errObj))
-				}
-				panic(vm.NewGoError(fmt.Errorf("mcp_%s.listTools: %w", mcpSlug, err)))
-			}
-			result := make([]map[string]any, len(tools))
-			for i, t := range tools {
-				entry := map[string]any{
-					"name":        t.Name,
-					"description": t.Description,
-				}
-				if len(t.InputSchema) > 0 {
-					var schemaAny any
-					json.Unmarshal(t.InputSchema, &schemaAny)
-					entry["inputSchema"] = schemaAny
-				}
-				result[i] = entry
-			}
-			return vm.ToValue(result)
-		})
 
 		vm.Set("mcp_"+slug, obj)
 	}

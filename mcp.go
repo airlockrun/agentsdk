@@ -70,14 +70,3 @@ func encodeMCPArgs(args any) (json.RawMessage, error) {
 	}
 }
 
-// ListTools fetches the current tool schemas from this MCP server via Airlock.
-func (h *MCPHandle) ListTools(ctx context.Context) ([]MCPToolSchema, error) {
-	var resp struct {
-		Tools []MCPToolSchema `json:"tools"`
-	}
-	if err := h.agent.client.doJSON(ctx, "GET", "/api/agent/mcp/"+h.slug+"/tools", nil, &resp); err != nil {
-		return nil, fmt.Errorf("MCPHandle.ListTools %s: %w", h.slug, err)
-	}
-	return resp.Tools, nil
-}
-

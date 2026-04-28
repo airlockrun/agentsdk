@@ -617,11 +617,32 @@ type LogEntry struct {
 	Message string   `json:"message"`
 }
 
+// Error kinds passed in RunCompleteRequest.ErrorKind. The agentsdk side
+// classifies structurally — by call-site, not by error string — so airlock
+// can avoid pattern-matching at all.
+const (
+	// ErrorKindPlatform: failure upstream of the agent's own code. LLM
+	// provider 4xx, sol/goai stream errors, request transport (body read).
+	// The agent's code couldn't have prevented or fixed this — the "Fix
+	// this error" workflow on the run page is hidden for these.
+	ErrorKindPlatform = "platform"
+
+	// ErrorKindAgent: failure from agent-defined code paths. Webhook/cron
+	// handlers returning err, panics in user code recovered by the SDK,
+	// post-LLM bookkeeping that hit something the agent owns. The Fix
+	// workflow targets exactly these.
+	ErrorKindAgent = "agent"
+)
+
 // RunCompleteRequest is the body for POST /api/agent/run/complete.
 type RunCompleteRequest struct {
-	RunID      string          `json:"runId"`
-	Status     string          `json:"status"`
-	Error      string          `json:"error,omitempty"`
+	RunID string `json:"runId"`
+	// Status is "success" | "error" | "suspended" | "timeout" | "tool_errors".
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	// ErrorKind is set when Status == "error" and disambiguates platform
+	// vs agent failure for the UI. Empty otherwise.
+	ErrorKind  string          `json:"errorKind,omitempty"`
 	PanicTrace string          `json:"panicTrace,omitempty"`
 	Actions    json.RawMessage `json:"actions"`
 	Logs       []LogEntry      `json:"logs,omitempty"`
