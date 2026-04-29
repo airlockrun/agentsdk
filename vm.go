@@ -839,21 +839,28 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 
 	// requestUpgrade(description) — ask Airlock to regenerate this agent with
 	// new capabilities. The current agent keeps running until the new build
-	// finishes.
-	vm.Set("requestUpgrade", func(call goja.FunctionCall) goja.Value {
-		description := call.Argument(0).String()
-		if description == "" {
-			panic(vm.NewGoError(fmt.Errorf("requestUpgrade: description is required")))
-		}
-		body := struct {
-			Description    string `json:"description"`
-			ConversationID string `json:"conversationId,omitempty"`
-		}{description, run.conversationID}
-		if err := agent.client.doJSON(run.ctx, "POST", "/api/agent/upgrade", body, nil); err != nil {
-			panic(vm.NewGoError(fmt.Errorf("requestUpgrade: %w", err)))
-		}
-		return vm.ToValue("Upgrade requested. The agent will be regenerated in the background.")
-	})
+	// finishes. Admin-only because the rebuild runs untrusted LLM-generated
+	// Go code on the agent-builder host with broad system access; non-admin
+	// callers must not be able to trigger that. Gated at bind time so the
+	// LLM's run_js environment for AccessUser/AccessPublic runs simply
+	// doesn't have the binding (and the tool description below also omits
+	// it for those callers).
+	if accessSatisfies(run.callerAccess, AccessAdmin) {
+		vm.Set("requestUpgrade", func(call goja.FunctionCall) goja.Value {
+			description := call.Argument(0).String()
+			if description == "" {
+				panic(vm.NewGoError(fmt.Errorf("requestUpgrade: description is required")))
+			}
+			body := struct {
+				Description    string `json:"description"`
+				ConversationID string `json:"conversationId,omitempty"`
+			}{description, run.conversationID}
+			if err := agent.client.doJSON(run.ctx, "POST", "/api/agent/upgrade", body, nil); err != nil {
+				panic(vm.NewGoError(fmt.Errorf("requestUpgrade: %w", err)))
+			}
+			return vm.ToValue("Upgrade requested. The agent will be regenerated in the background.")
+		})
+	}
 
 	// Register mcp_{slug} objects for each registered MCP server.
 	// Schemas come from Airlock via SyncResponse and live in agent.mcpSchemas;

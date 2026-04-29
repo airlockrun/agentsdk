@@ -279,7 +279,9 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	b.WriteString("- generateImage(prompt, opts?) → {file: {zone, key}, mimeType, size} — text-to-image; result auto-saved to S3, pass `file` to printToUser({source: file, ...}) or storage_{zone}.get(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
 	b.WriteString("- speak(text, opts?) → {file: {zone, key}, mimeType, size} — text-to-speech; result auto-saved to S3, pass `file` to printToUser({source: file, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
 	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
-	b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities; current agent keeps running until the new build is ready.\n")
+	if accessSatisfies(callerAccess, AccessAdmin) {
+		b.WriteString("- requestUpgrade(description) → string — admin-only; ask Airlock to regenerate this agent with new capabilities. Not exposed to AccessUser / AccessPublic callers because the regenerate runs untrusted LLM-generated code on the build host.\n")
+	}
 
 	// Storage zone bindings — which storage_{slug} objects are actually
 	// available, and on which axes (read/write). The framework
