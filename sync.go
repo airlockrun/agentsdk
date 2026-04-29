@@ -9,97 +9,150 @@ import (
 )
 
 // syncWithAirlock registers connections, MCP servers, webhooks, crons, topics, and event subscriptions with Airlock.
-// Called by Serve() before starting the HTTP server. Panics on failure.
-func (a *Agent) syncWithAirlock(ctx context.Context) {
+// Called by Serve() at startup (via syncOrPanic) and by the /refresh handler.
+// Returns the error so /refresh can propagate it; startup panics via the wrapper.
+func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	// Register each connection.
-	for slug, def := range a.auths {
+	for slug, c := range a.auths {
+		def := ConnectionDef{
+			Name:              c.Name,
+			Description:       c.Description,
+			BaseURL:           c.BaseURL,
+			AuthMode:          c.AuthMode,
+			AuthURL:           c.AuthURL,
+			TokenURL:          c.TokenURL,
+			Scopes:            c.Scopes,
+			AuthInjection:     c.AuthInjection,
+			SetupInstructions: c.SetupInstructions,
+			LLMHint:           c.LLMHint,
+			Access:            c.Access,
+		}
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/connections/"+slug, def, nil); err != nil {
-			panic("agentsdk: failed to register connection " + slug + ": " + err.Error())
+			return fmt.Errorf("register connection %s: %w", slug, err)
 		}
 	}
 
 	// Register each MCP server.
-	for slug, def := range a.mcps {
+	for slug, m := range a.mcps {
+		def := MCPDef{
+			Name:     m.Name,
+			URL:      m.URL,
+			AuthMode: m.AuthMode,
+			AuthURL:  m.AuthURL,
+			TokenURL: m.TokenURL,
+			Scopes:   m.Scopes,
+			Access:   m.Access,
+		}
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/mcp-servers/"+slug, def, nil); err != nil {
-			panic("agentsdk: failed to register MCP server " + slug + ": " + err.Error())
+			return fmt.Errorf("register MCP server %s: %w", slug, err)
 		}
 	}
 
-	// Build sync payload.
+	// Build sync payload — convert builder structs to wire formats.
 	webhooks := make([]WebhookDef, 0, len(a.webhooks))
-	for path, entry := range a.webhooks {
-		timeout := entry.opts.Timeout
+	for _, w := range a.webhooks {
+		timeout := w.Timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
 		webhooks = append(webhooks, WebhookDef{
-			Path:        path,
-			Verify:      entry.opts.Verify,
-			Header:      entry.opts.Header,
+			Path:        w.Path,
+			Verify:      w.Verify,
+			Header:      w.Header,
 			TimeoutMs:   timeout.Milliseconds(),
-			Description: entry.opts.Description,
+			Description: w.Description,
 		})
 	}
-	crons := make([]CronEntry, 0, len(a.crons))
-	for name, entry := range a.crons {
-		timeout := entry.opts.Timeout
+	crons := make([]CronDef, 0, len(a.crons))
+	for _, c := range a.crons {
+		timeout := c.Timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
-		crons = append(crons, CronEntry{
-			Name:        name,
-			Schedule:    entry.schedule,
+		crons = append(crons, CronDef{
+			Name:        c.Name,
+			Schedule:    c.Schedule,
 			TimeoutMs:   timeout.Milliseconds(),
-			Description: entry.opts.Description,
+			Description: c.Description,
 		})
 	}
 	routes := make([]RouteDef, 0, len(a.routes))
-	for key, entry := range a.routes {
-		// key is "METHOD /path" — split back into method and path.
-		method, path, _ := strings.Cut(key, " ")
+	for _, r := range a.routes {
 		routes = append(routes, RouteDef{
-			Path:        path,
-			Method:      method,
-			Access:      string(entry.opts.Access),
-			Description: entry.opts.Description,
+			Path:        r.Path,
+			Method:      r.Method,
+			Access:      r.Access,
+			Description: r.Description,
 		})
 	}
 
 	topics := make([]TopicDef, 0, len(a.topics))
-	for _, def := range a.topics {
-		topics = append(topics, def)
+	for _, t := range a.topics {
+		topics = append(topics, TopicDef{
+			Slug:        t.Slug,
+			Description: t.Description,
+			Access:      t.Access,
+		})
 	}
 
-	tools := make([]SyncToolDef, 0, len(a.tools))
+	tools := make([]ToolDef, 0, len(a.tools))
 	for _, t := range a.tools {
 		inRaw, err := json.Marshal(t.InputSchema)
 		if err != nil {
-			panic(fmt.Sprintf("agentsdk: sync: marshal input schema for tool %q: %v", t.Name, err))
+			return fmt.Errorf("marshal input schema for tool %q: %w", t.Name, err)
 		}
 		outRaw, err := json.Marshal(t.OutputSchema)
 		if err != nil {
-			panic(fmt.Sprintf("agentsdk: sync: marshal output schema for tool %q: %v", t.Name, err))
+			return fmt.Errorf("marshal output schema for tool %q: %w", t.Name, err)
 		}
-		tools = append(tools, SyncToolDef{
+		tools = append(tools, ToolDef{
 			Name:          t.Name,
 			Description:   t.Description,
-			Access:        string(t.Access),
+			Access:        t.Access,
 			InputSchema:   inRaw,
 			OutputSchema:  outRaw,
 			InputExamples: t.InputExamples,
 		})
 	}
 
-	mcpServers := make([]MCPServerSync, 0, len(a.mcps))
-	for slug, def := range a.mcps {
-		mcpServers = append(mcpServers, MCPServerSync{
-			Slug:     slug,
-			Name:     def.Name,
-			URL:      def.URL,
-			AuthMode: def.AuthMode,
-			AuthURL:  def.AuthURL,
-			TokenURL: def.TokenURL,
-			Scopes:   def.Scopes,
+	mcpServers := make([]MCPDef, 0, len(a.mcps))
+	for _, m := range a.mcps {
+		mcpServers = append(mcpServers, MCPDef{
+			Slug:     m.Slug,
+			Name:     m.Name,
+			URL:      m.URL,
+			AuthMode: m.AuthMode,
+			AuthURL:  m.AuthURL,
+			TokenURL: m.TokenURL,
+			Scopes:   m.Scopes,
+			Access:   m.Access,
+		})
+	}
+
+	extraPrompts := make([]ExtraPromptDef, 0, len(a.extraPrompts))
+	for _, ep := range a.extraPrompts {
+		extraPrompts = append(extraPrompts, ExtraPromptDef{
+			Text:   ep.Text,
+			Access: ep.Access,
+		})
+	}
+
+	storages := make([]StorageDef, 0, len(a.storages))
+	for _, s := range a.storages {
+		storages = append(storages, StorageDef{
+			Slug:        s.Slug,
+			Read:        s.Read,
+			Write:       s.Write,
+			Description: s.Description,
+		})
+	}
+
+	modelSlots := make([]ModelSlotDef, 0, len(a.modelSlots))
+	for _, s := range a.modelSlots {
+		modelSlots = append(modelSlots, ModelSlotDef{
+			Slug:        s.Slug,
+			Capability:  string(s.Capability),
+			Description: s.Description,
 		})
 	}
 
@@ -112,8 +165,9 @@ func (a *Agent) syncWithAirlock(ctx context.Context) {
 		Routes:       routes,
 		Topics:       topics,
 		MCPServers:   mcpServers,
-		ExtraPrompts: a.extraPrompts,
-		ModelSlots:   a.modelSlots,
+		Storages:     storages,
+		ExtraPrompts: extraPrompts,
+		ModelSlots:   modelSlots,
 	}
 
 	var syncResp SyncResponse
@@ -122,17 +176,27 @@ func (a *Agent) syncWithAirlock(ctx context.Context) {
 		// surface a pointer to the remediation so the operator sees it in
 		// docker logs alongside the error persisted in the agent's UI.
 		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "incompatible") {
-			panic("agentsdk: sync rejected by Airlock (" + err.Error() + "); this container is out of date — rebuild the agent from the admin UI")
+			return fmt.Errorf("sync rejected by Airlock (%w); this container is out of date — rebuild the agent from the admin UI", err)
 		}
-		panic("agentsdk: failed to sync with Airlock: " + err.Error())
+		return fmt.Errorf("sync with Airlock: %w", err)
 	}
 
-	a.systemPrompt = syncResp.SystemPrompt
+	a.applySyncResponse(syncResp)
 
 	// Log MCP auth issues.
 	for _, status := range syncResp.MCPAuthStatus {
 		if !status.Authorized {
 			log.Printf("MCP server %q: authorization required (%s)", status.Slug, status.AuthURL)
 		}
+	}
+	return nil
+}
+
+// syncOrPanic is the startup wrapper that turns sync failures into panics —
+// preserves the historical "container exits if it can't register" behaviour
+// so a misconfigured agent fails loud instead of running in a degraded state.
+func (a *Agent) syncOrPanic(ctx context.Context) {
+	if err := a.syncWithAirlock(ctx); err != nil {
+		panic("agentsdk: " + err.Error())
 	}
 }

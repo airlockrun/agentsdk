@@ -9,19 +9,19 @@ import (
 func TestRegisterModel_Accumulates(t *testing.T) {
 	a, _ := testAgent(t)
 
-	a.RegisterModel("summarize", ModelSlotOpts{Capability: CapText, Description: "Short summaries"})
-	a.RegisterModel("thumbnail", ModelSlotOpts{Capability: CapImage})
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Short summaries"})
+	a.RegisterModel(&ModelSlot{Slug: "thumbnail", Capability: CapImage})
 
 	if got := len(a.modelSlots); got != 2 {
 		t.Fatalf("len(modelSlots) = %d, want 2", got)
 	}
-	if a.modelSlots[0].Slug != "summarize" || a.modelSlots[0].Capability != string(CapText) {
+	if a.modelSlots[0].Slug != "summarize" || a.modelSlots[0].Capability != CapText {
 		t.Errorf("slot[0] = %+v", a.modelSlots[0])
 	}
 	if a.modelSlots[0].Description != "Short summaries" {
 		t.Errorf("slot[0].Description = %q", a.modelSlots[0].Description)
 	}
-	if a.modelSlots[1].Capability != string(CapImage) {
+	if a.modelSlots[1].Capability != CapImage {
 		t.Errorf("slot[1].Capability = %q", a.modelSlots[1].Capability)
 	}
 }
@@ -33,14 +33,14 @@ func TestRegisterModel_PanicsOnEmptyCapability(t *testing.T) {
 			t.Fatal("expected panic for empty Capability")
 		}
 	}()
-	a.RegisterModel("bad", ModelSlotOpts{})
+	a.RegisterModel(&ModelSlot{Slug: "bad"})
 }
 
 func TestRegisterModel_SyncPayload(t *testing.T) {
 	a, mock := testAgent(t)
 
-	a.RegisterModel("summarize", ModelSlotOpts{Capability: CapText, Description: "Short summaries"})
-	a.RegisterModel("poster", ModelSlotOpts{Capability: CapImage})
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Short summaries"})
+	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage})
 
 	a.syncWithAirlock(context.Background())
 

@@ -17,8 +17,9 @@ func (a *Agent) AddSensitive(values ...string) {
 	}
 }
 
-// RedactSensitive replaces all known sensitive values in s with [REDACTED].
-func (a *Agent) RedactSensitive(s string) string {
+// redactSensitive replaces all known sensitive values in s with [REDACTED].
+// Internal helper used by redactMessages — builders never call this directly.
+func (a *Agent) redactSensitive(s string) string {
 	a.sensitiveM.RLock()
 	defer a.sensitiveM.RUnlock()
 	for v := range a.sensitiveSet {

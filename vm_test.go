@@ -2,7 +2,12 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/airlockrun/goai/tool"
 )
 
 type doubleIn struct {
@@ -75,15 +80,16 @@ func TestVM(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(run.logs) != 1 || run.logs[0] != "hello from JS" {
-			t.Fatalf("expected log entry, got %v", run.logs)
+		if len(run.logs) != 1 || run.logs[0].Message != "hello from JS" || run.logs[0].Level != LogLevelInfo {
+			t.Fatalf("expected info log entry, got %v", run.logs)
 		}
 	})
 
-	t.Run("copyFile calls backend", func(t *testing.T) {
+	t.Run("storage_X.copy calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `copyFile("a.txt", "b.txt")`)
+		_, err := executeJS(run.vmRuntime(), `storage_uploads.copy("a.txt", "b.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,14 +102,15 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("removeFile calls backend", func(t *testing.T) {
+	t.Run("storage_X.delete calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `removeFile("a.txt")`)
+		_, err := executeJS(run.vmRuntime(), `storage_uploads.delete("a.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		reqs := mock.RequestsByPath("/api/agent/storage/a.txt")
+		reqs := mock.RequestsByPath("/api/agent/storage/uploads/a.txt")
 		if len(reqs) != 1 {
 			t.Fatalf("expected 1 delete request, got %d", len(reqs))
 		}
@@ -112,10 +119,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("listFiles returns array", func(t *testing.T) {
+	t.Run("storage_X.list returns array", func(t *testing.T) {
 		a, _ := testAgent(t)
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `JSON.stringify(listFiles())`)
+		result, err := executeJS(run.vmRuntime(), `JSON.stringify(storage_uploads.list())`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,23 +132,25 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("writeFile calls backend", func(t *testing.T) {
+	t.Run("storage_X.put calls backend with zone prefix", func(t *testing.T) {
 		a, mock := testAgent(t)
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `writeFile("test.txt", "hello", "text/plain")`)
+		_, err := executeJS(run.vmRuntime(), `storage_uploads.put("test.txt", "hello", "text/plain")`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		reqs := mock.RequestsByPath("/api/agent/storage/test.txt")
+		reqs := mock.RequestsByPath("/api/agent/storage/uploads/test.txt")
 		if len(reqs) != 1 || reqs[0].Method != "PUT" {
-			t.Fatalf("expected PUT to storage, got %v", reqs)
+			t.Fatalf("expected PUT to storage with zone prefix, got %v", reqs)
 		}
 	})
 
-	t.Run("readFile calls backend", func(t *testing.T) {
+	t.Run("storage_X.get calls backend with zone prefix", func(t *testing.T) {
 		a, _ := testAgent(t)
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `readFile("test.txt")`)
+		result, err := executeJS(run.vmRuntime(), `storage_uploads.get("test.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -175,15 +185,58 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("fileInfo returns metadata", func(t *testing.T) {
+	t.Run("storage_X.stat returns metadata with relative key", func(t *testing.T) {
 		a, _ := testAgent(t)
+		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `var fi = fileInfo("test.txt"); fi.key + ":" + fi.size`)
+		result, err := executeJS(run.vmRuntime(), `var fi = storage_uploads.stat("test.txt"); fi.key + ":" + fi.size`)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if result != "test.txt:42" {
-			t.Fatalf("expected test.txt:42, got %s", result)
+			t.Fatalf("expected test.txt:42 (zone prefix stripped), got %s", result)
 		}
 	})
+}
+
+// TestRunJSInterruptOnCtxCancel verifies that cancelling the run's ctx
+// aborts a runaway JS loop via goja.Runtime.Interrupt — without this, an
+// infinite while(true) in LLM-generated code spins at 100% CPU forever.
+func TestRunJSInterruptOnCtxCancel(t *testing.T) {
+	a, _ := testAgent(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run := newRun(a, "run-1", "", "", ctx)
+
+	// Cancel after a short delay so the JS is mid-loop when interrupted.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	runJS := buildRunJSTool(a, run)
+	input, _ := json.Marshal(runJSInput{Code: "while(true){}"})
+
+	type out struct {
+		res tool.Result
+		err error
+	}
+	resCh := make(chan out, 1)
+	go func() {
+		r, err := runJS.Execute(ctx, input, tool.CallOptions{ToolCallID: "tc-1"})
+		resCh <- out{r, err}
+	}()
+
+	select {
+	case r := <-resCh:
+		// run_js swallows the executeJS error into the Output string
+		// ("Error: ..."). Either an error returned OR an error-prefixed
+		// output is acceptable — both prove the loop was interrupted.
+		if r.err == nil && !strings.Contains(r.res.Output, "Error:") {
+			t.Fatalf("expected interruption error, got Output=%q err=%v", r.res.Output, r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run_js did not return within 2s after ctx cancel — interrupt did not fire")
+	}
 }

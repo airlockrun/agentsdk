@@ -8,16 +8,22 @@ import (
 func TestSyncWithAirlock(t *testing.T) {
 	a, mock := testAgent(t)
 
-	a.RegisterConnection("gmail", ConnectionDef{
+	a.RegisterConnection(&Connection{
+		Slug:     "gmail",
 		Name:     "Gmail",
 		AuthMode: "oauth2",
 	})
-	a.RegisterWebhook("github", func(ctx context.Context, data []byte, ew *EventWriter) error {
-		return nil
-	}, WebhookOpts{Verify: "hmac", Header: "X-Hub-Signature-256"})
-	a.RegisterCron("daily", "0 9 * * *", func(ctx context.Context, ew *EventWriter) error {
-		return nil
-	}, CronOpts{})
+	a.RegisterWebhook(&Webhook{
+		Path:    "github",
+		Handler: func(ctx context.Context, data []byte, ew *EventWriter) error { return nil },
+		Verify:  "hmac",
+		Header:  "X-Hub-Signature-256",
+	})
+	a.RegisterCron(&Cron{
+		Name:     "daily",
+		Schedule: "0 9 * * *",
+		Handler:  func(ctx context.Context, ew *EventWriter) error { return nil },
+	})
 
 	a.syncWithAirlock(context.Background())
 

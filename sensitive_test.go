@@ -10,7 +10,7 @@ func TestRedactSensitive(t *testing.T) {
 	a, _ := testAgent(t)
 	a.AddSensitive("secret123", "apikey456")
 
-	result := a.RedactSensitive("the secret123 is apikey456 ok")
+	result := a.redactSensitive("the secret123 is apikey456 ok")
 	expected := "the [REDACTED] is [REDACTED] ok"
 	if result != expected {
 		t.Fatalf("expected %q, got %q", expected, result)

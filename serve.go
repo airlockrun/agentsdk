@@ -27,8 +27,10 @@ func (a *Agent) Serve() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// Sync with Airlock before accepting requests.
-	a.syncWithAirlock(ctx)
+	// Sync with Airlock before accepting requests. syncOrPanic preserves the
+	// historical "fail loud at boot" behaviour; the underlying syncWithAirlock
+	// is also called from /refresh where errors propagate to Airlock.
+	a.syncOrPanic(ctx)
 
 	// Start conversation VM garbage collection.
 	a.startConvVMGC(a.convVMConfig)
@@ -41,14 +43,15 @@ func (a *Agent) Serve() {
 	mux.HandleFunc("POST /prompt", handlePrompt(a))
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
 	mux.HandleFunc("POST /cron/{name}", a.handleCron)
+	mux.HandleFunc("POST /refresh", a.handleRefresh)
 	mux.HandleFunc("GET /health", a.handleHealth)
 
 	// Mount custom routes registered via RegisterRoute.
 	// Each route gets a lazy-run installed in ctx — a run is only created
 	// if the handler actually makes a model call. Wrap with logging
 	// middleware so panics surface in docker logs.
-	for key, entry := range a.routes {
-		mux.HandleFunc(key, routeLogging(a.wrapRoute(key, entry.handler)))
+	for key, route := range a.routes {
+		mux.HandleFunc(key, routeLogging(a.wrapRoute(key, route.Handler)))
 	}
 
 	server := &http.Server{
@@ -73,13 +76,13 @@ func (a *Agent) Serve() {
 
 func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	entry, ok := a.webhooks[name]
+	wh, ok := a.webhooks[name]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	timeout := entry.opts.Timeout
+	timeout := wh.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
@@ -93,6 +96,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	bridgeID := r.Header.Get("X-Bridge-ID")
 
 	run := newRun(a, runID, bridgeID, "", ctx)
+	run.callerAccess = AccessAdmin // webhook is a trusted server trigger
 	ctx = contextWithRun(ctx, run)
 	ew := newEventWriter(w)
 
@@ -101,7 +105,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			trace := string(debug.Stack())
 			errMsg := fmt.Sprintf("%v", rec)
 			ew.WriteError(fmt.Errorf("%s", errMsg))
-			run.complete(ctx, "error", errMsg, trace)
+			run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
 			return
 		}
 	}()
@@ -109,31 +113,31 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		ew.WriteError(err)
-		run.complete(ctx, "error", err.Error(), "")
+		run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
 		return
 	}
 
-	if err := entry.handler(ctx, data, ew); err != nil {
+	if err := wh.Handler(ctx, data, ew); err != nil {
 		status := "error"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"
 		}
 		ew.WriteError(err)
-		run.complete(ctx, status, err.Error(), "")
+		run.complete(ctx, status, err.Error(), ErrorKindAgent, "")
 		return
 	}
-	run.complete(ctx, "success", "", "")
+	run.complete(ctx, "success", "", "", "")
 }
 
 func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	entry, ok := a.crons[name]
+	cr, ok := a.crons[name]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	timeout := entry.opts.Timeout
+	timeout := cr.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
@@ -147,6 +151,7 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 	bridgeID := r.Header.Get("X-Bridge-ID")
 
 	run := newRun(a, runID, bridgeID, "", ctx)
+	run.callerAccess = AccessAdmin // cron is a trusted scheduled trigger
 	ctx = contextWithRun(ctx, run)
 	ew := newEventWriter(w)
 
@@ -155,21 +160,21 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 			trace := string(debug.Stack())
 			errMsg := fmt.Sprintf("%v", rec)
 			ew.WriteError(fmt.Errorf("%s", errMsg))
-			run.complete(ctx, "error", errMsg, trace)
+			run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
 			return
 		}
 	}()
 
-	if err := entry.handler(ctx, ew); err != nil {
+	if err := cr.Handler(ctx, ew); err != nil {
 		status := "error"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"
 		}
 		ew.WriteError(err)
-		run.complete(ctx, status, err.Error(), "")
+		run.complete(ctx, status, err.Error(), ErrorKindAgent, "")
 		return
 	}
-	run.complete(ctx, "success", "", "")
+	run.complete(ctx, "success", "", "", "")
 }
 
 // wrapRoute converts a RouteHandlerFunc into http.HandlerFunc, installing
@@ -180,7 +185,7 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 		ctx := contextWithLazyRun(r.Context(), lazy)
 		defer func() {
 			if run := lazy.materialized(); run != nil {
-				_ = run.complete(ctx, "success", "", "")
+				_ = run.complete(ctx, "success", "", "", "")
 			}
 		}()
 		handler(ctx, w, r)
@@ -228,6 +233,19 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 	return sw.ResponseWriter.Write(b)
 }
 
+// handleRefresh re-runs syncWithAirlock so the cached system prompt and MCP
+// schemas pick up server-side changes (typically OAuth completion for an MCP
+// server). Synchronous: the response only returns once sync has applied, so
+// callers (Airlock dispatcher) know the agent is in the new state on 200.
+func (a *Agent) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := a.syncWithAirlock(r.Context()); err != nil {
+		log.Printf("agentsdk: /refresh sync failed: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	type cronInfo struct {
 		Name     string `json:"name"`
@@ -241,8 +259,8 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(webhooks)
 
 	crons := make([]cronInfo, 0, len(a.crons))
-	for name, entry := range a.crons {
-		crons = append(crons, cronInfo{Name: name, Schedule: entry.schedule})
+	for name, cr := range a.crons {
+		crons = append(crons, cronInfo{Name: name, Schedule: cr.Schedule})
 	}
 
 	tools := make([]string, 0, len(a.tools))

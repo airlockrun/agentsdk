@@ -9,11 +9,11 @@ import (
 // recordAction appends an action to the run's action log.
 func (r *run) recordAction(actionType string, request any, response any, err error, duration time.Duration) {
 	a := Action{
-		Type:      actionType,
-		Timestamp: time.Now(),
-		Duration:  duration.Milliseconds(),
-		Request:   request,
-		Response:  response,
+		Type:       actionType,
+		Timestamp:  time.Now(),
+		DurationMs: duration.Milliseconds(),
+		Request:    request,
+		Response:   response,
 	}
 	if err != nil {
 		a.Error = err.Error()
@@ -25,12 +25,13 @@ func (r *run) recordAction(actionType string, request any, response any, err err
 
 // complete flushes the run's recorded actions to Airlock. Called only by
 // dispatchers (serve.go webhook/cron, prompt.go, route wrapper, background
-// flusher) — never by builder code.
-func (r *run) complete(ctx context.Context, status, errMsg, panicTrace string) error {
+// flusher) — never by builder code. errorKind is one of ErrorKindPlatform /
+// ErrorKindAgent / "" — required when status == "error", ignored otherwise.
+func (r *run) complete(ctx context.Context, status, errMsg, errorKind, panicTrace string) error {
 	if status == "success" && r.hasActionErrors() {
 		status = "tool_errors"
 	}
-	return r.completeWithCheckpoint(ctx, status, errMsg, panicTrace, nil)
+	return r.completeWithCheckpoint(ctx, status, errMsg, errorKind, panicTrace, nil)
 }
 
 func (r *run) hasActionErrors() bool {
@@ -44,19 +45,21 @@ func (r *run) hasActionErrors() bool {
 	return false
 }
 
-func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, panicTrace string, checkpoint json.RawMessage) error {
+func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, errorKind, panicTrace string, checkpoint json.RawMessage) error {
 	body := struct {
 		RunID      string          `json:"runId"`
 		Status     string          `json:"status"`
 		Error      string          `json:"error,omitempty"`
+		ErrorKind  string          `json:"errorKind,omitempty"`
 		PanicTrace string          `json:"panicTrace,omitempty"`
 		Actions    []Action        `json:"actions"`
-		Logs       []string        `json:"logs,omitempty"`
+		Logs       []LogEntry      `json:"logs,omitempty"`
 		Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 	}{
 		RunID:      r.id,
 		Status:     status,
 		Error:      errMsg,
+		ErrorKind:  errorKind,
 		PanicTrace: panicTrace,
 		Actions:    r.actions,
 		Logs:       r.logs,

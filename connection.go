@@ -15,9 +15,6 @@ type ConnectionHandle struct {
 	agent *Agent
 }
 
-// Slug returns the connection slug.
-func (h *ConnectionHandle) Slug() string { return h.slug }
-
 // Request sends an HTTP request through Airlock's credential-injecting proxy
 // and returns the raw response body. Body encoding is chosen from its type:
 //

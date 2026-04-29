@@ -28,24 +28,31 @@ type Agent struct {
 	httpClient  *http.Client
 	client      *airlockClient
 
-	db     *sql.DB
+	db     *AgentDB
 	dbOnce sync.Once
 
 	sensitiveSet map[string]struct{}
 	sensitiveM   sync.RWMutex
 
 	tools    map[string]*registeredTool
-	webhooks map[string]webhookEntry
-	crons    map[string]cronEntry
-	auths         map[string]ConnectionDef
-	mcps          map[string]MCPDef
-	routes        map[string]routeEntry
-	topics map[string]TopicDef
+	webhooks map[string]*Webhook
+	crons    map[string]*Cron
+	routes   map[string]*Route
+	auths    map[string]*Connection
+	mcps     map[string]*MCP
+	topics   map[string]*Topic
+	storages map[string]*Storage
 
-	extraPrompts []ExtraPromptSpec // access-scoped system prompt fragments; see AddExtraPrompt
-	modelSlots   []ModelSlotDef    // named model slots; see RegisterModel
+	extraPrompts []*ExtraPrompt   // access-scoped system prompt fragments; see AddExtraPrompt
+	modelSlots   []*ModelSlot     // named model slots; see RegisterModel
 
-	systemPrompt string // rendered by Airlock during sync
+	// Airlock-owned state: rendered/discovered server-side at sync time and
+	// pushed back via SyncResponse. /refresh re-runs sync to pick up changes
+	// (e.g. MCP OAuth completion) without restarting the container.
+	syncMu            sync.RWMutex
+	systemPrompt      string                     // rendered by Airlock
+	mcpSchemas        map[string][]MCPToolSchema // server slug → discovered tools
+	publicStorageBase string                     // base URL for AccessPublic zone reads (subdomain or host-level fallback)
 
 	// Deps holds application-level dependencies (connection handles, MCP handles, etc.).
 	// The builder defines their own typed struct and assigns it here.
@@ -114,12 +121,13 @@ func New(cfg Config) *Agent {
 		httpClient:   &http.Client{},
 		sensitiveSet: make(map[string]struct{}),
 		tools:        make(map[string]*registeredTool),
-		webhooks:     make(map[string]webhookEntry),
-		crons:        make(map[string]cronEntry),
-		auths:        make(map[string]ConnectionDef),
-		mcps:         make(map[string]MCPDef),
-		routes:        make(map[string]routeEntry),
-		topics: make(map[string]TopicDef),
+		webhooks: make(map[string]*Webhook),
+		crons:    make(map[string]*Cron),
+		routes:   make(map[string]*Route),
+		auths:    make(map[string]*Connection),
+		mcps:     make(map[string]*MCP),
+		topics:   make(map[string]*Topic),
+		storages: make(map[string]*Storage),
 		convVMConfig: DefaultConversationVMConfig(),
 	}
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
@@ -130,22 +138,57 @@ func New(cfg Config) *Agent {
 		logger = zap.NewNop()
 	}
 	a.logger = logger
+	// Framework-owned scratch zone — used by run_js output truncation and
+	// generated media. Builders may pass Slug:"tmp" to RegisterStorage; the
+	// register helper silently no-ops in that case so both sides share the
+	// same handle.
+	a.storages[reservedTmpSlug] = &Storage{
+		Slug:        reservedTmpSlug,
+		Read:        AccessUser,
+		Write:       AccessUser,
+		Description: "Ephemeral run output (auto-managed by the framework — truncated tool output, generated media).",
+	}
 	return a
 }
 
-// Log records a message scoped to the current handler invocation. Visible
-// in the Runs UI alongside the actions the handler performed.
-func (a *Agent) Log(ctx context.Context, msg string) {
+// Log records a message scoped to the current handler invocation at the
+// given level. Visible in the Runs UI alongside the actions the handler
+// performed; level controls how the UI surfaces it (color/filter).
+//
+// Use LogLevelInfo for normal progress, LogLevelWarn for recoverable
+// concerns, and LogLevelError for failures the handler chose not to
+// raise. The argument shape is uniform — pick a level rather than reaching
+// for severity-named methods.
+func (a *Agent) Log(ctx context.Context, level LogLevel, msg string) {
 	if r := a.runForCall(ctx); r != nil {
-		r.logAppend(msg)
+		r.logAppend(level, msg)
 		return
 	}
-	a.logger.Info(msg)
+	switch level {
+	case LogLevelError:
+		a.logger.Error(msg)
+	case LogLevelWarn:
+		a.logger.Warn(msg)
+	default:
+		a.logger.Info(msg)
+	}
 }
 
-// DB returns a lazily-initialized *sql.DB from AIRLOCK_DB_URL.
-// Returns nil if the env var is not set (DB is optional).
-func (a *Agent) DB() *sql.DB {
+// Logf is the printf-style sibling of Log — formats with fmt.Sprintf and
+// records the result. Use Log for plain strings, Logf when you'd otherwise
+// reach for fmt.Sprintf.
+func (a *Agent) Logf(ctx context.Context, level LogLevel, format string, args ...any) {
+	a.Log(ctx, level, fmt.Sprintf(format, args...))
+}
+
+// DB returns a lazily-initialized *AgentDB from AIRLOCK_DB_URL. Returns
+// nil if the env var is not set (DB is optional).
+//
+// AgentDB implements the same DBTX interface that sqlc-generated New()
+// takes, so `mygen.New(agent.DB())` works unchanged. The wrapper is the
+// extension point through which the framework can later record query
+// activity onto the run carried by ctx.
+func (a *Agent) DB() *AgentDB {
 	a.dbOnce.Do(func() {
 		dsn := os.Getenv("AIRLOCK_DB_URL")
 		if dsn == "" {
@@ -155,95 +198,17 @@ func (a *Agent) DB() *sql.DB {
 		if err != nil {
 			panic("agentsdk: failed to open database: " + err.Error())
 		}
-		a.db = db
+		a.db = &AgentDB{db: db, agent: a}
 	})
 	return a.db
 }
 
-// --- Storage methods (S3 via Airlock) ---
+// --- Conversation attachments ---
 
-// StoreFile stores a file in agent storage via Airlock.
-func (a *Agent) StoreFile(ctx context.Context, key string, data io.Reader, contentType string) error {
-	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+key, data)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", contentType)
-	resp, err := a.client.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("agentsdk: store file %s: %w", key, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: store file %s: status %d: %s", key, resp.StatusCode, string(b))
-	}
-	return nil
-}
-
-// LoadFile loads a file from agent storage via Airlock.
-func (a *Agent) LoadFile(ctx context.Context, key string) (io.ReadCloser, error) {
-	resp, err := a.client.do(ctx, "GET", "/api/agent/storage/"+key, nil)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		resp.Body.Close()
-		return nil, fmt.Errorf("agentsdk: load file %s: status %d", key, resp.StatusCode)
-	}
-	return resp.Body, nil
-}
-
-// DeleteFile deletes a file from agent storage via Airlock.
-func (a *Agent) DeleteFile(ctx context.Context, key string) error {
-	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage/"+key, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: delete file %s: status %d: %s", key, resp.StatusCode, string(b))
-	}
-	return nil
-}
-
-// FileInfo returns metadata for a file in agent storage.
-func (a *Agent) FileInfo(ctx context.Context, key string) (StoredFile, error) {
-	body := struct {
-		Key string `json:"key"`
-	}{key}
-	var info StoredFile
-	if err := a.client.doJSON(ctx, "POST", "/api/agent/storage/info", body, &info); err != nil {
-		return StoredFile{}, err
-	}
-	return info, nil
-}
-
-// CopyFile copies a file in agent storage via Airlock.
-func (a *Agent) CopyFile(ctx context.Context, srcKey, dstKey string) error {
-	body := struct {
-		Src string `json:"src"`
-		Dst string `json:"dst"`
-	}{srcKey, dstKey}
-	return a.client.doJSON(ctx, "POST", "/api/agent/storage/copy", body, nil)
-}
-
-// ListFiles lists files in agent storage matching a prefix.
-func (a *Agent) ListFiles(ctx context.Context, prefix string) ([]StoredFile, error) {
-	path := "/api/agent/storage"
-	if prefix != "" {
-		path += "?prefix=" + prefix
-	}
-	var files []StoredFile
-	if err := a.client.doJSON(ctx, "GET", path, nil, &files); err != nil {
-		return nil, err
-	}
-	return files, nil
-}
-
-// GetAttachment retrieves a conversation file attachment.
-func (a *Agent) GetAttachment(ctx context.Context, fileID string) (io.ReadCloser, error) {
+// Attachment retrieves a conversation file attachment by its opaque
+// fileID. Different surface from the zoned Storage handles — attachments
+// are content the user uploaded to a chat message and aren't builder-keyed.
+func (a *Agent) Attachment(ctx context.Context, fileID string) (io.ReadCloser, error) {
 	resp, err := a.client.do(ctx, "GET", "/api/agent/files/"+fileID, nil)
 	if err != nil {
 		return nil, err
@@ -253,6 +218,52 @@ func (a *Agent) GetAttachment(ctx context.Context, fileID string) (io.ReadCloser
 		return nil, fmt.Errorf("agentsdk: get attachment %s: status %d", fileID, resp.StatusCode)
 	}
 	return resp.Body, nil
+}
+
+// systemPromptSnapshot returns the cached system prompt last rendered by
+// Airlock. Mutex-guarded so concurrent /refresh writes don't race the read.
+// Lowercase deliberately — builders never need this; only solagent.go reads
+// it when assembling the Sol agent for a run.
+func (a *Agent) systemPromptSnapshot() string {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	return a.systemPrompt
+}
+
+// snapshotMCPSchemas returns a value-copy of the MCP schema map. Callers
+// (e.g. vm.go) work against the snapshot for the duration of a run so a
+// concurrent /refresh can't mutate the map mid-iteration.
+func (a *Agent) snapshotMCPSchemas() map[string][]MCPToolSchema {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	if a.mcpSchemas == nil {
+		return nil
+	}
+	out := make(map[string][]MCPToolSchema, len(a.mcpSchemas))
+	for k, v := range a.mcpSchemas {
+		out[k] = v
+	}
+	return out
+}
+
+// applySyncResponse atomically replaces the cached system prompt + MCP
+// schemas + public storage base URL with what Airlock returned from a
+// sync round-trip. Called both at startup (from syncWithAirlock in
+// sync.go) and on /refresh.
+func (a *Agent) applySyncResponse(resp SyncResponse) {
+	a.syncMu.Lock()
+	a.systemPrompt = resp.SystemPrompt
+	a.mcpSchemas = resp.MCPSchemas
+	a.publicStorageBase = resp.PublicStorageBase
+	a.syncMu.Unlock()
+}
+
+// publicStorageBaseSnapshot returns the cached public-storage base URL.
+// Mutex-guarded so concurrent /refresh writes don't race the read.
+func (a *Agent) publicStorageBaseSnapshot() string {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	return a.publicStorageBase
 }
 
 func requireEnv(key string) string {

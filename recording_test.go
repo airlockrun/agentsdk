@@ -10,10 +10,10 @@ func TestRunComplete(t *testing.T) {
 	a, mock := testAgent(t)
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	run.logAppend("test log")
+	run.logAppend(LogLevelInfo, "test log")
 	run.recordAction("proxy", "req", "resp", nil, 100)
 
-	err := run.complete(context.Background(), "success", "", "")
+	err := run.complete(context.Background(), "success", "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,10 +24,10 @@ func TestRunComplete(t *testing.T) {
 	}
 
 	var body struct {
-		RunID   string   `json:"runId"`
-		Status  string   `json:"status"`
-		Actions []Action `json:"actions"`
-		Logs    []string `json:"logs"`
+		RunID   string     `json:"runId"`
+		Status  string     `json:"status"`
+		Actions []Action   `json:"actions"`
+		Logs    []LogEntry `json:"logs"`
 	}
 	json.Unmarshal(reqs[0].Body, &body)
 	if body.RunID != "run-1" {
@@ -55,7 +55,7 @@ func TestRunComplete_SurvivesCancelledCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel: represents Airlock closing /prompt mid-stream
 
-	if err := run.complete(ctx, "error", "simulated", ""); err != nil {
+	if err := run.complete(ctx, "error", "simulated", ErrorKindAgent, ""); err != nil {
 		t.Fatalf("complete with cancelled ctx should still succeed, got: %v", err)
 	}
 

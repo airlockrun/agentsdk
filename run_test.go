@@ -28,17 +28,17 @@ func TestConnectionHandleProxy(t *testing.T) {
 	}
 }
 
-func TestAgentStoreAndLoadFile(t *testing.T) {
+func TestStorageZonePutAndGet(t *testing.T) {
 	a, _ := testAgent(t)
+	zone := a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
 
-	// Store
-	err := a.StoreFile(context.Background(), "test.txt", strings.NewReader("hello"), "text/plain")
-	if err != nil {
+	// Put
+	if err := zone.Put(context.Background(), "test.txt", strings.NewReader("hello"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Load
-	rc, err := a.LoadFile(context.Background(), "test.txt")
+	// Get
+	rc, err := zone.Get(context.Background(), "test.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestBackgroundRun(t *testing.T) {
 	a, mock := testAgent(t)
 
 	// agent.LLM with plain ctx triggers background run creation.
-	m := a.LLM(context.Background(), "summarize", ModelDef{})
+	m := a.LLM(context.Background(), "summarize", ModelOpts{})
 	events, err := m.Stream(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestBackgroundRun(t *testing.T) {
 
 	// A second call within the inactivity window reuses the same run —
 	// no additional run/create request.
-	m2 := a.LLM(context.Background(), "analyze", ModelDef{})
+	m2 := a.LLM(context.Background(), "analyze", ModelOpts{})
 	events2, _ := m2.Stream(context.Background(), nil)
 	for range events2 {
 	}

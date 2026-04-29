@@ -17,15 +17,16 @@ type run struct {
 	bridgeID            string
 	conversationID      string
 	supportedModalities []string
+	callerAccess        Access // resolved per-turn access level (default AccessAdmin for trusted triggers)
 	ctx                 context.Context
 	actions             []Action
-	logs                []string
+	logs                []LogEntry
 	vm                  *goja.Runtime
 	vmOnce              sync.Once
 	mu                  sync.Mutex // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
 	convVM              *ConversationVM
 	attachedKeys        map[string]struct{} // keys attached this run for idempotency
-	pendingLogs         []string            // logs from current executeJS call, drained after each execution
+	pendingLogs         []LogEntry          // logs from current executeJS call, drained after each execution
 	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result
 }
 
@@ -36,6 +37,10 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 		bridgeID:       bridgeID,
 		conversationID: conversationID,
 		ctx:            ctx,
+		// Default to admin — webhook/cron/route handlers and tests are
+		// trusted contexts. /prompt overrides this with the per-turn
+		// CallerAccess from PromptInput.
+		callerAccess: AccessAdmin,
 	}
 }
 
@@ -49,9 +54,9 @@ func (r *run) vmRuntime() *goja.Runtime {
 }
 
 // logAppend records a run-scoped log line. Flushed to Airlock on Complete.
-func (r *run) logAppend(msg string) {
+func (r *run) logAppend(level LogLevel, msg string) {
 	r.mu.Lock()
-	r.logs = append(r.logs, msg)
+	r.logs = append(r.logs, LogEntry{Level: level, Message: msg})
 	r.mu.Unlock()
 }
 

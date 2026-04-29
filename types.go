@@ -22,58 +22,90 @@ const defaultTimeout = 2 * time.Minute
 // agent.X(ctx, ...) call the body makes.
 type WebhookHandlerFunc func(ctx context.Context, data []byte, ew *EventWriter) error
 
-// WebhookOpts configures webhook verification and execution.
-type WebhookOpts struct {
-	Verify      string        `json:"verify"`      // "hmac", "token", "none" (default: "none")
-	Header      string        `json:"header"`      // e.g. "X-Hub-Signature-256" (for hmac mode)
-	Timeout     time.Duration `json:"-"`           // max execution time (default: 2 min)
-	Description string        `json:"description"` // human-readable description
-}
-
-// webhookEntry holds a registered webhook handler and its options.
-type webhookEntry struct {
-	handler WebhookHandlerFunc
-	opts    WebhookOpts
-}
-
 // CronHandlerFunc handles cron-triggered requests.
 type CronHandlerFunc func(ctx context.Context, ew *EventWriter) error
 
 // RouteHandlerFunc handles custom HTTP routes registered via RegisterRoute.
 type RouteHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request)
 
-// CronOpts configures cron execution.
-type CronOpts struct {
-	Timeout     time.Duration // max execution time (default: 2 min)
-	Description string        // human-readable description
+// --- Webhook ---
+
+// Webhook is the self-contained declaration registered via agent.RegisterWebhook.
+// Agents serve incoming HTTP at /webhook/{Path} on their container.
+type Webhook struct {
+	Path        string             // unique per agent
+	Handler     WebhookHandlerFunc // required
+	Verify      string             // "hmac" | "token" | "none" (default: "none")
+	Header      string             // header carrying the signature/token (hmac/token modes)
+	Timeout     time.Duration      // max execution time (default: 2 min)
+	Description string
+	Access      Access // who may invoke; default AccessUser
 }
 
-// cronEntry holds a registered cron handler and its options.
-type cronEntry struct {
-	schedule string
-	handler  CronHandlerFunc
-	opts     CronOpts
+// --- Cron ---
+
+// Cron is the self-contained declaration registered via agent.RegisterCron.
+// Crons fire by schedule, never by user action — no Access field.
+type Cron struct {
+	Name        string          // unique per agent
+	Schedule    string          // standard cron expression, e.g. "0 9 * * *"
+	Handler     CronHandlerFunc // required
+	Timeout     time.Duration   // max execution time (default: 2 min)
+	Description string
 }
 
-// --- Connection definitions ---
+// --- Route ---
 
-// ConnectionDef defines an outgoing service connection registered with Airlock.
+// Route is the self-contained declaration registered via agent.RegisterRoute.
+// Custom HTTP routes served by the agent and proxied by Airlock via subdomain
+// routing. The (Method, Path) pair must be unique per agent.
+type Route struct {
+	Method      string           // "GET", "POST", ...
+	Path        string           // e.g. "/spotify"
+	Handler     RouteHandlerFunc // required
+	Access      Access           // required: AccessAdmin, AccessUser, or AccessPublic
+	Description string
+}
+
+// --- Connection ---
+
+// Connection is the self-contained declaration registered via
+// agent.RegisterConnection — an outgoing service Airlock proxies for the agent
+// with credentials it manages.
+type Connection struct {
+	Slug              string         // unique per agent; binds as conn_{slug} in run_js
+	Name              string
+	Description       string
+	BaseURL           string
+	AuthMode          ConnectionAuth
+	AuthURL           string
+	TokenURL          string
+	Scopes            []string
+	AuthInjection     AuthInjection
+	SetupInstructions string
+	LLMHint           string // appended to the connection block in the system prompt
+	Access            Access // who may invoke conn_{slug}; default AccessUser
+}
+
+// ConnectionDef is the wire format used by PUT /api/agent/connections/{slug}.
+// Slug is sent in the URL, not the body.
 type ConnectionDef struct {
-	Name              string        `json:"name"`
-	Description       string        `json:"description"`
-	AuthMode          string        `json:"authMode"`
-	AuthURL           string        `json:"authUrl,omitempty"`
-	TokenURL          string        `json:"tokenUrl,omitempty"`
-	BaseURL           string        `json:"baseUrl,omitempty"`
-	Scopes            []string      `json:"scopes,omitempty"`
-	AuthInjection     AuthInjection `json:"authInjection"`
-	SetupInstructions string        `json:"setupInstructions,omitempty"`
-	LLMHint           string        `json:"llmHint,omitempty"` // injected into run_js tool description
+	Name              string         `json:"name"`
+	Description       string         `json:"description"`
+	BaseURL           string         `json:"baseUrl,omitempty"`
+	AuthMode          ConnectionAuth `json:"authMode"`
+	AuthURL           string         `json:"authUrl,omitempty"`
+	TokenURL          string         `json:"tokenUrl,omitempty"`
+	Scopes            []string       `json:"scopes,omitempty"`
+	AuthInjection     AuthInjection  `json:"authInjection"`
+	SetupInstructions string         `json:"setupInstructions,omitempty"`
+	LLMHint           string         `json:"llmHint,omitempty"`
+	Access            Access         `json:"access,omitempty"`
 }
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
 type AuthInjection struct {
-	Type string `json:"type"` // "bearer", "api_key_header", "bot_token_url_prefix"
+	Type string `json:"type"`           // "bearer", "api_key_header", "bot_token_url_prefix"
 	Name string `json:"name,omitempty"` // header name for api_key_header (default: "X-API-Key")
 }
 
@@ -81,12 +113,12 @@ type AuthInjection struct {
 
 // Action records a single operation performed during a Run.
 type Action struct {
-	Type      string    `json:"type"`
-	Timestamp time.Time `json:"timestamp"`
-	Duration  int64     `json:"durationMs"`
-	Request   any       `json:"request,omitempty"`
-	Response  any       `json:"response,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	Type       string    `json:"type"`
+	Timestamp  time.Time `json:"timestamp"`
+	DurationMs int64     `json:"durationMs"`
+	Request    any       `json:"request,omitempty"`
+	Response   any       `json:"response,omitempty"`
+	Error      string    `json:"error,omitempty"`
 }
 
 // --- Storage ---
@@ -144,6 +176,13 @@ type PromptInput struct {
 	// dispatch. The agent appends this to its sync-cached system prompt.
 	ExtraSystemPrompt string `json:"extraSystemPrompt,omitempty"`
 
+	// CallerAccess is the resolved per-(agent, user) access level for the
+	// triggering caller. agentsdk uses it to gate which conn_/mcp_/topic_/
+	// storage_ JS bindings (and registered tools) are exposed to the run.
+	// Airlock sets this from trigger.ResolveAgentAccess. For trusted server
+	// triggers (webhooks, crons) Airlock sends AccessAdmin.
+	CallerAccess Access `json:"callerAccess,omitempty"`
+
 	// ForceCompact tells the agent to skip the thinking loop and run a
 	// user-triggered compaction instead. Message is ignored when set. The
 	// agent loads conversation history, asks the model to summarize it,
@@ -160,12 +199,52 @@ type FileRef struct {
 	Size        int64  `json:"size"`
 }
 
-// --- Topics ---
+// --- Storage ---
 
-// TopicDef defines a topic that an agent can publish notifications to.
+// Storage is the self-contained declaration registered via agent.RegisterStorage.
+// Each zone owns an S3 prefix ("{Slug}/") and a JS binding (storage_{slug});
+// AccessInternal axes are reachable only from builder Go code and never
+// surface in run_js. The framework auto-registers a reserved zone "tmp"
+// at Read=Write=AccessUser; builder calls with Slug="tmp" silently no-op
+// (returning the framework handle) so frameworks and builders share the
+// same scratch area without conflict.
+//
+// Read and Write are independent — "Read: AccessUser, Write: AccessAdmin"
+// (admin-curated, user-readable) and "Read: AccessAdmin, Write: AccessUser"
+// (user-fed inbox processed only by admins) are both valid. The JS
+// `storage_{slug}` object exposes Get/Stat/List only when Read satisfies
+// the caller, and Put/Delete/Copy only when Write does.
+type Storage struct {
+	Slug        string
+	Read        Access // gates Get/Stat/List + the public route; default AccessUser
+	Write       Access // gates Put/Delete/Copy/CopyTo; default AccessUser
+	Description string // shown in the system prompt's storage zones section
+}
+
+// StorageDef is the wire format sent in SyncRequest.
+type StorageDef struct {
+	Slug        string `json:"slug"`
+	Read        Access `json:"read"`
+	Write       Access `json:"write"`
+	Description string `json:"description"`
+}
+
+// --- Topic ---
+
+// Topic is the self-contained declaration registered via agent.RegisterTopic.
+// Conversations subscribe to a topic via topic_{slug}.subscribe() in run_js;
+// builders publish via the *TopicHandle returned by RegisterTopic.
+type Topic struct {
+	Slug        string
+	Description string
+	Access      Access // who may subscribe via topic_{slug}.subscribe(); default AccessUser
+}
+
+// TopicDef is the wire format sent in SyncRequest.
 type TopicDef struct {
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
+	Access      Access `json:"access"`
 }
 
 // --- Display parts (printToUser / topic publish) ---
@@ -231,50 +310,75 @@ func ResolveDisplayPart(p *DisplayPart) {
 	}
 }
 
-// --- Route access levels ---
+// --- Access levels ---
 
-// Access defines who can reach an agent route.
+// Access defines who can reach a tool, connection, MCP, topic, or storage zone.
 type Access string
 
 const (
 	AccessAdmin  Access = "admin"
 	AccessUser   Access = "user"
 	AccessPublic Access = "public"
+	// AccessInternal is the strictest level — builder Go code only. Items
+	// registered with AccessInternal are never exposed to the JS runtime
+	// and are never reachable from external callers regardless of role.
+	// Use it when you have, say, a storage zone that holds builder-only
+	// caches you don't want the LLM to discover, mutate, or list.
+	AccessInternal Access = "internal"
 )
 
-// RouteOpts configures a custom HTTP route.
-type RouteOpts struct {
-	Access      Access // required: AccessAdmin, AccessUser, or AccessPublic
-	Description string // human-readable description (e.g. "Spotify control page")
+// --- Auth modes ---
+
+// ConnectionAuth enumerates the supported authentication strategies for an
+// outgoing service Connection.
+type ConnectionAuth string
+
+const (
+	ConnectionAuthOAuth ConnectionAuth = "oauth"
+	ConnectionAuthToken ConnectionAuth = "token"
+	ConnectionAuthNone  ConnectionAuth = "none"
+)
+
+// MCPAuth enumerates the supported authentication strategies for an MCP
+// server. MCPAuthOAuthDiscovery is MCP-specific (RFC 9728 server-advertised
+// OAuth endpoints) and not available on Connection.
+type MCPAuth string
+
+const (
+	MCPAuthOAuth          MCPAuth = "oauth"
+	MCPAuthOAuthDiscovery MCPAuth = "oauth_discovery"
+	MCPAuthToken          MCPAuth = "token"
+	MCPAuthNone           MCPAuth = "none"
+)
+
+// --- MCP ---
+
+// MCP is the self-contained declaration registered via agent.RegisterMCP.
+// Slug binds as mcp_{slug} in run_js; the builder uses the returned *MCPHandle
+// to call tools from Go.
+type MCP struct {
+	Slug     string // unique per agent; binds as mcp_{slug} in run_js
+	Name     string
+	URL      string
+	AuthMode MCPAuth
+	AuthURL  string
+	TokenURL string
+	Scopes   []string
+	Access   Access // who may invoke mcp_{slug}; default AccessUser
 }
 
-// routeEntry holds a registered custom HTTP route.
-type routeEntry struct {
-	handler RouteHandlerFunc
-	opts    RouteOpts
-}
-
-// --- MCP server definitions ---
-
-// MCPDef defines an MCP server dependency registered with Airlock.
+// MCPDef is the wire format used by PUT /api/agent/mcp-servers/{slug} and
+// (with Slug populated) by SyncRequest.MCPServers. Slug is sent in the URL
+// for the per-slug PUT and in the body for the bulk sync.
 type MCPDef struct {
+	Slug     string   `json:"slug,omitempty"`
 	Name     string   `json:"name"`
 	URL      string   `json:"url"`
-	AuthMode string   `json:"authMode"` // "oauth_discovery", "oauth", "token", "none"
+	AuthMode MCPAuth  `json:"authMode"`
 	AuthURL  string   `json:"authUrl,omitempty"`
 	TokenURL string   `json:"tokenUrl,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
-}
-
-// MCPServerSync is the MCP server definition sent in SyncRequest.
-type MCPServerSync struct {
-	Slug     string   `json:"slug"`
-	Name     string   `json:"name"`
-	URL      string   `json:"url"`
-	AuthMode string   `json:"authMode"`
-	AuthURL  string   `json:"authUrl,omitempty"`
-	TokenURL string   `json:"tokenUrl,omitempty"`
-	Scopes   []string `json:"scopes,omitempty"`
+	Access   Access   `json:"access,omitempty"`
 }
 
 // MCPToolSchema is a discovered MCP tool schema returned in SyncResponse.
@@ -287,10 +391,10 @@ type MCPToolSchema struct {
 
 // MCPAuthStatus reports auth state for an MCP server.
 type MCPAuthStatus struct {
-	Slug       string `json:"slug"`
-	AuthMode   string `json:"authMode"`
-	Authorized bool   `json:"authorized"`
-	AuthURL    string `json:"authUrl,omitempty"`
+	Slug       string  `json:"slug"`
+	AuthMode   MCPAuth `json:"authMode"`
+	Authorized bool    `json:"authorized"`
+	AuthURL    string  `json:"authUrl,omitempty"`
 }
 
 // MCPToolCallRequest is the body for POST /api/agent/mcp/{slug}/tools/call.
@@ -315,38 +419,48 @@ type MCPContent struct {
 
 // SyncRequest is the body for PUT /api/agent/sync.
 type SyncRequest struct {
-	Version      string            `json:"version"`
-	Description  string            `json:"description,omitempty"`
-	Tools        []SyncToolDef     `json:"tools,omitempty"`
-	Webhooks     []WebhookDef      `json:"webhooks"`
-	Crons        []CronEntry       `json:"crons"`
-	Routes       []RouteDef        `json:"routes,omitempty"`
-	Topics       []TopicDef        `json:"topics,omitempty"`
-	MCPServers   []MCPServerSync   `json:"mcpServers,omitempty"`
-	ExtraPrompts []ExtraPromptSpec `json:"extraPrompts,omitempty"`
-	ModelSlots   []ModelSlotDef    `json:"modelSlots,omitempty"`
+	Version      string           `json:"version"`
+	Description  string           `json:"description,omitempty"`
+	Tools        []ToolDef        `json:"tools,omitempty"`
+	Webhooks     []WebhookDef     `json:"webhooks"`
+	Crons        []CronDef        `json:"crons"`
+	Routes       []RouteDef       `json:"routes,omitempty"`
+	Topics       []TopicDef       `json:"topics,omitempty"`
+	MCPServers   []MCPDef         `json:"mcpServers,omitempty"`
+	Storages     []StorageDef     `json:"storages,omitempty"`
+	ExtraPrompts []ExtraPromptDef `json:"extraPrompts,omitempty"`
+	ModelSlots   []ModelSlotDef   `json:"modelSlots,omitempty"`
 }
 
-// ExtraPromptSpec is a single AddExtraPrompt fragment in the sync payload.
-// Access is empty when the fragment applies to every access level.
-type ExtraPromptSpec struct {
+// ExtraPrompt is the self-contained declaration passed to agent.AddExtraPrompt.
+// The Text fragment is appended to the system prompt for runs whose caller
+// access matches one of the listed Access levels. Empty Access slice means
+// "applies to every access level."
+type ExtraPrompt struct {
+	Text   string
+	Access []Access
+}
+
+// ExtraPromptDef is the wire format sent in SyncRequest.
+type ExtraPromptDef struct {
 	Text   string   `json:"text"`
 	Access []Access `json:"access,omitempty"`
 }
 
-// ModelSlotDef is a single named model slot declared via RegisterModel.
-// The agent uses `Slug` at runtime (e.g. `agent.LLM(ctx, slug, ...)`);
-// the admin binds a specific model to the slug in the Airlock UI. When no
-// model is bound, calls fall through to the agent's per-capability default
-// and then to the system default for that capability.
+// ModelSlotDef is the wire format sent in SyncRequest. The agent uses Slug
+// at runtime (e.g. `agent.LLM(ctx, slug, ...)`); the admin binds a specific
+// model to the slug in the Airlock UI. When no model is bound, calls fall
+// through to the agent's per-capability default and then to the system
+// default for that capability.
 type ModelSlotDef struct {
 	Slug        string `json:"slug"`
 	Capability  string `json:"capability"`
 	Description string `json:"description,omitempty"`
 }
 
-// ModelSlotOpts configures a RegisterModel call.
-type ModelSlotOpts struct {
+// ModelSlot is the self-contained declaration registered via agent.RegisterModel.
+type ModelSlot struct {
+	Slug        string
 	Capability  ModelCapability // required: CapText, CapVision, CapImage, CapSpeech, CapTranscription, CapEmbedding
 	Description string          // human-readable hint shown in the admin UI
 }
@@ -355,15 +469,27 @@ type ModelSlotOpts struct {
 type SyncResponse struct {
 	SystemPrompt  string          `json:"systemPrompt"`
 	MCPAuthStatus []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
+	// MCPSchemas carries discovered tool schemas per MCP server slug.
+	// Airlock populates these from its server-side discovery cache so the
+	// agent's VM can install one typed JS method per tool on each
+	// `mcp_{slug}` object — no per-run discovery round-trips.
+	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
+	// PublicStorageBase is the URL prefix at which storage zones are reachable
+	// on the agent's subdomain, ending without a trailing slash;
+	// *StorageHandle.URL appends "/{slug}/{key}". Of the form
+	// https://{slug}.{agentDomain}/__air/storage. The proxy enforces the
+	// zone's Read access at fetch time — public zones serve unauthenticated,
+	// user/admin zones require subdomain login (redirect-on-missing-cookie).
+	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
 
-// SyncToolDef describes a registered tool sent during sync. Carries the
-// JSON schemas for input and output so Airlock can render TypeScript
-// signatures in the system prompt and surface them in the UI.
-type SyncToolDef struct {
+// ToolDef describes a registered tool sent during sync. Carries the JSON
+// schemas for input and output so Airlock can render TypeScript signatures
+// in the system prompt and surface them in the UI.
+type ToolDef struct {
 	Name          string            `json:"name"`
 	Description   string            `json:"description"`
-	Access        string            `json:"access"` // "admin", "user", "public"
+	Access        Access            `json:"access"`
 	InputSchema   json.RawMessage   `json:"inputSchema,omitempty"`
 	OutputSchema  json.RawMessage   `json:"outputSchema,omitempty"`
 	InputExamples []json.RawMessage `json:"inputExamples,omitempty"`
@@ -373,7 +499,7 @@ type SyncToolDef struct {
 type RouteDef struct {
 	Path        string `json:"path"`
 	Method      string `json:"method"`
-	Access      string `json:"access"`
+	Access      Access `json:"access"`
 	Description string `json:"description,omitempty"`
 }
 
@@ -386,8 +512,8 @@ type WebhookDef struct {
 	Description string `json:"description,omitempty"`
 }
 
-// CronEntry is a cron job definition sent during sync.
-type CronEntry struct {
+// CronDef is a cron job definition sent during sync.
+type CronDef struct {
 	Name        string `json:"name"`
 	Schedule    string `json:"schedule"`
 	TimeoutMs   int64  `json:"timeoutMs"`
@@ -437,8 +563,8 @@ const (
 	CapTranscription ModelCapability = "transcription"    // speech-to-text
 )
 
-// ModelDef configures a model request. Used with run.LLM(), run.ImageModel(), etc.
-type ModelDef struct {
+// ModelOpts configures a model request. Used with agent.LLM(), agent.ImageModel(), etc.
+type ModelOpts struct {
 	// Capability selects the model sub-type. Only meaningful for run.LLM()
 	// (distinguishes text vs vision). For other methods, the method name
 	// determines the capability and this field is ignored.
@@ -474,14 +600,52 @@ type CreateRunResponse struct {
 	RunID string `json:"runId"`
 }
 
+// LogLevel categorizes a builder-emitted log line. UI can color/filter on it;
+// the wire format stores it explicitly so the level isn't lost in a flat string.
+type LogLevel string
+
+const (
+	LogLevelInfo  LogLevel = "info"
+	LogLevelWarn  LogLevel = "warn"
+	LogLevelError LogLevel = "error"
+)
+
+// LogEntry is one builder-emitted line: a level and a message. The wire
+// format used by /api/agent/run/complete; also the in-memory shape on the run.
+type LogEntry struct {
+	Level   LogLevel `json:"level"`
+	Message string   `json:"message"`
+}
+
+// Error kinds passed in RunCompleteRequest.ErrorKind. The agentsdk side
+// classifies structurally — by call-site, not by error string — so airlock
+// can avoid pattern-matching at all.
+const (
+	// ErrorKindPlatform: failure upstream of the agent's own code. LLM
+	// provider 4xx, sol/goai stream errors, request transport (body read).
+	// The agent's code couldn't have prevented or fixed this — the "Fix
+	// this error" workflow on the run page is hidden for these.
+	ErrorKindPlatform = "platform"
+
+	// ErrorKindAgent: failure from agent-defined code paths. Webhook/cron
+	// handlers returning err, panics in user code recovered by the SDK,
+	// post-LLM bookkeeping that hit something the agent owns. The Fix
+	// workflow targets exactly these.
+	ErrorKindAgent = "agent"
+)
+
 // RunCompleteRequest is the body for POST /api/agent/run/complete.
 type RunCompleteRequest struct {
-	RunID      string          `json:"runId"`
-	Status     string          `json:"status"`
-	Error      string          `json:"error,omitempty"`
+	RunID string `json:"runId"`
+	// Status is "success" | "error" | "suspended" | "timeout" | "tool_errors".
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+	// ErrorKind is set when Status == "error" and disambiguates platform
+	// vs agent failure for the UI. Empty otherwise.
+	ErrorKind  string          `json:"errorKind,omitempty"`
 	PanicTrace string          `json:"panicTrace,omitempty"`
 	Actions    json.RawMessage `json:"actions"`
-	Logs       []string        `json:"logs,omitempty"`
+	Logs       []LogEntry      `json:"logs,omitempty"`
 	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 }
 

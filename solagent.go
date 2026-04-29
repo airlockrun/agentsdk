@@ -18,15 +18,23 @@ func newSolAgent(a *Agent, run *run, supportedModalities []string) *agent.Agent 
 		Model:             "", // caller sets model or passes Model override
 		Tools:             buildSolTools(a, run, supportedModalities),
 		MaxSteps:          maxToolSteps,
-		SystemPrompt:      a.systemPrompt, // rendered by Airlock during sync
+		SystemPrompt:      a.systemPromptSnapshot(), // rendered by Airlock during sync; mutex-guarded so /refresh updates are visible
 		EnvironmentPrompt: buildEnvironmentPrompt(run),
 		HistoryPolicy: agent.HistoryPolicy{
-			// Keep attached images/files visible for 3 user turns, then
-			// replace with a detach note instructing the LLM to re-attach
-			// via attachToContext() if it needs the content back. Strip
-			// happens at history-load time; bytes stay in the session
-			// store but are swapped for text on every subsequent turn.
-			FilesRetainTurns: 3,
+			// FilesRetainTurns=0 keeps every attached image/file in history
+			// across the whole conversation. The earlier 3-turn window was
+			// cache-hostile: the strip boundary moved every turn, mutating
+			// older messages and invalidating provider prompt cache from the
+			// first changed message onward. Pairs with attachref's URL cache
+			// (attachment_url_cache table) which keeps the presigned URL
+			// string stable across turns — without that, presigned-URL
+			// rotation would invalidate cache at every image part anyway.
+			//
+			// Token cost grows linearly with image-heavy convos
+			// (~1500 tokens/image, ~1000 tokens/file estimated). Eventual
+			// fail-safes: attachref's per-request inline cap evicts oldest
+			// to placeholders, and sol's session.Prune trims on overflow.
+			FilesRetainTurns: 0,
 		},
 	}
 }
