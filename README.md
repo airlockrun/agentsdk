@@ -7,7 +7,7 @@ Cyborg agents are deterministic Go where it makes sense (HTTP routes, webhooks, 
 If you're not building on airlock, you don't need this — agentsdk is the glue, not the runtime.
 
 > [!WARNING]
-> **Alpha software.** agentsdk is in 0.x and breaking changes are still possible — but we treat them as a last resort, not a default. The public API is intended to stay relatively stable and backwards-compatible even pre-1.0, because **agents built against an older agentsdk version need to keep working against newer ones** at the airlock platform level. Internal/unexported code can change freely. See [the Stability section below](#stability).
+> **Alpha software.** Early-stage code with bugs we haven't found yet — please [open an issue](https://github.com/airlockrun/agentsdk/issues) for anything that breaks. Note: even though the SDK is alpha, the **public API surface is intended to stay relatively stable and backwards-compatible** even pre-1.0, because agents built against an older agentsdk version need to keep working against newer ones. Internal/unexported code can change freely. See [Stability](#stability) below.
 
 ## Install
 
