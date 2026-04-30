@@ -142,46 +142,66 @@ func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
 	return &ConnectionHandle{slug: c.Slug, agent: a}
 }
 
-// RegisterStorage declares an S3-backed storage zone scoped to an Access
-// level. Returns a *StorageHandle for builder Go code and exposes a
-// `storage_{slug}` JS object inside run_js (only to callers whose access
-// satisfies the zone's Access; AccessInternal zones are never exposed
-// to JS at all). Slug also becomes the S3 prefix.
+// RegisterDirectory declares an S3-backed directory at the given absolute
+// path, gated by independent Read / Write / List caps. Inside run_js the
+// flat verbs (readFile, writeFile, listDir, deleteFile, statFile,
+// readBytes, fileExists) check the calling run's access against the
+// directory's caps via CheckFileAccess.
 //
-// The framework reserves the slug "tmp" for its own scratch storage
-// (truncated tool output, generated media). Builders may pass
-// Slug:"tmp" — the call returns a working handle to the framework's
-// tmp zone but the supplied Access / Description are silently ignored.
+// Builder Go code reads and writes the directory through the trusted
+// file API (agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir /
+// DeleteFile) — these methods do NOT call CheckFileAccess, on the
+// principle that builder code that constructs paths itself is trusted.
+// When a builder tool accepts a path from the LLM (typed as `string` on
+// an Input struct), the builder must call agent.CheckFileAccess
+// explicitly before passing the path anywhere.
 //
-//	uploads := agent.RegisterStorage(&agentsdk.Storage{
-//	    Slug: "uploads", Access: agentsdk.AccessUser, Description: "User uploads",
+// The framework reserves "/tmp" for its own scratch (truncated tool
+// output, generated media) at Read=Write=List=AccessUser. Builders may
+// call RegisterDirectory("/tmp", ...) to override the description; the
+// access caps are kept at the framework's defaults.
+//
+//	agent.RegisterDirectory("/uploads", agentsdk.DirectoryOpts{
+//	    Read: agentsdk.AccessUser, Write: agentsdk.AccessUser, List: agentsdk.AccessUser,
+//	    Description: "User uploads",
 //	})
-//	err := uploads.Put(ctx, "doc.pdf", reader, "application/pdf")
-func (a *Agent) RegisterStorage(s *Storage) *StorageHandle {
-	if s == nil {
-		panic("agentsdk: RegisterStorage: nil *Storage")
+//	err := agent.WriteFile(ctx, "/uploads/doc.pdf", reader, "application/pdf")
+func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
+	canon, err := normalizePath(path)
+	if err != nil {
+		panic("agentsdk: RegisterDirectory: " + err.Error())
 	}
-	if s.Slug == "" {
-		panic("agentsdk: RegisterStorage: Slug is required")
+	if opts.Read == "" {
+		opts.Read = AccessUser
 	}
-	if existing, exists := a.storages[s.Slug]; exists {
-		// Reserved framework zone — return the existing handle without
-		// overwriting access / description. This lets builder code freely
-		// reference `agent.RegisterStorage(&Storage{Slug: "tmp"})`
-		// without colliding with the framework's auto-registration.
-		if s.Slug == reservedTmpSlug {
-			return &StorageHandle{slug: existing.Slug, read: existing.Read, write: existing.Write, agent: a}
+	if opts.Write == "" {
+		opts.Write = AccessUser
+	}
+	if opts.List == "" {
+		opts.List = AccessUser
+	}
+	for _, d := range a.directories {
+		if d.Path == canon {
+			// Reserved framework directory — keep the framework's caps,
+			// but allow the builder's description through. Anywhere else
+			// duplicate registrations panic so builders find conflicts
+			// at startup.
+			if canon == reservedTmpPath {
+				if opts.Description != "" {
+					d.Description = opts.Description
+				}
+				return
+			}
+			panic("agentsdk: duplicate RegisterDirectory: " + canon)
 		}
-		panic("agentsdk: duplicate RegisterStorage: " + s.Slug)
 	}
-	if s.Read == "" {
-		s.Read = AccessUser
-	}
-	if s.Write == "" {
-		s.Write = AccessUser
-	}
-	a.storages[s.Slug] = s
-	return &StorageHandle{slug: s.Slug, read: s.Read, write: s.Write, agent: a}
+	a.directories = append(a.directories, &Directory{
+		Path:        canon,
+		Read:        opts.Read,
+		Write:       opts.Write,
+		List:        opts.List,
+		Description: opts.Description,
+	})
 }
 
 // RegisterMCP registers a remote MCP server dependency and returns a handle

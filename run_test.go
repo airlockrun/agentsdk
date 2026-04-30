@@ -28,17 +28,15 @@ func TestConnectionHandleProxy(t *testing.T) {
 	}
 }
 
-func TestStorageZonePutAndGet(t *testing.T) {
+func TestDirectoryWriteAndRead(t *testing.T) {
 	a, _ := testAgent(t)
-	zone := a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
+	a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 
-	// Put
-	if err := zone.Put(context.Background(), "test.txt", strings.NewReader("hello"), "text/plain"); err != nil {
+	if _, err := a.WriteFile(context.Background(), "/uploads/test.txt", strings.NewReader("hello"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Get
-	rc, err := zone.Get(context.Background(), "test.txt")
+	rc, err := a.OpenFile(context.Background(), "/uploads/test.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

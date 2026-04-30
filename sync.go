@@ -137,13 +137,14 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		})
 	}
 
-	storages := make([]StorageDef, 0, len(a.storages))
-	for _, s := range a.storages {
-		storages = append(storages, StorageDef{
-			Slug:        s.Slug,
-			Read:        s.Read,
-			Write:       s.Write,
-			Description: s.Description,
+	directories := make([]DirectoryDef, 0, len(a.directories))
+	for _, d := range a.directories {
+		directories = append(directories, DirectoryDef{
+			Path:        d.Path,
+			Read:        d.Read,
+			Write:       d.Write,
+			List:        d.List,
+			Description: d.Description,
 		})
 	}
 
@@ -165,7 +166,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		Routes:       routes,
 		Topics:       topics,
 		MCPServers:   mcpServers,
-		Storages:     storages,
+		Directories:  directories,
 		ExtraPrompts: extraPrompts,
 		ModelSlots:   modelSlots,
 	}

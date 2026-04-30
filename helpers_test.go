@@ -23,9 +23,13 @@ func testAgent(t *testing.T) (*Agent, *MockAirlock) {
 		mcps:         make(map[string]*MCP),
 		topics:       make(map[string]*Topic),
 		routes:       make(map[string]*Route),
-		storages:     make(map[string]*Storage),
 		convVMConfig: DefaultConversationVMConfig(),
 	}
+	// Auto-register the framework's /tmp directory the same way New does,
+	// so tests have somewhere to read/write without setting it up by hand.
+	a.directories = append(a.directories, &Directory{
+		Path: reservedTmpPath, Read: AccessUser, Write: AccessUser, List: AccessUser,
+	})
 	a.client = newAirlockClient(url, "test-token", a.httpClient)
 	a.AddSensitive("test-token")
 	return a, mock

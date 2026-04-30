@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -34,14 +33,14 @@ type Agent struct {
 	sensitiveSet map[string]struct{}
 	sensitiveM   sync.RWMutex
 
-	tools    map[string]*registeredTool
-	webhooks map[string]*Webhook
-	crons    map[string]*Cron
-	routes   map[string]*Route
-	auths    map[string]*Connection
-	mcps     map[string]*MCP
-	topics   map[string]*Topic
-	storages map[string]*Storage
+	tools       map[string]*registeredTool
+	webhooks    map[string]*Webhook
+	crons       map[string]*Cron
+	routes      map[string]*Route
+	auths       map[string]*Connection
+	mcps        map[string]*MCP
+	topics      map[string]*Topic
+	directories []*Directory // registration order; longest-prefix wins at lookup
 
 	extraPrompts []*ExtraPrompt   // access-scoped system prompt fragments; see AddExtraPrompt
 	modelSlots   []*ModelSlot     // named model slots; see RegisterModel
@@ -121,13 +120,12 @@ func New(cfg Config) *Agent {
 		httpClient:   &http.Client{},
 		sensitiveSet: make(map[string]struct{}),
 		tools:        make(map[string]*registeredTool),
-		webhooks: make(map[string]*Webhook),
-		crons:    make(map[string]*Cron),
-		routes:   make(map[string]*Route),
-		auths:    make(map[string]*Connection),
-		mcps:     make(map[string]*MCP),
-		topics:   make(map[string]*Topic),
-		storages: make(map[string]*Storage),
+		webhooks:     make(map[string]*Webhook),
+		crons:        make(map[string]*Cron),
+		routes:       make(map[string]*Route),
+		auths:        make(map[string]*Connection),
+		mcps:         make(map[string]*MCP),
+		topics:       make(map[string]*Topic),
 		convVMConfig: DefaultConversationVMConfig(),
 	}
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
@@ -138,16 +136,17 @@ func New(cfg Config) *Agent {
 		logger = zap.NewNop()
 	}
 	a.logger = logger
-	// Framework-owned scratch zone — used by run_js output truncation and
-	// generated media. Builders may pass Slug:"tmp" to RegisterStorage; the
-	// register helper silently no-ops in that case so both sides share the
-	// same handle.
-	a.storages[reservedTmpSlug] = &Storage{
-		Slug:        reservedTmpSlug,
+	// Framework-owned scratch directory — used by run_js output truncation
+	// and generated media. Builders may RegisterDirectory("/tmp", ...); the
+	// register helper preserves the framework's caps (the description may
+	// still be supplied) so both sides share the same directory.
+	a.directories = append(a.directories, &Directory{
+		Path:        reservedTmpPath,
 		Read:        AccessUser,
 		Write:       AccessUser,
-		Description: "Ephemeral run output (auto-managed by the framework — truncated tool output, generated media).",
-	}
+		List:        AccessUser,
+		Description: "Ephemeral scratch (auto-managed by the framework — truncated tool output, generated media).",
+	})
 	return a
 }
 
@@ -201,23 +200,6 @@ func (a *Agent) DB() *AgentDB {
 		a.db = &AgentDB{db: db, agent: a}
 	})
 	return a.db
-}
-
-// --- Conversation attachments ---
-
-// Attachment retrieves a conversation file attachment by its opaque
-// fileID. Different surface from the zoned Storage handles — attachments
-// are content the user uploaded to a chat message and aren't builder-keyed.
-func (a *Agent) Attachment(ctx context.Context, fileID string) (io.ReadCloser, error) {
-	resp, err := a.client.do(ctx, "GET", "/api/agent/files/"+fileID, nil)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		resp.Body.Close()
-		return nil, fmt.Errorf("agentsdk: get attachment %s: status %d", fileID, resp.StatusCode)
-	}
-	return resp.Body, nil
 }
 
 // systemPromptSnapshot returns the cached system prompt last rendered by

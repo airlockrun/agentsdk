@@ -44,6 +44,18 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 	}
 }
 
+// checkedCtx returns r.ctx with this run's caller attached. VM bindings
+// that reach untrusted territory (storage paths, etc.) call this and
+// then pass the resulting ctx to agent.CheckFileAccess. Builder Go code
+// that calls the trusted file API directly (agent.OpenFile/ReadFile/...)
+// does not need this — those methods skip the access check.
+func (r *run) checkedCtx() context.Context {
+	return WithCaller(r.ctx, Caller{
+		Access: r.callerAccess,
+		RunID:  r.id,
+	})
+}
+
 // vmRuntime lazily builds the per-run goja VM. Called only from inside
 // run_js tool execution — builder code never touches it.
 func (r *run) vmRuntime() *goja.Runtime {

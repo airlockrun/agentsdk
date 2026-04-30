@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	goai "github.com/airlockrun/goai"
@@ -70,15 +69,9 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		if len(input.Files) > 0 {
 			var fileInfo string
 			for _, f := range input.Files {
-				zone, key, ok := strings.Cut(f.ID, "/")
-				if !ok {
-					// Defensive: airlock currently always emits "{zone}/{key}".
-					// If a future caller passes a bare key, surface it as-is.
-					zone, key = reservedTmpSlug, f.ID
-				}
-				fileInfo += fmt.Sprintf("- %s (%s, %d bytes) — zone: %q, key: %q\n", f.Filename, f.ContentType, f.Size, zone, key)
+				fileInfo += fmt.Sprintf("- %s (%s, %d bytes) — path: %q\n", f.Filename, f.ContentType, f.Size, f.Path)
 			}
-			note := fmt.Sprintf("Attached files:\n%sUse storage_{zone}.get(key) in run_js to read text contents, or attachToContext({zone, key}) to load images/files into your visual context for the next turn.", fileInfo)
+			note := fmt.Sprintf("Attached files:\n%sUse readFile(path) in run_js to read text contents, readBytes(path) for binary, or attachToContext(path) to load images/files into your visual context for the next turn.", fileInfo)
 			prompt += "\n\n[" + note + "]"
 		}
 

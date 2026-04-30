@@ -85,28 +85,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("storage_X.copy calls backend", func(t *testing.T) {
+	t.Run("deleteFile calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
+		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `storage_uploads.copy("a.txt", "b.txt")`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		reqs := mock.RequestsByPath("/api/agent/storage/copy")
-		if len(reqs) != 1 {
-			t.Fatalf("expected 1 copy request, got %d", len(reqs))
-		}
-		if reqs[0].Method != "POST" {
-			t.Fatalf("expected POST, got %s", reqs[0].Method)
-		}
-	})
-
-	t.Run("storage_X.delete calls backend", func(t *testing.T) {
-		a, mock := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
-		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `storage_uploads.delete("a.txt")`)
+		_, err := executeJS(run.vmRuntime(), `deleteFile("/uploads/a.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,11 +102,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("storage_X.list returns array", func(t *testing.T) {
+	t.Run("listDir returns array", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
+		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `JSON.stringify(storage_uploads.list())`)
+		result, err := executeJS(run.vmRuntime(), `JSON.stringify(listDir("/uploads/"))`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,30 +115,91 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("storage_X.put calls backend with zone prefix", func(t *testing.T) {
+	t.Run("writeFile calls backend with absolute path", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
+		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `storage_uploads.put("test.txt", "hello", "text/plain")`)
+		_, err := executeJS(run.vmRuntime(), `writeFile("/uploads/test.txt", "hello", "text/plain")`)
 		if err != nil {
 			t.Fatal(err)
 		}
 		reqs := mock.RequestsByPath("/api/agent/storage/uploads/test.txt")
 		if len(reqs) != 1 || reqs[0].Method != "PUT" {
-			t.Fatalf("expected PUT to storage with zone prefix, got %v", reqs)
+			t.Fatalf("expected PUT to storage at /uploads/test.txt, got %v", reqs)
 		}
 	})
 
-	t.Run("storage_X.get calls backend with zone prefix", func(t *testing.T) {
+	t.Run("readFile calls backend with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
+		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `storage_uploads.get("test.txt")`)
+		result, err := executeJS(run.vmRuntime(), `readFile("/uploads/test.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if result != "mock-file-content" {
 			t.Fatalf("expected mock-file-content, got %s", result)
+		}
+	})
+
+	t.Run("readBytes returns a usable Uint8Array", func(t *testing.T) {
+		// Regression: readBytes used to return a raw ArrayBuffer, which
+		// isn't iterable and has no .length, so `Array.from(b.slice(...))`
+		// silently produced []. The fix wraps in Uint8Array via the
+		// global TypedArray constructor — invoke as a constructor (not
+		// a plain function), or you get
+		// "TypeError: Constructor TypedArray requires 'new'".
+		a, _ := testAgent(t)
+		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		run := newRun(a, "run-1", "", "", context.Background())
+		// Mock backend returns the literal string "mock-file-content"
+		// (17 bytes). Verify .length is correct, indexed access works,
+		// .slice returns a typed array with the right bytes, and
+		// Array.from materializes a real number array.
+		result, err := executeJS(run.vmRuntime(), `
+			var b = readBytes("/uploads/test.txt");
+			JSON.stringify({
+				ctor: b.constructor.name,
+				length: b.length,
+				first: b[0],
+				slice: Array.from(b.slice(0, 4)),
+				full: Array.from(b),
+			});
+		`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var parsed struct {
+			Ctor   string `json:"ctor"`
+			Length int    `json:"length"`
+			First  int    `json:"first"`
+			Slice  []int  `json:"slice"`
+			Full   []int  `json:"full"`
+		}
+		if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+			t.Fatalf("decode: %v\nraw: %s", err, result)
+		}
+		if parsed.Ctor != "Uint8Array" {
+			t.Errorf("constructor.name = %q, want Uint8Array", parsed.Ctor)
+		}
+		const expected = "mock-file-content"
+		if parsed.Length != len(expected) {
+			t.Errorf("length = %d, want %d", parsed.Length, len(expected))
+		}
+		if parsed.First != int(expected[0]) {
+			t.Errorf("first byte = %d, want %d (%q)", parsed.First, expected[0], expected[0])
+		}
+		if len(parsed.Slice) != 4 {
+			t.Errorf("slice length = %d, want 4", len(parsed.Slice))
+		}
+		if len(parsed.Full) != len(expected) {
+			t.Errorf("Array.from(bytes) length = %d, want %d", len(parsed.Full), len(expected))
+		}
+		for i, b := range parsed.Full {
+			if b != int(expected[i]) {
+				t.Errorf("byte[%d] = %d, want %d", i, b, expected[i])
+				break
+			}
 		}
 	})
 
@@ -185,16 +229,18 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("storage_X.stat returns metadata with relative key", func(t *testing.T) {
+	t.Run("statFile returns FileInfo with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterStorage(&Storage{Slug: "uploads", Read: AccessUser, Write: AccessUser})
+		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `var fi = storage_uploads.stat("test.txt"); fi.key + ":" + fi.size`)
+		result, err := executeJS(run.vmRuntime(), `var fi = statFile("/uploads/test.txt"); fi.path + ":" + fi.size`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result != "test.txt:42" {
-			t.Fatalf("expected test.txt:42 (zone prefix stripped), got %s", result)
+		// Mock backend returns "/tmp/test.txt" — path comes from the
+		// server response, the test only verifies fields are surfaced.
+		if result != "/tmp/test.txt:42" {
+			t.Fatalf("expected mock path:size, got %s", result)
 		}
 	})
 }
