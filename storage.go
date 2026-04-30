@@ -1,261 +1,372 @@
 package agentsdk
 
 import (
+	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"strings"
-
-	"go.uber.org/zap"
+	"time"
 )
 
-// StorageRef is a typed reference to a file in a registered Storage zone.
-// The fields are unexported so refs can only come from a *StorageHandle —
-// either via handle.Ref(key), or by JSON-unmarshaling a wire-format
-// {"zone": "...", "key": "..."} that the framework hands back (e.g.
-// httpRequest savedTo, generateImage result, builder tool returns).
-//
-// Use it as the field type on builder Out structs so the LLM sees an
-// unambiguous {zone, key} shape:
-//
-//	type FetchOut struct {
-//	    File agentsdk.StorageRef `json:"file"`
-//	}
-//
-// The corresponding JS binding is `storage_<zone>` — JS code reads the
-// referenced file with storage_X.get(ref) (the binding validates the ref's
-// zone matches its own slug).
-type StorageRef struct {
-	zone string
-	key  string
+// reservedTmpPath is the framework-owned scratch directory used by run_js
+// output truncation and media generation. Builders may RegisterDirectory
+// at this path — the register helper preserves the framework caps but
+// allows a custom Description.
+const reservedTmpPath = "/tmp"
+
+// ErrNotFound is returned by CheckFileAccess and the storage methods for
+// both "directory not registered" and "caller does not have access" — the
+// two cases are deliberately indistinguishable at the public surface so
+// path-guessing leaks no information about what exists.
+var ErrNotFound = errors.New("agentsdk: file not found")
+
+// ErrInvalidPath is returned for paths that fail normalization (missing
+// leading '/', empty segments, '..' segments, etc.).
+var ErrInvalidPath = errors.New("agentsdk: invalid path")
+
+// --- Caller plumbing ---
+
+// Caller carries the access level of whoever triggered the current
+// dispatch. Framework dispatch sites (tool Execute, VM bindings, cron,
+// webhook, route, subdomain proxy) inject one onto ctx via WithCaller.
+// Builder Go code that constructs paths itself does NOT need to set a
+// caller — it calls the trusted file API directly (OpenFile/ReadFile/
+// WriteFile/StatFile/ListDir/DeleteFile) which bypasses CheckFileAccess.
+type Caller struct {
+	Access Access
+	UserID string // optional, for audit
+	RunID  string // optional, for audit
 }
 
-// Zone returns the zone slug.
-func (r StorageRef) Zone() string { return r.zone }
+type callerCtxKey struct{}
 
-// Key returns the file key relative to the zone.
-func (r StorageRef) Key() string { return r.key }
+// WithCaller attaches a Caller to ctx. Used by the framework when
+// dispatching into untrusted territory (LLM-driven VM, public HTTP).
+func WithCaller(ctx context.Context, c Caller) context.Context {
+	return context.WithValue(ctx, callerCtxKey{}, c)
+}
 
-// String returns the composed "zone/key" form, useful for logging.
-func (r StorageRef) String() string {
-	if r.zone == "" {
-		return ""
+// CallerFrom returns the Caller attached to ctx, defaulting to
+// AccessPublic when none is set. This is the fail-closed default:
+// forgetting to tag ctx denies access to anything user/admin/internal.
+// AccessInternal is intentionally unreachable here — internal directories
+// are reserved for builder Go code, which doesn't pass through this gate.
+func CallerFrom(ctx context.Context) Caller {
+	if v, ok := ctx.Value(callerCtxKey{}).(Caller); ok {
+		if v.Access == "" {
+			v.Access = AccessPublic
+		}
+		return v
 	}
-	return r.zone + "/" + r.key
+	return Caller{Access: AccessPublic}
 }
 
-// MarshalJSON encodes the ref as {"zone":"...","key":"..."}.
-func (r StorageRef) MarshalJSON() ([]byte, error) {
-	return json.Marshal(storageRefWire{Zone: r.zone, Key: r.key})
+// --- Path normalization ---
+
+// normalizePath enforces:
+//   - leading '/'
+//   - no '..' segment
+//   - no empty segment ('//')
+//   - no trailing '/' on the canonical form (root '/' is rejected)
+//
+// Returns the canonical path or ErrInvalidPath.
+func normalizePath(p string) (string, error) {
+	if p == "" || p[0] != '/' {
+		return "", fmt.Errorf("%w: must be absolute (start with '/')", ErrInvalidPath)
+	}
+	// Strip trailing slash unless it's just '/'.
+	if len(p) > 1 && p[len(p)-1] == '/' {
+		p = p[:len(p)-1]
+	}
+	if p == "/" {
+		return "", fmt.Errorf("%w: root '/' is not a valid file path", ErrInvalidPath)
+	}
+	// Walk segments, reject empty (//), '.', '..'.
+	for _, seg := range strings.Split(p[1:], "/") {
+		if seg == "" {
+			return "", fmt.Errorf("%w: empty segment ('//' in path)", ErrInvalidPath)
+		}
+		if seg == "." || seg == ".." {
+			return "", fmt.Errorf("%w: '%s' segments are not allowed", ErrInvalidPath, seg)
+		}
+	}
+	return p, nil
 }
 
-// UnmarshalJSON decodes {"zone":"...","key":"..."}. The framework trusts
-// the input here — validation happens at use time (when a JS binding
-// receives a ref, or when builder code looks the zone up).
-func (r *StorageRef) UnmarshalJSON(data []byte) error {
-	var w storageRefWire
-	if err := json.Unmarshal(data, &w); err != nil {
+// pathHasPrefix reports whether `p` lies under directory `dir`. Both must
+// be canonical (no trailing slash). A directory is its own prefix only at
+// directory granularity: dir="/reports" matches p="/reports/x" but NOT
+// p="/reportsx" — the segment boundary matters.
+func pathHasPrefix(p, dir string) bool {
+	if p == dir {
+		return true
+	}
+	if !strings.HasPrefix(p, dir) {
+		return false
+	}
+	return p[len(dir)] == '/'
+}
+
+// --- Directory lookup ---
+
+// lookupDirectory finds the registered directory whose path is the
+// longest prefix of `p` (post-normalization). Returns nil if no
+// directory covers `p`. Caller must have already normalized `p`.
+func (a *Agent) lookupDirectory(p string) *Directory {
+	var best *Directory
+	for _, d := range a.directories {
+		if !pathHasPrefix(p, d.Path) {
+			continue
+		}
+		if best == nil || len(d.Path) > len(best.Path) {
+			best = d
+		}
+	}
+	return best
+}
+
+// dirCap returns the directory's access cap for `op`. Delete folds into
+// Write.
+func dirCap(d *Directory, op FileOp) Access {
+	switch op {
+	case OpRead:
+		return d.Read
+	case OpWrite:
+		return d.Write
+	case OpList:
+		return d.List
+	}
+	return AccessInternal
+}
+
+// --- Public access gate ---
+
+// CheckFileAccess is the single gate for paths that arrived from
+// untrusted territory: VM run_js code, HTTP requests, tool inputs from
+// the LLM. Builder Go code that constructs paths itself bypasses this
+// check by calling OpenFile/ReadFile/WriteFile/etc. directly.
+//
+// Returns ErrInvalidPath for malformed paths, ErrNotFound for everything
+// else (denied OR no covering directory). The two latter cases are
+// indistinguishable on purpose so path-guessing reveals nothing.
+func (a *Agent) CheckFileAccess(ctx context.Context, path string, op FileOp) error {
+	canon, err := normalizePath(path)
+	if err != nil {
 		return err
 	}
-	r.zone = w.Zone
-	r.key = w.Key
+	d := a.lookupDirectory(canon)
+	if d == nil {
+		return ErrNotFound
+	}
+	cap := dirCap(d, op)
+	caller := CallerFrom(ctx)
+	if !accessSatisfies(caller.Access, cap) {
+		return ErrNotFound
+	}
 	return nil
 }
 
-type storageRefWire struct {
-	Zone string `json:"zone"`
-	Key  string `json:"key"`
-}
+// --- Trusted Go file API ---
 
-// reservedTmpSlug is the framework-owned scratch zone used by run_js
-// output truncation and media generation. Builders may register a
-// Storage with this slug — RegisterStorage silently accepts it but
-// keeps the framework's Access/Description; both sides share the same
-// handle.
-const reservedTmpSlug = "tmp"
-
-// StorageHandle is a compile-time binding to a registered Storage zone.
-// All keys passed to its methods are relative to the zone's prefix; the
-// handle prepends "{slug}/" before talking to Airlock. List returns keys
-// stripped of the prefix as well, so callers see relative paths.
-type StorageHandle struct {
-	slug  string
-	read  Access // who may invoke Get/Stat/List from JS (and the public route)
-	write Access // who may invoke Put/Delete/Copy from JS
-	agent *Agent
-}
-
-// Slug returns the zone's slug. Useful when constructing public URLs
-// (storage.airlock.example.com/storage/{agentID}/{slug}/{key}).
-func (h *StorageHandle) Slug() string { return h.slug }
-
-// Ref returns a typed StorageRef for `key` in this zone. This is the only
-// public way to construct a StorageRef — builder code that returns file
-// references from tool Out structs goes through here, so a ref can never
-// claim a zone that the handle doesn't represent.
-func (h *StorageHandle) Ref(key string) StorageRef {
-	return StorageRef{zone: h.slug, key: key}
-}
-
-// ReadAccess returns the zone's required level for reads.
-func (h *StorageHandle) ReadAccess() Access { return h.read }
-
-// WriteAccess returns the zone's required level for writes.
-func (h *StorageHandle) WriteAccess() Access { return h.write }
-
-func (h *StorageHandle) zoneKey(rel string) string {
-	rel = strings.TrimLeft(rel, "/")
-	return h.slug + "/" + rel
-}
-
-// Put writes a file at `key` (relative to this zone) with the given
-// Content-Type. data is fully read; large bodies are streamed.
-func (h *StorageHandle) Put(ctx context.Context, key string, data io.Reader, contentType string) error {
-	return h.agent.storagePut(ctx, h.zoneKey(key), data, contentType)
-}
-
-// Get returns a reader over the file at `key` (relative to this zone).
-// The caller must Close the returned ReadCloser.
-func (h *StorageHandle) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	return h.agent.storageGet(ctx, h.zoneKey(key))
-}
-
-// Delete removes the file at `key` (relative to this zone). Idempotent —
-// missing files do not error.
-func (h *StorageHandle) Delete(ctx context.Context, key string) error {
-	return h.agent.storageDelete(ctx, h.zoneKey(key))
-}
-
-// Stat returns metadata for `key` (relative to this zone). The returned
-// StoredFile.Key is also relative.
-func (h *StorageHandle) Stat(ctx context.Context, key string) (StoredFile, error) {
-	info, err := h.agent.storageStat(ctx, h.zoneKey(key))
-	if err != nil {
-		return StoredFile{}, err
-	}
-	info.Key = stripPrefix(info.Key, h.slug+"/")
-	return info, nil
-}
-
-// List enumerates files under `prefix` (relative to this zone). Returned
-// StoredFile.Key values are also relative.
-func (h *StorageHandle) List(ctx context.Context, prefix string) ([]StoredFile, error) {
-	files, err := h.agent.storageList(ctx, h.zoneKey(prefix))
+// OpenFile streams a file. The returned ReadCloser must be closed by the
+// caller. Trusted: no access check. Used by builder Go code that
+// constructs paths itself.
+func (a *Agent) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	canon, err := normalizePath(path)
 	if err != nil {
 		return nil, err
 	}
-	for i := range files {
-		files[i].Key = stripPrefix(files[i].Key, h.slug+"/")
+	return a.openFileRaw(ctx, canon)
+}
+
+// ReadFile reads a file fully into memory. For very large files prefer
+// OpenFile + io.Copy. Trusted: no access check.
+func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	rc, err := a.OpenFile(ctx, path)
+	if err != nil {
+		return nil, err
 	}
-	return files, nil
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
-// Copy server-side-copies a file within this zone. Both keys are relative.
-func (h *StorageHandle) Copy(ctx context.Context, src, dst string) error {
-	return h.agent.storageCopy(ctx, h.zoneKey(src), h.zoneKey(dst))
-}
-
-// CopyTo server-side-copies a file from this zone into another zone.
-// dstKey is relative to dstZone; src is relative to this zone. Builders
-// compose move = CopyTo + src.Delete.
-func (h *StorageHandle) CopyTo(ctx context.Context, src string, dstZone *StorageHandle, dst string) error {
-	if dstZone == nil {
-		return fmt.Errorf("agentsdk: StorageHandle.CopyTo: dstZone is nil")
+// WriteFile writes data with the given content type. Returns the resulting
+// FileInfo (path/filename/contentType/size/lastModified). Trusted: no
+// access check.
+func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, contentType string) (FileInfo, error) {
+	canon, err := normalizePath(path)
+	if err != nil {
+		return FileInfo{}, err
 	}
-	return h.agent.storageCopy(ctx, h.zoneKey(src), dstZone.zoneKey(dst))
-}
-
-// URL returns the URL at which the given key is fetchable on the agent's
-// subdomain. Whether a request to that URL succeeds depends on the zone's
-// Read level and the caller's auth state:
-//
-//   - AccessPublic:  served unauthenticated.
-//   - AccessUser:    requires a valid agent-subdomain session cookie + agent
-//                    membership; the proxy redirects through the login flow
-//                    when the cookie is absent (so a click in chat triggers
-//                    sign-in and lands back on the file).
-//   - AccessAdmin:   same, but requires admin role on the agent.
-//   - AccessInternal: the proxy 404s the URL — internal zones are builder-Go
-//                     only. URL still composes a string so callers don't get
-//                     silent empty hrefs, but a warning is logged so the
-//                     mistake is visible.
-//
-// Re-resolves on the next sync if the agent's slug or the configured
-// domain changes.
-func (h *StorageHandle) URL(key string) string {
-	if h.read == AccessInternal {
-		h.agent.logger.Warn("StorageHandle.URL called on AccessInternal zone — the URL will 404",
-			zap.String("zone", h.slug), zap.String("key", key))
+	// Buffer to learn the size; the API path needs Content-Length.
+	var buf bytes.Buffer
+	n, err := io.Copy(&buf, data)
+	if err != nil {
+		return FileInfo{}, fmt.Errorf("agentsdk: WriteFile %s: read input: %w", canon, err)
 	}
-	return h.agent.publicStorageBaseSnapshot() + "/" + h.slug + "/" + strings.TrimLeft(key, "/")
-}
-
-func stripPrefix(s, p string) string {
-	if strings.HasPrefix(s, p) {
-		return s[len(p):]
+	if err := a.writeFileRaw(ctx, canon, &buf, contentType, ""); err != nil {
+		return FileInfo{}, err
 	}
-	return s
+	return FileInfo{
+		Path:         canon,
+		Filename:     pathBase(canon),
+		ContentType:  contentType,
+		Size:         n,
+		LastModified: time.Now(),
+	}, nil
 }
 
-// --- Agent-internal storage helpers (only StorageHandle / framework call these) ---
+// StatFile returns metadata for a file. Trusted: no access check.
+func (a *Agent) StatFile(ctx context.Context, path string) (FileInfo, error) {
+	canon, err := normalizePath(path)
+	if err != nil {
+		return FileInfo{}, err
+	}
+	return a.statFileRaw(ctx, canon)
+}
 
-func (a *Agent) storagePut(ctx context.Context, key string, data io.Reader, contentType string) error {
-	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+key, data)
+// ListOpts controls ListDir.
+type ListOpts struct {
+	// Recursive walks the entire subtree. Zero value (false) lists only
+	// files directly under the path (POSIX ls).
+	Recursive bool
+}
+
+// ListDir enumerates files under `path`. Trusted: no access check.
+func (a *Agent) ListDir(ctx context.Context, path string, opts ListOpts) ([]FileInfo, error) {
+	// path here may be a directory prefix (we want it to end with `/` to
+	// match cleanly), but normalizePath strips trailing slashes. Accept a
+	// "/" or "/something" form, store back the listing prefix.
+	prefix := path
+	if prefix == "" {
+		return nil, ErrInvalidPath
+	}
+	if prefix[0] != '/' {
+		return nil, fmt.Errorf("%w: must be absolute (start with '/')", ErrInvalidPath)
+	}
+	// Reject `..` / empty segments (allow trailing slash on a directory
+	// listing — that's expected).
+	clean := strings.TrimRight(prefix, "/")
+	if clean != "" {
+		if _, err := normalizePath(clean); err != nil {
+			return nil, err
+		}
+	}
+	return a.listDirRaw(ctx, prefix, opts.Recursive)
+}
+
+// DeleteFile removes a file. Idempotent — missing files do not error.
+// Trusted: no access check.
+func (a *Agent) DeleteFile(ctx context.Context, path string) error {
+	canon, err := normalizePath(path)
+	if err != nil {
+		return err
+	}
+	return a.deleteFileRaw(ctx, canon)
+}
+
+// CopyFile server-side-copies a file from src to dst. Both paths are
+// absolute and may live under different directories. Trusted: no access
+// check.
+func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
+	srcCanon, err := normalizePath(src)
+	if err != nil {
+		return err
+	}
+	dstCanon, err := normalizePath(dst)
+	if err != nil {
+		return err
+	}
+	return a.copyFileRaw(ctx, srcCanon, dstCanon)
+}
+
+// --- Internal helpers ---
+
+func pathBase(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// publicURLForPath returns the URL at which `path` is fetchable on the
+// agent's subdomain, e.g. "https://slug.example.com/__air/storage/reports/q1.csv".
+// Whether the URL succeeds depends on the directory's Read cap and the
+// caller's auth state — see serveStoragePath on the airlock side.
+func (a *Agent) publicURLForPath(path string) string {
+	return a.publicStorageBaseSnapshot() + path
+}
+
+// --- HTTP client (raw helpers — Trusted Go API wraps these) ---
+
+func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, contentType, originalFilename string) error {
+	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage"+path, data)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", contentType)
+	if originalFilename != "" {
+		req.Header.Set("X-Filename", originalFilename)
+	}
 	resp, err := a.client.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("agentsdk: storage put %s: %w", key, err)
+		return fmt.Errorf("agentsdk: writeFile %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: storage put %s: status %d: %s", key, resp.StatusCode, string(b))
+		return fmt.Errorf("agentsdk: writeFile %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return nil
 }
 
-func (a *Agent) storageGet(ctx context.Context, key string) (io.ReadCloser, error) {
-	resp, err := a.client.do(ctx, "GET", "/api/agent/storage/"+key, nil)
+func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, error) {
+	resp, err := a.client.do(ctx, "GET", "/api/agent/storage"+path, nil)
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode == 404 {
+		resp.Body.Close()
+		return nil, ErrNotFound
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		resp.Body.Close()
-		return nil, fmt.Errorf("agentsdk: storage get %s: status %d", key, resp.StatusCode)
+		return nil, fmt.Errorf("agentsdk: openFile %s: status %d", path, resp.StatusCode)
 	}
 	return resp.Body, nil
 }
 
-func (a *Agent) storageDelete(ctx context.Context, key string) error {
-	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage/"+key, nil)
+func (a *Agent) deleteFileRaw(ctx context.Context, path string) error {
+	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage"+path, nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: storage delete %s: status %d: %s", key, resp.StatusCode, string(b))
+		return fmt.Errorf("agentsdk: deleteFile %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return nil
 }
 
-func (a *Agent) storageStat(ctx context.Context, key string) (StoredFile, error) {
+func (a *Agent) statFileRaw(ctx context.Context, path string) (FileInfo, error) {
 	body := struct {
-		Key string `json:"key"`
-	}{key}
-	var info StoredFile
+		Path string `json:"path"`
+	}{path}
+	var info FileInfo
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/storage/info", body, &info); err != nil {
-		return StoredFile{}, err
+		return FileInfo{}, err
+	}
+	if info.Path == "" {
+		info.Path = path
 	}
 	return info, nil
 }
 
-func (a *Agent) storageCopy(ctx context.Context, src, dst string) error {
+func (a *Agent) copyFileRaw(ctx context.Context, src, dst string) error {
 	body := struct {
 		Src string `json:"src"`
 		Dst string `json:"dst"`
@@ -263,31 +374,15 @@ func (a *Agent) storageCopy(ctx context.Context, src, dst string) error {
 	return a.client.doJSON(ctx, "POST", "/api/agent/storage/copy", body, nil)
 }
 
-func (a *Agent) storageList(ctx context.Context, prefix string) ([]StoredFile, error) {
-	path := "/api/agent/storage"
-	if prefix != "" {
-		path += "?prefix=" + url.QueryEscape(prefix)
+func (a *Agent) listDirRaw(ctx context.Context, path string, recursive bool) ([]FileInfo, error) {
+	q := url.Values{}
+	q.Set("path", path)
+	if recursive {
+		q.Set("recursive", "true")
 	}
-	var files []StoredFile
-	if err := a.client.doJSON(ctx, "GET", path, nil, &files); err != nil {
+	var files []FileInfo
+	if err := a.client.doJSON(ctx, "GET", "/api/agent/storage?"+q.Encode(), nil, &files); err != nil {
 		return nil, err
 	}
 	return files, nil
-}
-
-// findStorageByKey returns the registered zone whose prefix matches the
-// given full key (e.g. "uploads/doc.pdf" → the uploads zone). Used by
-// vm.go's attachToContext to validate a JS-supplied "{slug}/{key}" string.
-func (a *Agent) findStorageByKey(key string) (*StorageHandle, string, bool) {
-	idx := strings.IndexByte(key, '/')
-	if idx <= 0 {
-		return nil, "", false
-	}
-	slug := key[:idx]
-	rel := key[idx+1:]
-	zone, ok := a.storages[slug]
-	if !ok {
-		return nil, "", false
-	}
-	return &StorageHandle{slug: slug, read: zone.Read, write: zone.Write, agent: a}, rel, true
 }

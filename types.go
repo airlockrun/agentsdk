@@ -121,13 +121,18 @@ type Action struct {
 	Error      string    `json:"error,omitempty"`
 }
 
-// --- Storage ---
+// --- Files ---
 
-// StoredFile describes a file in agent storage.
-type StoredFile struct {
-	Key          string    `json:"key"`
-	Size         int64     `json:"size"`
+// FileInfo describes a file in agent storage. Returned by StatFile, ListDir,
+// WriteFile, and embedded in PromptInput.Files for chat uploads. Path is the
+// canonical identifier; Filename is the original upload name preserved as S3
+// metadata so the LLM can refer to "Q1 Report.pdf" while the path uses a
+// uuid-prefixed safe filename.
+type FileInfo struct {
+	Path         string    `json:"path"`         // absolute, e.g. "/uploads/foo.png"
+	Filename     string    `json:"filename"`     // original upload name; S3 metadata
 	ContentType  string    `json:"contentType"`
+	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
 }
 
@@ -165,7 +170,7 @@ type PromptInput struct {
 	Temperature     *float64          `json:"temperature,omitempty"`
 	MaxOutputTokens *int              `json:"maxOutputTokens,omitempty"`
 	ProviderOptions json.RawMessage   `json:"providerOptions,omitempty"`
-	Files           []FileRef         `json:"files,omitempty"`
+	Files           []FileInfo        `json:"files,omitempty"`
 	ResumeRunID         string            `json:"resumeRunId,omitempty"`
 	Approved            *bool             `json:"approved,omitempty"`
 	SupportedModalities []string          `json:"supportedModalities,omitempty"` // e.g. ["text", "image", "pdf", "audio", "video"]
@@ -191,43 +196,56 @@ type PromptInput struct {
 	ForceCompact bool `json:"forceCompact,omitempty"`
 }
 
-// FileRef references a file attachment in a prompt.
-type FileRef struct {
-	ID          string `json:"id"`
-	Filename    string `json:"filename"`
-	ContentType string `json:"contentType"`
-	Size        int64  `json:"size"`
-}
+// --- Directories ---
 
-// --- Storage ---
-
-// Storage is the self-contained declaration registered via agent.RegisterStorage.
-// Each zone owns an S3 prefix ("{Slug}/") and a JS binding (storage_{slug});
-// AccessInternal axes are reachable only from builder Go code and never
-// surface in run_js. The framework auto-registers a reserved zone "tmp"
-// at Read=Write=AccessUser; builder calls with Slug="tmp" silently no-op
-// (returning the framework handle) so frameworks and builders share the
-// same scratch area without conflict.
+// Directory is the self-contained declaration registered via
+// agent.RegisterDirectory. Each directory owns an S3 prefix
+// ("agents/{agentID}{Path}") and gates access through three independent
+// caps. AccessInternal directories are reachable only from trusted Go
+// code (the framework never wires them into the JS runtime, and the
+// CheckFileAccess gate denies every external caller).
 //
-// Read and Write are independent — "Read: AccessUser, Write: AccessAdmin"
-// (admin-curated, user-readable) and "Read: AccessAdmin, Write: AccessUser"
-// (user-fed inbox processed only by admins) are both valid. The JS
-// `storage_{slug}` object exposes Get/Stat/List only when Read satisfies
-// the caller, and Put/Delete/Copy only when Write does.
-type Storage struct {
-	Slug        string
-	Read        Access // gates Get/Stat/List + the public route; default AccessUser
-	Write       Access // gates Put/Delete/Copy/CopyTo; default AccessUser
-	Description string // shown in the system prompt's storage zones section
+// The framework auto-registers a reserved directory "/tmp" at
+// Read=Write=List=AccessUser; builder calls with Path="/tmp" silently
+// keep the framework's caps (Description may still be supplied).
+//
+// Read, Write, and List are independent. delete folds into Write
+// (POSIX-style: write on the parent governs unlink), so DeleteFile
+// requires Write access.
+type Directory struct {
+	Path        string // absolute path, e.g. "/reports"; no `..` or `//`; no trailing slash
+	Read        Access // gates ReadFile / OpenFile / StatFile + the public read route
+	Write       Access // gates WriteFile / DeleteFile + the public write route
+	List        Access // gates ListDir
+	Description string // shown in the system prompt's directories section
 }
 
-// StorageDef is the wire format sent in SyncRequest.
-type StorageDef struct {
-	Slug        string `json:"slug"`
+// DirectoryOpts is the option struct accepted by RegisterDirectory.
+type DirectoryOpts struct {
+	Read        Access // default AccessUser
+	Write       Access // default AccessUser
+	List        Access // default AccessUser
+	Description string
+}
+
+// DirectoryDef is the wire format sent in SyncRequest.
+type DirectoryDef struct {
+	Path        string `json:"path"`
 	Read        Access `json:"read"`
 	Write       Access `json:"write"`
+	List        Access `json:"list"`
 	Description string `json:"description"`
 }
+
+// FileOp tags an operation passed to CheckFileAccess. Delete folds into
+// OpWrite (POSIX-style); there is no separate OpDelete.
+type FileOp string
+
+const (
+	OpRead  FileOp = "read"
+	OpWrite FileOp = "write"
+	OpList  FileOp = "list"
+)
 
 // --- Topic ---
 
@@ -427,7 +445,7 @@ type SyncRequest struct {
 	Routes       []RouteDef       `json:"routes,omitempty"`
 	Topics       []TopicDef       `json:"topics,omitempty"`
 	MCPServers   []MCPDef         `json:"mcpServers,omitempty"`
-	Storages     []StorageDef     `json:"storages,omitempty"`
+	Directories  []DirectoryDef   `json:"directories,omitempty"`
 	ExtraPrompts []ExtraPromptDef `json:"extraPrompts,omitempty"`
 	ModelSlots   []ModelSlotDef   `json:"modelSlots,omitempty"`
 }
@@ -474,12 +492,13 @@ type SyncResponse struct {
 	// agent's VM can install one typed JS method per tool on each
 	// `mcp_{slug}` object — no per-run discovery round-trips.
 	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
-	// PublicStorageBase is the URL prefix at which storage zones are reachable
-	// on the agent's subdomain, ending without a trailing slash;
-	// *StorageHandle.URL appends "/{slug}/{key}". Of the form
-	// https://{slug}.{agentDomain}/__air/storage. The proxy enforces the
-	// zone's Read access at fetch time — public zones serve unauthenticated,
-	// user/admin zones require subdomain login (redirect-on-missing-cookie).
+	// PublicStorageBase is the URL prefix at which directories are reachable
+	// on the agent's subdomain, ending without a trailing slash. Callers
+	// append the absolute path (e.g. "/reports/q1.csv") to construct a URL.
+	// Of the form https://{slug}.{agentDomain}/__air/storage. The proxy
+	// enforces the directory's Read cap at fetch time — public dirs serve
+	// unauthenticated, user/admin dirs require subdomain login
+	// (redirect-on-missing-cookie).
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
 

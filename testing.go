@@ -55,7 +55,7 @@ func NewMockAirlock() (*MockAirlock, string) {
 	})
 	mux.HandleFunc("GET /api/agent/storage", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		json.NewEncoder(w).Encode([]StoredFile{})
+		json.NewEncoder(w).Encode([]FileInfo{})
 	})
 
 	// Storage copy endpoint.
@@ -68,8 +68,9 @@ func NewMockAirlock() (*MockAirlock, string) {
 	mux.HandleFunc("POST /api/agent/storage/info", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(StoredFile{
-			Key:         "test.txt",
+		json.NewEncoder(w).Encode(FileInfo{
+			Path:        "/tmp/test.txt",
+			Filename:    "test.txt",
 			Size:        42,
 			ContentType: "text/plain",
 		})
@@ -89,12 +90,6 @@ func NewMockAirlock() (*MockAirlock, string) {
 	mux.HandleFunc("DELETE /api/agent/topic/{slug}/subscribe", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.WriteHeader(http.StatusNoContent)
-	})
-
-	// Files endpoint.
-	mux.HandleFunc("GET /api/agent/files/{fileID}", func(w http.ResponseWriter, r *http.Request) {
-		m.record(r)
-		w.Write([]byte("mock-attachment"))
 	})
 
 	// LLM stream endpoint.

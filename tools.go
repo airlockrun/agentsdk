@@ -186,25 +186,24 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 		return output
 	}
 
-	// Save full output to the framework-owned tmp zone. The LLM reads it
-	// back via storage_tmp.get(...) inside run_js.
-	relKey := "output-" + randomHex(4) + ".txt"
-	tmp := &StorageHandle{slug: reservedTmpSlug, read: AccessUser, write: AccessUser, agent: run.agent}
-	if err := tmp.Put(ctx, relKey, strings.NewReader(output), "text/plain"); err != nil {
-		// If save fails, just truncate without a key.
+	// Save full output to the framework-owned /tmp directory. The LLM reads
+	// it back via readFile(path) inside run_js.
+	path := reservedTmpPath + "/output-" + randomHex(4) + ".txt"
+	if _, err := run.agent.WriteFile(ctx, path, strings.NewReader(output), "text/plain"); err != nil {
+		// If save fails, just truncate without a path.
 		return output[:truncatePreviewLen] + fmt.Sprintf(
 			"\n\n[Output truncated (%dKB). Could not save full result.]",
 			len(output)/1024)
 	}
 
 	return output[:truncatePreviewLen] + fmt.Sprintf(
-		"\n\n[Output truncated (%dKB → %dKB shown). Full result saved to storage_tmp at %q.\n"+
+		"\n\n[Output truncated (%dKB → %dKB shown). Full result saved at %q.\n"+
 			"Process it inside run_js without returning the full content:\n"+
-			"  let data = storage_tmp.get(%q)\n"+
-			"  let parsed = JSON.parse(data) // or process as text\n"+
-			"  return parsed.slice(0, 10)    // return only what you need\n"+
+			"  var data = readFile(%q)\n"+
+			"  var parsed = JSON.parse(data) // or process as text\n"+
+			"  parsed.slice(0, 10)           // last expression = return value; only what you need\n"+
 			"]",
-		len(output)/1024, truncatePreviewLen/1024, relKey, relKey)
+		len(output)/1024, truncatePreviewLen/1024, path, path)
 }
 
 // combineJSOutput merges console.log output with the return value, similar
@@ -239,15 +238,19 @@ func randomHex(n int) string {
 	return fmt.Sprintf("%x", b)
 }
 
-// buildToolDescription generates the run_js tool description including the function manifest.
-// callerAccess gates admin-only bindings (queryDB/execDB) so they're not advertised
-// to AccessUser / AccessPublic runs that wouldn't be able to call them anyway.
+// buildToolDescription generates the run_js tool description including the
+// function manifest. callerAccess gates admin-only bindings (queryDB,
+// execDB, requestUpgrade) so they're not advertised to AccessUser /
+// AccessPublic runs. Whoever sees a binding here can call it — we never
+// surface "this binding is admin-only, ask your admin" framing because
+// the LLM doesn't know its own access level and surfacing the gate just
+// confuses non-admin runs into recommending things their user can't do.
 func buildToolDescription(agent *Agent, callerAccess Access) string {
 	var b strings.Builder
-	b.WriteString("Execute JavaScript code. The runtime is ES5.1 with select ES6 features (let/const, arrow functions, classes, destructuring, template literals, Map/Set) — there is NO `async`/`await` and NO Promises; using `await` is a syntax error. All bindings below are synchronous: call them directly, e.g. `const r = httpRequest(url)` not `await httpRequest(url)`.\n\n")
-	b.WriteString("The value of the last expression is returned — do NOT use a top-level `return` statement (it's a syntax error outside a function). Write the value you want as the final expression. Example: `const r = httpRequest(url); r` returns `r`. `return r;` does NOT work.\n\n")
-	b.WriteString("Variables declared with var/let/const persist across run_js calls within the same turn (the VM is reset only on the next user message), so you can build up state incrementally. Prefer `var` for top-level names — re-declaring a `let` or `const` with the same name in a follow-up run_js call throws SyntaxError. Reuse `var` names freely; reserve `let`/`const` for names you won't redeclare.\n\n")
-	b.WriteString("Prefer ONE run_js call over many when it's safe. If a sequence is read-only or strictly additive (list → filter → look up one item → format), do it in a single call: fewer turns, less chance of stale state between calls, cheaper for the user. Split into multiple calls only when an earlier result must be inspected before deciding what to do next, or when an action is destructive enough that you want a confirmation gate between steps. Example: `const items = listX(); const target = items.find(i => i.name === 'foo'); if (!target.enabled) { updateX(target.id, {enabled: true}); } target` — one call, not three.\n\n")
+	b.WriteString("Execute JavaScript code. The runtime is ES5.1 with select ES6 features (let/const, arrow functions, classes, destructuring, template literals, Map/Set) — there is NO `async`/`await` and NO Promises; using `await` is a syntax error. All bindings below are synchronous: call them directly, e.g. `var r = httpRequest(url)` not `await httpRequest(url)`.\n\n")
+	b.WriteString("The value of the last expression is returned — do NOT use a top-level `return` statement (it's a syntax error outside a function). Write the value you want as the final expression. Example: `var r = httpRequest(url); r` returns `r`. `return r;` does NOT work.\n\n")
+	b.WriteString("Variables declared in one run_js call persist into the next call within the same turn (the VM resets only on the next user message). **ALWAYS use `var` for top-level names — NEVER `let` or `const`.** Redeclaring a `let` or `const` with a name that already exists from a previous run_js call throws `SyntaxError: Identifier has already been declared` and aborts the call — and you can't tell if a name is taken without trying it. `var` redeclarations are silently fine. Reach for `let`/`const` only inside a function body, a `for`-loop header, or a `{ ... }` block whose name won't be reused. This is the single most common cause of run_js failures across multi-step turns; treat `var` at the top level as a hard rule.\n\n")
+	b.WriteString("Prefer ONE run_js call over many when it's safe. If a sequence is read-only or strictly additive (list → filter → look up one item → format), do it in a single call: fewer turns, less chance of stale state between calls, cheaper for the user. Split into multiple calls only when an earlier result must be inspected before deciding what to do next, or when an action is destructive enough that you want a confirmation gate between steps. Example: `var items = listX(); var target = items.find(i => i.name === 'foo'); if (!target.enabled) { updateX(target.id, {enabled: true}); } target` — one call, not three.\n\n")
 	b.WriteString("IMPORTANT: request_confirmation parameter usage:\n")
 	b.WriteString("- Set request_confirmation=true ONLY for code that modifies external data (sending messages, deleting records, spending money).\n")
 	b.WriteString("- Read-only operations, data lookups, and computations must NEVER use request_confirmation — just execute them.\n")
@@ -260,54 +263,66 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	b.WriteString("- conn_{slug}.requestJSON(method, path, body?) → object — JSON HTTP via connection\n")
 	b.WriteString("- mcp_{slug}.<tool_name>(args?) — call MCP tool. The per-tool typed methods are declared in the run-env prompt; one method per tool the server advertised at sync time.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {
-		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — admin-only; not exposed to AccessUser / AccessPublic callers.\n")
-		b.WriteString("- execDB(sql, ...params) → {rowsAffected: N} — admin-only; not exposed to AccessUser / AccessPublic callers.\n")
+		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — read-only SQL against the agent's Postgres schema.\n")
+		b.WriteString("- execDB(sql, ...params) → {rowsAffected: N} — write SQL (INSERT/UPDATE/DELETE) against the agent's Postgres schema.\n")
 	}
-	b.WriteString("- storage_{slug}.get(key) → string — read a file's contents as a string. `key` is a relative key string or a {zone, key} ref handed back from another call.\n")
-	b.WriteString("- storage_{slug}.put(key, data, contentType) — write a file.\n")
-	b.WriteString("- storage_{slug}.stat(key) → {key, size, contentType, lastModified}\n")
-	b.WriteString("- storage_{slug}.list(prefix?) → [{key, size, contentType, lastModified}, ...]\n")
-	b.WriteString("- storage_{slug}.copy(srcKey, dstKey) — server-side copy within this zone.\n")
-	b.WriteString("- storage_{slug}.copyTo(srcKey, dstRef) — server-side copy to a different zone; dstRef is a {zone, key} object.\n")
-	b.WriteString("- storage_{slug}.delete(key)\n")
-	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}. `source` accepts a {zone, key} ref or a \"zone/key\" string.\n")
-	b.WriteString("- log(message)\n")
+	b.WriteString("- readFile(path) → string — read a file as UTF-8 text (most common case). `path` is an absolute unix path like \"/uploads/orders.csv\".\n")
+	b.WriteString("- readBytes(path) → Uint8Array — read a file as binary bytes. Use for images, PDFs, anything not text.\n")
+	b.WriteString("- writeFile(path, data, contentType?) → FileInfo — write a file. `data` is a string or Uint8Array. `contentType` is optional (auto-detected from extension when absent). Returns {path, filename, contentType, size, lastModified}.\n")
+	b.WriteString("- listDir(path, opts?) → FileInfo[] — list files. Non-recursive by default (one level only, like POSIX `ls`); pass {recursive: true} to walk the subtree. `path` may end with `/`.\n")
+	b.WriteString("- statFile(path) → FileInfo — metadata for a single file.\n")
+	b.WriteString("- fileExists(path) → boolean — sugar around statFile.\n")
+	b.WriteString("- deleteFile(path) — remove a file. Idempotent.\n")
+	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}. `source` accepts a path string.\n")
+	b.WriteString("- log(message) — emit a log line visible in the run timeline.\n")
 	b.WriteString("- webSearch(query, count?) → {results: [{title, url, snippet}], synthesis?, provider}\n")
-	b.WriteString("- httpRequest(url, opts?) → {status, headers, body, contentType, size, savedTo?} — HTML responses are converted to markdown by default; binary and large responses auto-saved to S3. `savedTo` is a {zone, key} ref — pass it to storage_{zone}.get(...) to read text, or attachToContext(...) to view it next turn. Opts: {method, headers, body, timeout, saveAs, raw}; `saveAs` accepts a {zone, key} ref or \"zone/key\" string.\n")
-	b.WriteString("- attachToContext(ref) → string — load an S3 file as an image/file part so you can actually see it on the NEXT turn. `ref` is a {zone, key} object or a \"zone/key\" string. Idempotent per run. For text files (CSV, JSON, etc.) use storage_{zone}.get(...) instead.\n")
-	b.WriteString("- transcribeAudio(ref, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. `ref` is a {zone, key} object or \"zone/key\" string. opts: {language?, prompt?, mimeType?}.\n")
-	b.WriteString("- generateImage(prompt, opts?) → {file: {zone, key}, mimeType, size} — text-to-image; result auto-saved to S3, pass `file` to printToUser({source: file, ...}) or storage_{zone}.get(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
-	b.WriteString("- speak(text, opts?) → {file: {zone, key}, mimeType, size} — text-to-speech; result auto-saved to S3, pass `file` to printToUser({source: file, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
+	b.WriteString("- httpRequest(url, opts?) → {status, headers, body, contentType, size, savedTo?} — HTML responses are converted to markdown by default; binary and large responses auto-saved to storage. `savedTo` is a path string; pass it to readFile(...) or attachToContext(...). Opts: {method, headers, body, timeout, saveAs, raw}; `saveAs` is an absolute path string.\n")
+	b.WriteString("- attachToContext(path) → string — load a stored file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files use readFile(path) instead.\n")
+	b.WriteString("- analyzeImage(path, question?) → string — sends a stored image to the platform's vision model and returns its reply. `question` defaults to \"Describe this image.\" Use this when the current chat model lacks vision; it routes to the configured vision_model regardless of which exec model is running.\n")
+	b.WriteString("- transcribeAudio(path, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. opts: {language?, prompt?, mimeType?}.\n")
+	b.WriteString("- generateImage(prompt, opts?) → {file: FileInfo, mimeType, size} — text-to-image; result auto-saved. Pass `file.path` to printToUser({source: file.path, ...}) or readBytes(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
+	b.WriteString("- speak(text, opts?) → {file: FileInfo, mimeType, size} — text-to-speech; result auto-saved. Pass `file.path` to printToUser({source: file.path, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
 	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {
-		b.WriteString("- requestUpgrade(description) → string — admin-only; ask Airlock to regenerate this agent with new capabilities. Not exposed to AccessUser / AccessPublic callers because the regenerate runs untrusted LLM-generated code on the build host.\n")
+		b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities. The current agent keeps running until the new build finishes; the description should specify what to add or change.\n")
 	}
 
-	// Storage zone bindings — which storage_{slug} objects are actually
-	// available, and on which axes (read/write). The framework
-	// auto-registers a "tmp" zone, so this section is always non-empty.
-	if len(agent.storages) > 0 {
-		b.WriteString("\nStorage zones registered for this agent:\n")
-		for slug, zone := range agent.storages {
-			axes := ""
-			switch {
-			case zone.Read != AccessInternal && zone.Write != AccessInternal:
-				axes = "read+write"
-			case zone.Read != AccessInternal:
-				axes = "read-only"
-			case zone.Write != AccessInternal:
-				axes = "write-only"
-			default:
-				axes = "internal"
+	// Directory inventory — which paths the LLM can read/write/list, and
+	// at what access level the current run satisfies each cap.
+	// AccessInternal directories are filtered out entirely (the LLM never
+	// sees them).
+	visible := make([]*Directory, 0, len(agent.directories))
+	for _, d := range agent.directories {
+		if d.Read == AccessInternal && d.Write == AccessInternal && d.List == AccessInternal {
+			continue
+		}
+		visible = append(visible, d)
+	}
+	if len(visible) > 0 {
+		b.WriteString("\nDirectories registered for this agent (paths your code can use):\n")
+		for _, d := range visible {
+			caps := []string{}
+			if d.Read != AccessInternal && accessSatisfies(callerAccess, d.Read) {
+				caps = append(caps, "read")
 			}
-			desc := zone.Description
-			if desc == "" && slug == reservedTmpSlug {
-				desc = "framework scratch zone for transient files (httpRequest savedTo, generateImage results, etc.)"
+			if d.Write != AccessInternal && accessSatisfies(callerAccess, d.Write) {
+				caps = append(caps, "write")
+			}
+			if d.List != AccessInternal && accessSatisfies(callerAccess, d.List) {
+				caps = append(caps, "list")
+			}
+			capsStr := "no access"
+			if len(caps) > 0 {
+				capsStr = strings.Join(caps, "+")
+			}
+			desc := d.Description
+			if desc == "" && d.Path == reservedTmpPath {
+				desc = "framework scratch (truncated tool output, generated media)"
 			}
 			if desc != "" {
-				b.WriteString(fmt.Sprintf("- storage_%s (%s) — %s\n", slug, axes, desc))
+				b.WriteString(fmt.Sprintf("- %s (%s) — %s\n", d.Path, capsStr, desc))
 			} else {
-				b.WriteString(fmt.Sprintf("- storage_%s (%s)\n", slug, axes))
+				b.WriteString(fmt.Sprintf("- %s (%s)\n", d.Path, capsStr))
 			}
 		}
 	}
