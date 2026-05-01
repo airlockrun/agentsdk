@@ -37,12 +37,18 @@ If you have an API improvement in mind, please open a Discussion before writing 
 
 ## Pull requests
 
-- Fork the repo, branch from `main`, and open the PR against `main`.
+- Fork the repo, branch from `dev`, and open the PR against `dev`. (`main` only ever holds tagged releases — see [Branch model](#branch-model).)
 - Keep PRs focused. One logical change per PR — easier to review, easier to revert.
 - Match existing code style. For Go: `gofmt -s`, `go vet`, and follow patterns already in the codebase.
 - Run tests locally before opening the PR.
 - Write a clear PR description: what changed, why, and how you tested it.
 - Be patient with reviews. A maintainer ping after a week of silence is fine.
+
+## Branch model
+
+- **`dev`** is the active development line and the default branch. PRs land here.
+- **`main`** is the release surface. Each commit on `main` corresponds to a tagged release (`vX.Y.Z`).
+- Releases are cut by opening a `dev` → `main` PR, merging, then tagging `vX.Y.Z` on the resulting `main` commit.
 
 ## Dev setup
 
