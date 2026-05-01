@@ -105,9 +105,24 @@ type ConnectionDef struct {
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
 type AuthInjection struct {
-	Type string `json:"type"`           // "bearer", "api_key_header", "bot_token_url_prefix"
-	Name string `json:"name,omitempty"` // header name for api_key_header (default: "X-API-Key")
+	Type AuthInjectionType `json:"type"`
+	Name string            `json:"name,omitempty"` // header name for api_key_header (default: "X-API-Key")
 }
+
+// AuthInjectionType selects how the proxy injects the stored credential into
+// each upstream request.
+type AuthInjectionType string
+
+const (
+	// AuthInjectBearer sets `Authorization: Bearer {token}`.
+	AuthInjectBearer AuthInjectionType = "bearer"
+	// AuthInjectAPIKey sets a custom header `{Name}: {token}` (Name defaults
+	// to "X-API-Key").
+	AuthInjectAPIKey AuthInjectionType = "api_key_header"
+	// AuthInjectPathPrefix prepends `/{token}` to the URL path. Used by
+	// APIs that carry credentials in the path (e.g. Telegram bot API).
+	AuthInjectPathPrefix AuthInjectionType = "path_prefix"
+)
 
 // --- Run recording ---
 
