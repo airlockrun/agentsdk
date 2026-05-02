@@ -142,6 +142,21 @@ func dirCap(d *Directory, op FileOp) Access {
 	return AccessInternal
 }
 
+// hasPublicDirCap reports whether at least one registered directory grants
+// AccessPublic for the given op. Used at VM bind time so file primitives
+// (readFile, writeFile, listDir, etc.) appear in a public-caller's
+// runtime only when there's actually some directory they could touch —
+// keeps the public attack surface tight and avoids dangling bindings
+// that would just throw on every CheckFileAccess.
+func (a *Agent) hasPublicDirCap(op FileOp) bool {
+	for _, d := range a.directories {
+		if dirCap(d, op) == AccessPublic {
+			return true
+		}
+	}
+	return false
+}
+
 // --- Public access gate ---
 
 // CheckFileAccess is the single gate for paths that arrived from
@@ -281,6 +296,33 @@ func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
 		return err
 	}
 	return a.copyFileRaw(ctx, srcCanon, dstCanon)
+}
+
+// ShareFileURL returns a presigned, unauthenticated, time-limited URL
+// pointing at the given storage path. ttl <= 0 picks the server default
+// (1h); the server caps anything over 24h. The URL is signed for the
+// public S3 endpoint when configured, so it works from outside the docker
+// network (browsers, LLM providers, external tools). Trusted: no access
+// check — the JS binding gates LLM-supplied paths via CheckFileAccess.
+//
+// Use cases: embedding in markdown ([file](url)), sharing externally,
+// cases where the agent's authenticated /__air/storage subdomain route
+// isn't reachable for the recipient. For showing files in chat, prefer
+// printToUser({type:"file", source:path}).
+func (a *Agent) ShareFileURL(ctx context.Context, path string, ttl time.Duration) (*ShareFileResponse, error) {
+	canon, err := normalizePath(path)
+	if err != nil {
+		return nil, err
+	}
+	body := ShareFileRequest{
+		Path:           canon,
+		ExpiresSeconds: int64(ttl.Seconds()),
+	}
+	var resp ShareFileResponse
+	if err := a.client.doJSON(ctx, "POST", "/api/agent/storage/share", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // --- Internal helpers ---

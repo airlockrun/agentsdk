@@ -233,6 +233,17 @@ type Directory struct {
 	Write       Access // gates WriteFile / DeleteFile + the public write route
 	List        Access // gates ListDir
 	Description string // shown in the system prompt's directories section
+
+	// RetentionHours, when > 0, opts the directory into Airlock's storage
+	// sweeper: any file in the S3 prefix older than this many hours is
+	// deleted on the next sweep tick (~6h cadence). Zero means files
+	// stay forever — that's the default for normal builder directories.
+	// The framework's /tmp registers with 72 to garbage-collect chat
+	// uploads and generated media; tools that produce throwaway artifacts
+	// (e.g. AI-generated images served via shareFileURL with a 1h URL
+	// expiry) should set a matching short TTL so the bytes go away when
+	// the URL does.
+	RetentionHours int
 }
 
 // DirectoryOpts is the option struct accepted by RegisterDirectory.
@@ -241,15 +252,19 @@ type DirectoryOpts struct {
 	Write       Access // default AccessUser
 	List        Access // default AccessUser
 	Description string
+
+	// RetentionHours: see Directory.RetentionHours. Zero = no sweep.
+	RetentionHours int
 }
 
 // DirectoryDef is the wire format sent in SyncRequest.
 type DirectoryDef struct {
-	Path        string `json:"path"`
-	Read        Access `json:"read"`
-	Write       Access `json:"write"`
-	List        Access `json:"list"`
-	Description string `json:"description"`
+	Path           string `json:"path"`
+	Read           Access `json:"read"`
+	Write          Access `json:"write"`
+	List           Access `json:"list"`
+	Description    string `json:"description"`
+	RetentionHours int    `json:"retentionHours,omitempty"`
 }
 
 // FileOp tags an operation passed to CheckFileAccess. Delete folds into
@@ -581,6 +596,21 @@ type ProxyRequest struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Body   string `json:"body,omitempty"`
+}
+
+// ShareFileRequest is the body for POST /api/agent/storage/share.
+// Path is an absolute storage path; ExpiresSeconds caps how long the
+// returned URL is valid for. Server defaults to 1h if 0, caps at 24h.
+type ShareFileRequest struct {
+	Path           string `json:"path"`
+	ExpiresSeconds int64  `json:"expiresSeconds,omitempty"`
+}
+
+// ShareFileResponse is returned by POST /api/agent/storage/share.
+// URL is unauthenticated and valid until ExpiresAtMs (ms epoch).
+type ShareFileResponse struct {
+	URL         string `json:"url"`
+	ExpiresAtMs int64  `json:"expiresAtMs"`
 }
 
 // --- Model capability types ---

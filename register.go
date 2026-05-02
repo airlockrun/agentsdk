@@ -196,11 +196,12 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 		}
 	}
 	a.directories = append(a.directories, &Directory{
-		Path:        canon,
-		Read:        opts.Read,
-		Write:       opts.Write,
-		List:        opts.List,
-		Description: opts.Description,
+		Path:           canon,
+		Read:           opts.Read,
+		Write:          opts.Write,
+		List:           opts.List,
+		Description:    opts.Description,
+		RetentionHours: opts.RetentionHours,
 	})
 }
 

@@ -140,11 +140,12 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	directories := make([]DirectoryDef, 0, len(a.directories))
 	for _, d := range a.directories {
 		directories = append(directories, DirectoryDef{
-			Path:        d.Path,
-			Read:        d.Read,
-			Write:       d.Write,
-			List:        d.List,
-			Description: d.Description,
+			Path:           d.Path,
+			Read:           d.Read,
+			Write:          d.Write,
+			List:           d.List,
+			Description:    d.Description,
+			RetentionHours: d.RetentionHours,
 		})
 	}
 
