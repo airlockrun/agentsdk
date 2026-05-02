@@ -216,9 +216,7 @@ type PromptInput struct {
 // Directory is the self-contained declaration registered via
 // agent.RegisterDirectory. Each directory owns an S3 prefix
 // ("agents/{agentID}{Path}") and gates access through three independent
-// caps. AccessInternal directories are reachable only from trusted Go
-// code (the framework never wires them into the JS runtime, and the
-// CheckFileAccess gate denies every external caller).
+// caps.
 //
 // The framework auto-registers a reserved directory "/tmp" at
 // Read=Write=List=AccessUser; builder calls with Path="/tmp" silently
@@ -233,6 +231,13 @@ type Directory struct {
 	Write       Access // gates WriteFile / DeleteFile + the public write route
 	List        Access // gates ListDir
 	Description string // shown in the system prompt's directories section
+
+	// LLMHint is optional guidance shown to the LLM in the system prompt
+	// alongside the directory entry, e.g. "internal cache; avoid listing
+	// or modifying" or "user-uploaded reports; prefer summarizing over
+	// quoting". Authorization stays with Read/Write/List — LLMHint only
+	// steers the model. Empty by default.
+	LLMHint string
 
 	// RetentionHours, when > 0, opts the directory into Airlock's storage
 	// sweeper: any file in the S3 prefix older than this many hours is
@@ -253,6 +258,9 @@ type DirectoryOpts struct {
 	List        Access // default AccessUser
 	Description string
 
+	// LLMHint: see Directory.LLMHint. Optional model-facing guidance.
+	LLMHint string
+
 	// RetentionHours: see Directory.RetentionHours. Zero = no sweep.
 	RetentionHours int
 }
@@ -264,6 +272,7 @@ type DirectoryDef struct {
 	Write          Access `json:"write"`
 	List           Access `json:"list"`
 	Description    string `json:"description"`
+	LLMHint        string `json:"llmHint,omitempty"`
 	RetentionHours int    `json:"retentionHours,omitempty"`
 }
 
@@ -285,6 +294,7 @@ const (
 type Topic struct {
 	Slug        string
 	Description string
+	LLMHint     string // optional model-only guidance — see Directory.LLMHint
 	Access      Access // who may subscribe via topic_{slug}.subscribe(); default AccessUser
 }
 
@@ -292,6 +302,7 @@ type Topic struct {
 type TopicDef struct {
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
+	LLMHint     string `json:"llmHint,omitempty"`
 	Access      Access `json:"access"`
 }
 
@@ -367,12 +378,6 @@ const (
 	AccessAdmin  Access = "admin"
 	AccessUser   Access = "user"
 	AccessPublic Access = "public"
-	// AccessInternal is the strictest level — builder Go code only. Items
-	// registered with AccessInternal are never exposed to the JS runtime
-	// and are never reachable from external callers regardless of role.
-	// Use it when you have, say, a storage zone that holds builder-only
-	// caches you don't want the LLM to discover, mutate, or list.
-	AccessInternal Access = "internal"
 )
 
 // --- Auth modes ---
@@ -538,6 +543,7 @@ type SyncResponse struct {
 type ToolDef struct {
 	Name          string            `json:"name"`
 	Description   string            `json:"description"`
+	LLMHint       string            `json:"llmHint,omitempty"`
 	Access        Access            `json:"access"`
 	InputSchema   json.RawMessage   `json:"inputSchema,omitempty"`
 	OutputSchema  json.RawMessage   `json:"outputSchema,omitempty"`

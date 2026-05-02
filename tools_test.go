@@ -42,6 +42,83 @@ func TestToolDescription(t *testing.T) {
 	}
 }
 
+// Topic LLMHint surfaces in the topic inventory line, in brackets after
+// the description, mirroring how Directory.LLMHint is rendered.
+func TestTopicInventory_IncludesLLMHint(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterTopic(&Topic{
+		Slug:        "build_done",
+		Description: "fires when a CI build completes",
+		LLMHint:     "subscribe only when the user explicitly opts in",
+	})
+
+	desc := buildToolDescription(a, AccessUser)
+	if !strings.Contains(desc, "topic_build_done.subscribe()") {
+		t.Errorf("expected topic binding in inventory; got:\n%s", desc)
+	}
+	if !strings.Contains(desc, "[subscribe only when the user explicitly opts in]") {
+		t.Errorf("expected topic LLMHint in inventory; got:\n%s", desc)
+	}
+}
+
+// agentsdk.Tool.LLMHint flows through into registeredTool — the tsrender
+// path picks it up from there. Verifies the field actually persists past
+// toRegistered() rather than being dropped.
+func TestRegisterTool_PreservesLLMHint(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterTool(&Tool[greetIn, greetOut]{
+		Name:        "search",
+		Description: "Search the web.",
+		LLMHint:     "expensive; cache results before re-calling",
+		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
+	})
+	rt, ok := a.tools["search"]
+	if !ok {
+		t.Fatal("expected tool 'search' to be registered")
+	}
+	if rt.LLMHint != "expensive; cache results before re-calling" {
+		t.Errorf("registeredTool.LLMHint = %q, want hint preserved", rt.LLMHint)
+	}
+}
+
+// LLMHint replaces the old AccessInternal trick of hiding directories
+// from the LLM. Authorization stays with Read/Write/List — admins can
+// still reach the directory; the hint is purely model-facing guidance
+// surfaced alongside the directory's caps in the system prompt.
+func TestDirectoryInventory_IncludesLLMHint(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterDirectory("/cache", DirectoryOpts{
+		Read: AccessUser, Write: AccessUser, List: AccessUser,
+		Description: "builder-managed cache",
+		LLMHint:     "internal cache; do not list or modify",
+	})
+
+	desc := buildToolDescription(a, AccessAdmin)
+	if !strings.Contains(desc, "/cache (read+write+list)") {
+		t.Errorf("expected /cache caps in inventory; got:\n%s", desc)
+	}
+	if !strings.Contains(desc, "builder-managed cache") {
+		t.Errorf("expected description in inventory; got:\n%s", desc)
+	}
+	if !strings.Contains(desc, "[internal cache; do not list or modify]") {
+		t.Errorf("expected LLMHint in inventory; got:\n%s", desc)
+	}
+}
+
+// Without an LLMHint the inventory line stays clean (no trailing brackets).
+func TestDirectoryInventory_OmitsEmptyLLMHint(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterDirectory("/uploads", DirectoryOpts{
+		Read: AccessUser, Write: AccessUser, List: AccessUser,
+		Description: "user uploads",
+	})
+
+	desc := buildToolDescription(a, AccessUser)
+	if !strings.Contains(desc, "- /uploads (read+write+list) — user uploads\n") {
+		t.Errorf("expected clean inventory line without trailing brackets; got:\n%s", desc)
+	}
+}
+
 // Declarations are rendered by the shared RenderToolDecls helper; verify
 // the expected TypeScript surface from a list of registered tools.
 func TestRegisteredToolsRenderToDecls(t *testing.T) {

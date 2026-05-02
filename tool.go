@@ -32,8 +32,17 @@ type AnyTool interface {
 //	    Access:      agentsdk.AccessUser,
 //	})
 type Tool[In any, Out any] struct {
-	Name          string
-	Description   string
+	Name        string
+	Description string
+
+	// LLMHint is optional model-only guidance — usage tips, deprecation
+	// warnings, "prefer X over Y" notes — that you don't want to leak to
+	// member UIs that render Description (e.g. the agent dashboard's
+	// Tools tab). When this struct is later lowered into goai.Tool the
+	// hint is appended to Description in `[brackets]`; goai.Tool itself
+	// has no LLMHint field (it mirrors ai-sdk's LanguageModelV4FunctionTool).
+	LLMHint string
+
 	Execute       func(ctx context.Context, input In) (Out, error)
 	Access        Access
 	InputExamples []In
@@ -45,6 +54,7 @@ type Tool[In any, Out any] struct {
 type registeredTool struct {
 	Name          string
 	Description   string
+	LLMHint       string
 	Access        Access
 	InputSchema   *schema.Schema
 	OutputSchema  *schema.Schema
@@ -110,6 +120,7 @@ func (t *Tool[In, Out]) toRegistered() *registeredTool {
 	return &registeredTool{
 		Name:          name,
 		Description:   t.Description,
+		LLMHint:       t.LLMHint,
 		Access:        access,
 		InputSchema:   inSchema,
 		OutputSchema:  outSchema,

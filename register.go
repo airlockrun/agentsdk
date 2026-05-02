@@ -201,6 +201,7 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 		Write:          opts.Write,
 		List:           opts.List,
 		Description:    opts.Description,
+		LLMHint:        opts.LLMHint,
 		RetentionHours: opts.RetentionHours,
 	})
 }

@@ -51,9 +51,7 @@ func WithCaller(ctx context.Context, c Caller) context.Context {
 
 // CallerFrom returns the Caller attached to ctx, defaulting to
 // AccessPublic when none is set. This is the fail-closed default:
-// forgetting to tag ctx denies access to anything user/admin/internal.
-// AccessInternal is intentionally unreachable here — internal directories
-// are reserved for builder Go code, which doesn't pass through this gate.
+// forgetting to tag ctx denies access to anything user-or-above.
 func CallerFrom(ctx context.Context) Caller {
 	if v, ok := ctx.Value(callerCtxKey{}).(Caller); ok {
 		if v.Access == "" {
@@ -129,7 +127,8 @@ func (a *Agent) lookupDirectory(p string) *Directory {
 }
 
 // dirCap returns the directory's access cap for `op`. Delete folds into
-// Write.
+// Write. Unknown ops fall back to AccessAdmin (deny all but admin) so
+// future op tags fail closed if added without updating this switch.
 func dirCap(d *Directory, op FileOp) Access {
 	switch op {
 	case OpRead:
@@ -139,7 +138,7 @@ func dirCap(d *Directory, op FileOp) Access {
 	case OpList:
 		return d.List
 	}
-	return AccessInternal
+	return AccessAdmin
 }
 
 // hasPublicDirCap reports whether at least one registered directory grants

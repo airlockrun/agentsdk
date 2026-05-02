@@ -24,9 +24,15 @@ import (
 // from the hydrated DB/sync payload; the agent assembles it from the
 // registered-tool schemas in tests. Both paths go through the same
 // renderer so the LLM sees one format.
+//
+// LLMHint is optional model-only guidance that pairs with Description
+// (which may also surface in member-facing UIs). When non-empty it's
+// appended to the JSDoc block in `[brackets]` so the LLM gets the
+// extra steer without polluting the user-visible description.
 type ToolRender struct {
 	Name          string
 	Description   string
+	LLMHint       string
 	InputSchema   json.RawMessage
 	OutputSchema  json.RawMessage
 	InputExamples []json.RawMessage
@@ -52,12 +58,17 @@ func renderToolDecl(b *strings.Builder, t ToolRender) {
 	inSchema := decodeSchema(t.InputSchema)
 	outSchema := decodeSchema(t.OutputSchema)
 
-	// JSDoc block: description + @example lines.
+	// JSDoc block: description (+ optional LLMHint in brackets) + @example lines.
 	b.WriteString("/**\n")
 	for _, line := range strings.Split(strings.TrimSpace(t.Description), "\n") {
 		b.WriteString(" * ")
 		b.WriteString(line)
 		b.WriteString("\n")
+	}
+	if hint := strings.TrimSpace(t.LLMHint); hint != "" {
+		b.WriteString(" * [")
+		b.WriteString(hint)
+		b.WriteString("]\n")
 	}
 	for _, ex := range t.InputExamples {
 		b.WriteString(" * @example ")

@@ -62,26 +62,6 @@ func TestCheckFileAccess_InvalidPath(t *testing.T) {
 	}
 }
 
-// TestCheckFileAccess_InternalDenied verifies that an Internal
-// directory denies every caller — including a would-be admin. Internal
-// is unreachable through CheckFileAccess by construction; only trusted
-// builder Go code (skipping the gate) can read/write internal dirs.
-func TestCheckFileAccess_InternalDenied(t *testing.T) {
-	a, _ := testAgent(t)
-	a.RegisterDirectory("/cache", DirectoryOpts{
-		Read: AccessInternal, Write: AccessInternal, List: AccessInternal,
-	})
-	for _, lvl := range []Access{AccessPublic, AccessUser, AccessAdmin} {
-		ctx := WithCaller(context.Background(), Caller{Access: lvl})
-		if err := a.CheckFileAccess(ctx, "/cache/x", OpRead); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("internal dir should deny %s for read; got %v", lvl, err)
-		}
-		if err := a.CheckFileAccess(ctx, "/cache/x", OpWrite); !errors.Is(err, ErrNotFound) {
-			t.Fatalf("internal dir should deny %s for write; got %v", lvl, err)
-		}
-	}
-}
-
 // TestCheckFileAccess_LongestPrefix verifies nested directory
 // registrations: the most-specific path covering the request wins.
 func TestCheckFileAccess_LongestPrefix(t *testing.T) {

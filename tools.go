@@ -288,27 +288,21 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	}
 
 	// Directory inventory — which paths the LLM can read/write/list, and
-	// at what access level the current run satisfies each cap.
-	// AccessInternal directories are filtered out entirely (the LLM never
-	// sees them).
-	visible := make([]*Directory, 0, len(agent.directories))
-	for _, d := range agent.directories {
-		if d.Read == AccessInternal && d.Write == AccessInternal && d.List == AccessInternal {
-			continue
-		}
-		visible = append(visible, d)
-	}
-	if len(visible) > 0 {
+	// at what access level the current run satisfies each cap. Builders
+	// who want to steer the model away from a directory (without breaking
+	// admin reachability) set Directory.LLMHint, appended in parentheses
+	// after the description.
+	if len(agent.directories) > 0 {
 		b.WriteString("\nDirectories registered for this agent (paths your code can use):\n")
-		for _, d := range visible {
+		for _, d := range agent.directories {
 			caps := []string{}
-			if d.Read != AccessInternal && accessSatisfies(callerAccess, d.Read) {
+			if accessSatisfies(callerAccess, d.Read) {
 				caps = append(caps, "read")
 			}
-			if d.Write != AccessInternal && accessSatisfies(callerAccess, d.Write) {
+			if accessSatisfies(callerAccess, d.Write) {
 				caps = append(caps, "write")
 			}
-			if d.List != AccessInternal && accessSatisfies(callerAccess, d.List) {
+			if accessSatisfies(callerAccess, d.List) {
 				caps = append(caps, "list")
 			}
 			capsStr := "no access"
@@ -319,11 +313,14 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 			if desc == "" && d.Path == reservedTmpPath {
 				desc = "framework scratch (truncated tool output, generated media)"
 			}
+			line := fmt.Sprintf("- %s (%s)", d.Path, capsStr)
 			if desc != "" {
-				b.WriteString(fmt.Sprintf("- %s (%s) — %s\n", d.Path, capsStr, desc))
-			} else {
-				b.WriteString(fmt.Sprintf("- %s (%s)\n", d.Path, capsStr))
+				line += " — " + desc
 			}
+			if d.LLMHint != "" {
+				line += " [" + d.LLMHint + "]"
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 
@@ -331,7 +328,11 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	if len(agent.topics) > 0 {
 		b.WriteString("\nNotification topics (subscribe the current conversation to receive notifications):\n")
 		for slug, def := range agent.topics {
-			b.WriteString(fmt.Sprintf("- topic_%s.subscribe() / topic_%s.unsubscribe() — %s\n", slug, slug, def.Description))
+			line := fmt.Sprintf("- topic_%s.subscribe() / topic_%s.unsubscribe() — %s", slug, slug, def.Description)
+			if def.LLMHint != "" {
+				line += " [" + def.LLMHint + "]"
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 
