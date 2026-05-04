@@ -144,7 +144,7 @@ type Action struct {
 // metadata so the LLM can refer to "Q1 Report.pdf" while the path uses a
 // uuid-prefixed safe filename.
 type FileInfo struct {
-	Path         string    `json:"path"`         // absolute, e.g. "/uploads/foo.png"
+	Path         string    `json:"path"`         // S3-style storage path, e.g. "uploads/foo.png"
 	Filename     string    `json:"filename"`     // original upload name; S3 metadata
 	ContentType  string    `json:"contentType"`
 	Size         int64     `json:"size"`
@@ -215,18 +215,17 @@ type PromptInput struct {
 
 // Directory is the self-contained declaration registered via
 // agent.RegisterDirectory. Each directory owns an S3 prefix
-// ("agents/{agentID}{Path}") and gates access through three independent
+// ("agents/{agentID}/{Path}") and gates access through three independent
 // caps.
 //
-// The framework auto-registers a reserved directory "/tmp" at
-// Read=Write=List=AccessUser; builder calls with Path="/tmp" silently
+// The framework auto-registers a reserved directory "tmp" at
+// Read=Write=List=AccessUser; builder calls with Path="tmp" silently
 // keep the framework's caps (Description may still be supplied).
 //
-// Read, Write, and List are independent. delete folds into Write
-// (POSIX-style: write on the parent governs unlink), so DeleteFile
-// requires Write access.
+// Read, Write, and List are independent. delete folds into Write (write
+// on the parent governs unlink), so DeleteFile requires Write access.
 type Directory struct {
-	Path        string // absolute path, e.g. "/reports"; no `..` or `//`; no trailing slash
+	Path        string // S3-style path with no leading '/', e.g. "reports"; no '..' or '//'; no trailing slash
 	Read        Access // gates ReadFile / OpenFile / StatFile + the public read route
 	Write       Access // gates WriteFile / DeleteFile + the public write route
 	List        Access // gates ListDir
@@ -277,7 +276,8 @@ type DirectoryDef struct {
 }
 
 // FileOp tags an operation passed to CheckFileAccess. Delete folds into
-// OpWrite (POSIX-style); there is no separate OpDelete.
+// OpWrite (write on the parent governs unlink); there is no separate
+// OpDelete.
 type FileOp string
 
 const (
@@ -529,10 +529,10 @@ type SyncResponse struct {
 	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
 	// PublicStorageBase is the URL prefix at which directories are reachable
 	// on the agent's subdomain, ending without a trailing slash. Callers
-	// append the absolute path (e.g. "/reports/q1.csv") to construct a URL.
-	// Of the form https://{slug}.{agentDomain}/__air/storage. The proxy
-	// enforces the directory's Read cap at fetch time — public dirs serve
-	// unauthenticated, user/admin dirs require subdomain login
+	// join with '/' and the storage path (e.g. "reports/q1.csv") to
+	// construct a URL: "https://{slug}.{domain}/__air/storage/reports/q1.csv".
+	// The proxy enforces the directory's Read cap at fetch time — public
+	// dirs serve unauthenticated, user/admin dirs require subdomain login
 	// (redirect-on-missing-cookie).
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
@@ -605,8 +605,9 @@ type ProxyRequest struct {
 }
 
 // ShareFileRequest is the body for POST /api/agent/storage/share.
-// Path is an absolute storage path; ExpiresSeconds caps how long the
-// returned URL is valid for. Server defaults to 1h if 0, caps at 24h.
+// Path is an S3-style storage path (no leading slash); ExpiresSeconds
+// caps how long the returned URL is valid for. Server defaults to 1h if
+// 0, caps at 24h.
 type ShareFileRequest struct {
 	Path           string `json:"path"`
 	ExpiresSeconds int64  `json:"expiresSeconds,omitempty"`

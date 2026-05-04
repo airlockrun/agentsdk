@@ -354,7 +354,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			return fileInfoToJS(vm, info)
 		})
 
-		// deleteFile(path) — folds into Write cap (POSIX-style).
+		// deleteFile(path) — folds into Write cap (write on the parent governs unlink).
 		vm.Set("deleteFile", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
@@ -596,12 +596,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 					req.Timeout = int(v.ToInteger())
 				}
 				if v := opts.Get("saveAs"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
-					// saveAs is an absolute path under a registered directory
+					// saveAs is a storage path under a registered directory
 					// the caller has Write access to. Airlock just writes
 					// wherever we tell it; the gate lives here.
 					path := v.String()
 					if path == "" {
-						panic(vm.NewGoError(fmt.Errorf("httpRequest: saveAs must be an absolute path")))
+						panic(vm.NewGoError(fmt.Errorf("httpRequest: saveAs must be a non-empty storage path")))
 					}
 					if err := agent.CheckFileAccess(run.checkedCtx(), path, OpWrite); err != nil {
 						panic(vm.NewGoError(fmt.Errorf("httpRequest: saveAs: %w", err)))
@@ -625,7 +625,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			result.Set("contentType", resp.ContentType)
 			result.Set("size", resp.Size)
 			if resp.SavedTo != "" {
-				// Airlock returns the absolute path; expose it as a string so
+				// Airlock returns the storage path; expose it as a string so
 				// the LLM can pass it directly to readFile/readBytes/
 				// attachToContext/etc.
 				result.Set("savedTo", resp.SavedTo)
@@ -666,7 +666,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 
 		// attachToContext(path) — load a stored file so the model can see it
-		// on the next turn. `path` is an absolute path; idempotent per run;
+		// on the next turn. `path` is a storage path; idempotent per run;
 		// bytes are collected on run.pendingAttachments and drained into the
 		// run_js tool.Result by buildRunJSTool.
 		vm.Set("attachToContext", func(call goja.FunctionCall) goja.Value {
@@ -706,7 +706,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			// Airlock's attachref resolver picks this up on the LLM-stream and
 			// session-append paths, canonicalizes to llm/agents/<id>/<path>,
 			// and either presigns a URL or inlines base64. The sentinel carries
-			// the absolute path so the resolver can presign the right S3 object.
+			// the storage path so the resolver can presign the right S3 object.
 			run.mu.Lock()
 			run.pendingAttachments = append(run.pendingAttachments, tool.Attachment{
 				Data:     "s3ref:" + path,
@@ -784,8 +784,8 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 
 		// generateImage(prompt, opts?) → { file: FileInfo, mimeType, size }
-		// opts: { saveAs?, size?, aspectRatio?, seed? } — saveAs is an
-		// absolute path under a registered directory; omitted writes to /tmp
+		// opts: { saveAs?, size?, aspectRatio?, seed? } — saveAs is a
+		// storage path under a registered directory; omitted writes to "tmp"
 		// with an auto-generated filename.
 		vm.Set("generateImage", func(call goja.FunctionCall) goja.Value {
 			prompt := call.Argument(0).String()
@@ -799,7 +799,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
 					saveAs = v.String()
 					if saveAs == "" {
-						panic(vm.NewGoError(fmt.Errorf("generateImage: saveAs must be an absolute path")))
+						panic(vm.NewGoError(fmt.Errorf("generateImage: saveAs must be a non-empty storage path")))
 					}
 					if err := agent.CheckFileAccess(run.checkedCtx(), saveAs, OpWrite); err != nil {
 						panic(vm.NewGoError(fmt.Errorf("generateImage: saveAs: %w", err)))
@@ -824,8 +824,8 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 
 		// speak(text, opts?) → { file: FileInfo, mimeType, size }
-		// opts: { saveAs?, voice?, outputFormat?, speed? } — saveAs is an
-		// absolute path under a registered directory.
+		// opts: { saveAs?, voice?, outputFormat?, speed? } — saveAs is a
+		// storage path under a registered directory.
 		vm.Set("speak", func(call goja.FunctionCall) goja.Value {
 			text := call.Argument(0).String()
 			if text == "" {
@@ -838,7 +838,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				if v := o.Get("saveAs"); v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) {
 					saveAs = v.String()
 					if saveAs == "" {
-						panic(vm.NewGoError(fmt.Errorf("speak: saveAs must be an absolute path")))
+						panic(vm.NewGoError(fmt.Errorf("speak: saveAs must be a non-empty storage path")))
 					}
 					if err := agent.CheckFileAccess(run.checkedCtx(), saveAs, OpWrite); err != nil {
 						panic(vm.NewGoError(fmt.Errorf("speak: saveAs: %w", err)))

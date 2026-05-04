@@ -137,7 +137,7 @@ func New(cfg Config) *Agent {
 	}
 	a.logger = logger
 	// Framework-owned scratch directory — used by run_js output truncation
-	// and generated media. Builders may RegisterDirectory("/tmp", ...); the
+	// and generated media. Builders may RegisterDirectory("tmp", ...); the
 	// register helper preserves the framework's caps (the description may
 	// still be supplied) so both sides share the same directory.
 	a.directories = append(a.directories, &Directory{

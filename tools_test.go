@@ -87,15 +87,15 @@ func TestRegisterTool_PreservesLLMHint(t *testing.T) {
 // surfaced alongside the directory's caps in the system prompt.
 func TestDirectoryInventory_IncludesLLMHint(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("/cache", DirectoryOpts{
+	a.RegisterDirectory("cache", DirectoryOpts{
 		Read: AccessUser, Write: AccessUser, List: AccessUser,
 		Description: "builder-managed cache",
 		LLMHint:     "internal cache; do not list or modify",
 	})
 
 	desc := buildToolDescription(a, AccessAdmin)
-	if !strings.Contains(desc, "/cache (read+write+list)") {
-		t.Errorf("expected /cache caps in inventory; got:\n%s", desc)
+	if !strings.Contains(desc, "cache (read+write+list)") {
+		t.Errorf("expected cache caps in inventory; got:\n%s", desc)
 	}
 	if !strings.Contains(desc, "builder-managed cache") {
 		t.Errorf("expected description in inventory; got:\n%s", desc)
@@ -108,13 +108,13 @@ func TestDirectoryInventory_IncludesLLMHint(t *testing.T) {
 // Without an LLMHint the inventory line stays clean (no trailing brackets).
 func TestDirectoryInventory_OmitsEmptyLLMHint(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("/uploads", DirectoryOpts{
+	a.RegisterDirectory("uploads", DirectoryOpts{
 		Read: AccessUser, Write: AccessUser, List: AccessUser,
 		Description: "user uploads",
 	})
 
 	desc := buildToolDescription(a, AccessUser)
-	if !strings.Contains(desc, "- /uploads (read+write+list) — user uploads\n") {
+	if !strings.Contains(desc, "- uploads (read+write+list) — user uploads\n") {
 		t.Errorf("expected clean inventory line without trailing brackets; got:\n%s", desc)
 	}
 }

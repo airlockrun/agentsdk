@@ -6,21 +6,22 @@ import (
 	"testing"
 )
 
-// TestNormalizePath covers the path-normalization rules — leading /, no
-// .., no //, no trailing slash, no root-only.
+// TestNormalizePath covers the path-normalization rules — slashless
+// canonical form, no .., no //, no trailing slash, no empty.
 func TestNormalizePath(t *testing.T) {
 	cases := []struct {
 		in   string
 		want string // empty when an error is expected
 	}{
-		{"/reports/q1.csv", "/reports/q1.csv"},
-		{"/reports/q1.csv/", "/reports/q1.csv"}, // trailing slash stripped
-		{"/", ""},                               // root-only rejected
-		{"", ""},                                // empty rejected
-		{"reports/q1.csv", ""},                  // missing leading /
-		{"/reports/../etc/passwd", ""},          // .. segment
-		{"/reports//q1.csv", ""},                // empty segment
-		{"/.", ""},                              // . segment
+		{"reports/q1.csv", "reports/q1.csv"},
+		{"reports/q1.csv/", "reports/q1.csv"}, // trailing slash stripped
+		{"reports", "reports"},                // bare directory is fine
+		{"", ""},                              // empty rejected
+		{"/", ""},                             // root-only rejected
+		{"/reports/q1.csv", ""},               // leading slash rejected
+		{"reports/../etc/passwd", ""},         // .. segment
+		{"reports//q1.csv", ""},               // empty segment
+		{"reports/.", ""},                     // . segment
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
@@ -46,7 +47,7 @@ func TestNormalizePath(t *testing.T) {
 func TestCheckFileAccess_UnregisteredPath(t *testing.T) {
 	a, _ := testAgent(t)
 	ctx := WithCaller(context.Background(), Caller{Access: AccessAdmin})
-	if err := a.CheckFileAccess(ctx, "/nowhere/foo", OpRead); !errors.Is(err, ErrNotFound) {
+	if err := a.CheckFileAccess(ctx, "nowhere/foo", OpRead); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -66,22 +67,22 @@ func TestCheckFileAccess_InvalidPath(t *testing.T) {
 // registrations: the most-specific path covering the request wins.
 func TestCheckFileAccess_LongestPrefix(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("/reports", DirectoryOpts{
+	a.RegisterDirectory("reports", DirectoryOpts{
 		Read: AccessUser, Write: AccessAdmin, List: AccessUser,
 	})
-	a.RegisterDirectory("/reports/public", DirectoryOpts{
+	a.RegisterDirectory("reports/public", DirectoryOpts{
 		Read: AccessPublic, Write: AccessAdmin, List: AccessPublic,
 	})
 
 	publicCtx := WithCaller(context.Background(), Caller{Access: AccessPublic})
 
 	// Path under the more-specific public dir — public read allowed.
-	if err := a.CheckFileAccess(publicCtx, "/reports/public/foo.csv", OpRead); err != nil {
-		t.Fatalf("expected /reports/public read to succeed for public, got %v", err)
+	if err := a.CheckFileAccess(publicCtx, "reports/public/foo.csv", OpRead); err != nil {
+		t.Fatalf("expected reports/public read to succeed for public, got %v", err)
 	}
 	// Path under the less-specific dir — public read denied.
-	if err := a.CheckFileAccess(publicCtx, "/reports/private/foo.csv", OpRead); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected /reports private read to deny public, got %v", err)
+	if err := a.CheckFileAccess(publicCtx, "reports/private/foo.csv", OpRead); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected reports private read to deny public, got %v", err)
 	}
 }
 
@@ -89,20 +90,20 @@ func TestCheckFileAccess_LongestPrefix(t *testing.T) {
 // attached) is treated as AccessPublic and denies anything user-or-above.
 func TestCheckFileAccess_FailClosed(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("/reports", DirectoryOpts{
+	a.RegisterDirectory("reports", DirectoryOpts{
 		Read: AccessUser, Write: AccessUser, List: AccessUser,
 	})
-	if err := a.CheckFileAccess(context.Background(), "/reports/x", OpRead); !errors.Is(err, ErrNotFound) {
+	if err := a.CheckFileAccess(context.Background(), "reports/x", OpRead); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected fail-closed deny on plain ctx, got %v", err)
 	}
 }
 
-// TestCheckFileAccess_DeleteFoldsIntoWrite verifies the POSIX-style
-// folding: a caller with Write but not (a separate) delete cap can
-// still call deleteFile (because there is no separate cap).
+// TestCheckFileAccess_DeleteFoldsIntoWrite verifies that delete folds
+// into the Write cap: a caller with Write can call deleteFile (there is
+// no separate delete cap).
 func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("/uploads", DirectoryOpts{
+	a.RegisterDirectory("uploads", DirectoryOpts{
 		Read: AccessUser, Write: AccessUser, List: AccessUser,
 	})
 	ctx := WithCaller(context.Background(), Caller{Access: AccessUser})
@@ -110,7 +111,7 @@ func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
 	// path bypasses CheckFileAccess (trusted), but the VM binding for
 	// deleteFile() goes through CheckFileAccess(OpWrite) — verify the
 	// gate accepts a user-level caller.
-	if err := a.CheckFileAccess(ctx, "/uploads/foo", OpWrite); err != nil {
+	if err := a.CheckFileAccess(ctx, "uploads/foo", OpWrite); err != nil {
 		t.Fatalf("expected user write to succeed, got %v", err)
 	}
 }
@@ -120,20 +121,20 @@ func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
 // gate enforces each cap separately.
 func TestCheckFileAccess_CapsAreIndependent(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("/inbox", DirectoryOpts{
+	a.RegisterDirectory("inbox", DirectoryOpts{
 		Read:  AccessAdmin, // contents are admin-only
 		Write: AccessUser,  // anyone signed-in can drop a file
 		List:  AccessUser,  // anyone can see filenames
 	})
 	userCtx := WithCaller(context.Background(), Caller{Access: AccessUser})
 
-	if err := a.CheckFileAccess(userCtx, "/inbox/foo", OpRead); !errors.Is(err, ErrNotFound) {
+	if err := a.CheckFileAccess(userCtx, "inbox/foo", OpRead); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("user should not have read access to admin-read dir, got %v", err)
 	}
-	if err := a.CheckFileAccess(userCtx, "/inbox/foo", OpList); err != nil {
+	if err := a.CheckFileAccess(userCtx, "inbox/foo", OpList); err != nil {
 		t.Fatalf("user should have list access, got %v", err)
 	}
-	if err := a.CheckFileAccess(userCtx, "/inbox/foo", OpWrite); err != nil {
+	if err := a.CheckFileAccess(userCtx, "inbox/foo", OpWrite); err != nil {
 		t.Fatalf("user should have write access, got %v", err)
 	}
 }

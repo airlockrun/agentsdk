@@ -87,9 +87,9 @@ func TestVM(t *testing.T) {
 
 	t.Run("deleteFile calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `deleteFile("/uploads/a.txt")`)
+		_, err := executeJS(run.vmRuntime(), `deleteFile("uploads/a.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -104,9 +104,9 @@ func TestVM(t *testing.T) {
 
 	t.Run("listDir returns array", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `JSON.stringify(listDir("/uploads/"))`)
+		result, err := executeJS(run.vmRuntime(), `JSON.stringify(listDir("uploads/"))`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,23 +117,23 @@ func TestVM(t *testing.T) {
 
 	t.Run("writeFile calls backend with absolute path", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `writeFile("/uploads/test.txt", "hello", "text/plain")`)
+		_, err := executeJS(run.vmRuntime(), `writeFile("uploads/test.txt", "hello", "text/plain")`)
 		if err != nil {
 			t.Fatal(err)
 		}
 		reqs := mock.RequestsByPath("/api/agent/storage/uploads/test.txt")
 		if len(reqs) != 1 || reqs[0].Method != "PUT" {
-			t.Fatalf("expected PUT to storage at /uploads/test.txt, got %v", reqs)
+			t.Fatalf("expected PUT to storage at uploads/test.txt, got %v", reqs)
 		}
 	})
 
 	t.Run("readFile calls backend with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `readFile("/uploads/test.txt")`)
+		result, err := executeJS(run.vmRuntime(), `readFile("uploads/test.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -150,14 +150,14 @@ func TestVM(t *testing.T) {
 		// a plain function), or you get
 		// "TypeError: Constructor TypedArray requires 'new'".
 		a, _ := testAgent(t)
-		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
 		// Mock backend returns the literal string "mock-file-content"
 		// (17 bytes). Verify .length is correct, indexed access works,
 		// .slice returns a typed array with the right bytes, and
 		// Array.from materializes a real number array.
 		result, err := executeJS(run.vmRuntime(), `
-			var b = readBytes("/uploads/test.txt");
+			var b = readBytes("uploads/test.txt");
 			JSON.stringify({
 				ctor: b.constructor.name,
 				length: b.length,
@@ -231,15 +231,15 @@ func TestVM(t *testing.T) {
 
 	t.Run("statFile returns FileInfo with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `var fi = statFile("/uploads/test.txt"); fi.path + ":" + fi.size`)
+		result, err := executeJS(run.vmRuntime(), `var fi = statFile("uploads/test.txt"); fi.path + ":" + fi.size`)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Mock backend returns "/tmp/test.txt" — path comes from the
+		// Mock backend returns "tmp/test.txt" — path comes from the
 		// server response, the test only verifies fields are surfaced.
-		if result != "/tmp/test.txt:42" {
+		if result != "tmp/test.txt:42" {
 			t.Fatalf("expected mock path:size, got %s", result)
 		}
 	})

@@ -13,10 +13,10 @@ import (
 
 func TestTranscribeAudioBinding(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `transcribeAudio("/uploads/voice.ogg", { language: "en", prompt: "meeting" })`)
+	out, err := executeJS(run.vmRuntime(), `transcribeAudio("uploads/voice.ogg", { language: "en", prompt: "meeting" })`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,14 +69,14 @@ func TestTranscribeAudioBinding(t *testing.T) {
 
 func TestGenerateImageBinding(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `generateImage("a sunset", { saveAs: "/uploads/out.png", size: "1024x1024" })`)
+	out, err := executeJS(run.vmRuntime(), `generateImage("a sunset", { saveAs: "uploads/out.png", size: "1024x1024" })`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"path": "/uploads/out.png"`) {
+	if !strings.Contains(out, `"path": "uploads/out.png"`) {
 		t.Fatalf("expected file path /uploads/out.png in result, got %s", out)
 	}
 	if !strings.Contains(out, `"mimeType": "image/png"`) {
@@ -112,25 +112,25 @@ func TestGenerateImageAutoKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Auto-generated path lives in the framework's /tmp directory.
-	if !strings.Contains(out, `"path": "/tmp/generated/image-`) {
-		t.Fatalf("expected file path under /tmp/generated/, got %s", out)
+	if !strings.Contains(out, `"path": "tmp/generated/image-`) {
+		t.Fatalf("expected file path under tmp/generated/, got %s", out)
 	}
 	storagePuts := mock.RequestsByPath("/api/agent/storage/tmp/generated/image-")
 	if len(storagePuts) == 0 {
-		t.Fatal("expected PUT under /tmp/generated/")
+		t.Fatal("expected PUT under tmp/generated/")
 	}
 }
 
 func TestSpeakBinding(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `speak("hello world", { saveAs: "/uploads/voice.mp3", voice: "alloy" })`)
+	out, err := executeJS(run.vmRuntime(), `speak("hello world", { saveAs: "uploads/voice.mp3", voice: "alloy" })`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out, `"path": "/uploads/voice.mp3"`) {
+	if !strings.Contains(out, `"path": "uploads/voice.mp3"`) {
 		t.Fatalf("expected file path /uploads/voice.mp3 in result, got %s", out)
 	}
 
