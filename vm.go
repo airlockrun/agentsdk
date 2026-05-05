@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/tsrender"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/websearch"
@@ -937,9 +938,15 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		obj := vm.NewObject()
 		mcpSlug := slug // capture for closures
 
-		for _, schema := range mcpSchemas[slug] {
+		schemas := mcpSchemas[slug]
+		names := make([]string, len(schemas))
+		for i, schema := range schemas {
+			names[i] = schema.Name
+		}
+		jsNames := tsrender.JSToolNames(names)
+		for _, schema := range schemas {
 			toolName := schema.Name
-			obj.Set(toolName, func(call goja.FunctionCall) goja.Value {
+			obj.Set(jsNames[toolName], func(call goja.FunctionCall) goja.Value {
 				return invokeMCPTool(vm, run.ctx, handle, mcpSlug, toolName, call.Argument(0))
 			})
 		}
@@ -969,13 +976,6 @@ func invokeMCPTool(vm *goja.Runtime, ctx context.Context, handle *MCPHandle, mcp
 		}
 		panic(vm.NewGoError(fmt.Errorf("mcp_%s.%s: %w", mcpSlug, toolName, err)))
 	}
-	if resp.IsError {
-		text := "MCP tool error"
-		if len(resp.Content) > 0 {
-			text = resp.Content[0].Text
-		}
-		panic(vm.NewGoError(fmt.Errorf("mcp_%s.%s: %s", mcpSlug, toolName, text)))
-	}
 	var out strings.Builder
 	for _, c := range resp.Content {
 		if c.Type == "text" {
@@ -983,11 +983,22 @@ func invokeMCPTool(vm *goja.Runtime, ctx context.Context, handle *MCPHandle, mcp
 		}
 	}
 	raw := out.String()
+	var content any = raw
 	var parsed any
 	if jsonErr := json.Unmarshal([]byte(raw), &parsed); jsonErr == nil {
-		return vm.ToValue(parsed)
+		content = parsed
 	}
-	return vm.ToValue(raw)
+	if resp.IsError {
+		msg := "MCP tool error"
+		if len(resp.Content) > 0 && resp.Content[0].Text != "" {
+			msg = resp.Content[0].Text
+		}
+		errInst, _ := vm.New(vm.Get("Error"), vm.ToValue(msg))
+		errInst.Set("isError", true)
+		errInst.Set("content", content)
+		panic(vm.ToValue(errInst))
+	}
+	return vm.ToValue(content)
 }
 
 // parseDisplayParts converts a goja Value to []DisplayPart.

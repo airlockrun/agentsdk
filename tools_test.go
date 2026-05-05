@@ -81,10 +81,11 @@ func TestRegisterTool_PreservesLLMHint(t *testing.T) {
 	}
 }
 
-// LLMHint replaces the old AccessInternal trick of hiding directories
-// from the LLM. Authorization stays with Read/Write/List — admins can
-// still reach the directory; the hint is purely model-facing guidance
-// surfaced alongside the directory's caps in the system prompt.
+// LLMHint is the way to steer the model away from a directory while
+// keeping it reachable in code. Authorization stays with Read/Write/List
+// — admins can still reach the directory; the hint is purely model-
+// facing guidance surfaced alongside the directory's caps in the system
+// prompt.
 func TestDirectoryInventory_IncludesLLMHint(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterDirectory("cache", DirectoryOpts{
