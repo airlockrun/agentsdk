@@ -266,17 +266,17 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — read-only SQL against the agent's Postgres schema.\n")
 		b.WriteString("- execDB(sql, ...params) → {rowsAffected: N} — write SQL (INSERT/UPDATE/DELETE) against the agent's Postgres schema.\n")
 	}
-	b.WriteString("- readFile(path) → string — read a file as UTF-8 text (most common case). `path` is an absolute unix path like \"/uploads/orders.csv\".\n")
+	b.WriteString("- readFile(path) → string — read a file as UTF-8 text (most common case). `path` is an S3-style storage path with no leading slash, e.g. \"uploads/orders.csv\".\n")
 	b.WriteString("- readBytes(path) → Uint8Array — read a file as binary bytes. Use for images, PDFs, anything not text.\n")
 	b.WriteString("- writeFile(path, data, contentType?) → FileInfo — write a file. `data` is a string or Uint8Array. `contentType` is optional (auto-detected from extension when absent). Returns {path, filename, contentType, size, lastModified}.\n")
-	b.WriteString("- listDir(path, opts?) → FileInfo[] — list files. Non-recursive by default (one level only, like POSIX `ls`); pass {recursive: true} to walk the subtree. `path` may end with `/`.\n")
+	b.WriteString("- listDir(path, opts?) → FileInfo[] — list files. Non-recursive by default (one level only); pass {recursive: true} to walk the subtree. `path` may end with `/`.\n")
 	b.WriteString("- statFile(path) → FileInfo — metadata for a single file.\n")
 	b.WriteString("- fileExists(path) → boolean — sugar around statFile.\n")
 	b.WriteString("- deleteFile(path) — remove a file. Idempotent.\n")
-	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}. `source` accepts a path string.\n")
+	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}. `source` accepts a storage path.\n")
 	b.WriteString("- log(message) — emit a log line visible in the run timeline.\n")
 	b.WriteString("- webSearch(query, count?) → {results: [{title, url, snippet}], synthesis?, provider}\n")
-	b.WriteString("- httpRequest(url, opts?) → {status, headers, body, contentType, size, savedTo?} — HTML responses are converted to markdown by default; binary and large responses auto-saved to storage. `savedTo` is a path string; pass it to readFile(...) or attachToContext(...). Opts: {method, headers, body, timeout, saveAs, raw}; `saveAs` is an absolute path string.\n")
+	b.WriteString("- httpRequest(url, opts?) → {status, headers, body, contentType, size, savedTo?} — HTML responses are converted to markdown by default; binary and large responses auto-saved to storage. `savedTo` is a storage path; pass it to readFile(...) or attachToContext(...). Opts: {method, headers, body, timeout, saveAs, raw}; `saveAs` is a storage path with no leading slash.\n")
 	b.WriteString("- attachToContext(path) → string — load a stored file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files use readFile(path) instead.\n")
 	b.WriteString("- analyzeImage(path, question?) → string — sends a stored image to the platform's vision model and returns its reply. `question` defaults to \"Describe this image.\" Use this when the current chat model lacks vision; it routes to the configured vision_model regardless of which exec model is running.\n")
 	b.WriteString("- transcribeAudio(path, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. opts: {language?, prompt?, mimeType?}.\n")
@@ -288,27 +288,21 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	}
 
 	// Directory inventory — which paths the LLM can read/write/list, and
-	// at what access level the current run satisfies each cap.
-	// AccessInternal directories are filtered out entirely (the LLM never
-	// sees them).
-	visible := make([]*Directory, 0, len(agent.directories))
-	for _, d := range agent.directories {
-		if d.Read == AccessInternal && d.Write == AccessInternal && d.List == AccessInternal {
-			continue
-		}
-		visible = append(visible, d)
-	}
-	if len(visible) > 0 {
+	// at what access level the current run satisfies each cap. Builders
+	// who want to steer the model away from a directory (without breaking
+	// admin reachability) set Directory.LLMHint, appended in parentheses
+	// after the description.
+	if len(agent.directories) > 0 {
 		b.WriteString("\nDirectories registered for this agent (paths your code can use):\n")
-		for _, d := range visible {
+		for _, d := range agent.directories {
 			caps := []string{}
-			if d.Read != AccessInternal && accessSatisfies(callerAccess, d.Read) {
+			if accessSatisfies(callerAccess, d.Read) {
 				caps = append(caps, "read")
 			}
-			if d.Write != AccessInternal && accessSatisfies(callerAccess, d.Write) {
+			if accessSatisfies(callerAccess, d.Write) {
 				caps = append(caps, "write")
 			}
-			if d.List != AccessInternal && accessSatisfies(callerAccess, d.List) {
+			if accessSatisfies(callerAccess, d.List) {
 				caps = append(caps, "list")
 			}
 			capsStr := "no access"
@@ -319,11 +313,14 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 			if desc == "" && d.Path == reservedTmpPath {
 				desc = "framework scratch (truncated tool output, generated media)"
 			}
+			line := fmt.Sprintf("- %s (%s)", d.Path, capsStr)
 			if desc != "" {
-				b.WriteString(fmt.Sprintf("- %s (%s) — %s\n", d.Path, capsStr, desc))
-			} else {
-				b.WriteString(fmt.Sprintf("- %s (%s)\n", d.Path, capsStr))
+				line += " — " + desc
 			}
+			if d.LLMHint != "" {
+				line += " [" + d.LLMHint + "]"
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 
@@ -331,7 +328,11 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	if len(agent.topics) > 0 {
 		b.WriteString("\nNotification topics (subscribe the current conversation to receive notifications):\n")
 		for slug, def := range agent.topics {
-			b.WriteString(fmt.Sprintf("- topic_%s.subscribe() / topic_%s.unsubscribe() — %s\n", slug, slug, def.Description))
+			line := fmt.Sprintf("- topic_%s.subscribe() / topic_%s.unsubscribe() — %s", slug, slug, def.Description)
+			if def.LLMHint != "" {
+				line += " [" + def.LLMHint + "]"
+			}
+			b.WriteString(line + "\n")
 		}
 	}
 

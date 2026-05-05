@@ -91,6 +91,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		topics = append(topics, TopicDef{
 			Slug:        t.Slug,
 			Description: t.Description,
+			LLMHint:     t.LLMHint,
 			Access:      t.Access,
 		})
 	}
@@ -108,6 +109,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		tools = append(tools, ToolDef{
 			Name:          t.Name,
 			Description:   t.Description,
+			LLMHint:       t.LLMHint,
 			Access:        t.Access,
 			InputSchema:   inRaw,
 			OutputSchema:  outRaw,
@@ -140,11 +142,13 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	directories := make([]DirectoryDef, 0, len(a.directories))
 	for _, d := range a.directories {
 		directories = append(directories, DirectoryDef{
-			Path:        d.Path,
-			Read:        d.Read,
-			Write:       d.Write,
-			List:        d.List,
-			Description: d.Description,
+			Path:           d.Path,
+			Read:           d.Read,
+			Write:          d.Write,
+			List:           d.List,
+			Description:    d.Description,
+			LLMHint:        d.LLMHint,
+			RetentionHours: d.RetentionHours,
 		})
 	}
 

@@ -69,7 +69,7 @@ func NewMockAirlock() (*MockAirlock, string) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(FileInfo{
-			Path:        "/tmp/test.txt",
+			Path:        "tmp/test.txt",
 			Filename:    "test.txt",
 			Size:        42,
 			ContentType: "text/plain",

@@ -20,12 +20,15 @@ import (
 
 const maxToolSteps = 50
 
-// promptTimeout caps a single /prompt request server-side. Set slightly
-// below Airlock's 2m15s HTTP client timeout (airlock/trigger/dispatcher.go
-// promptTimeout) so the agent has a 15-second head start to interrupt the
-// VM, write a terminal run status, and finish the NDJSON stream cleanly
-// before Airlock's client gives up.
-const promptTimeout = 2 * time.Minute
+// promptTimeout is the agent-side hard ceiling on a single /prompt
+// request. The practical deadline lives on Airlock's side (a per-run timer
+// armed at 2 min by ForwardPrompt and pushed by ExtendRun, capped at
+// MaxExtensions × ExtendIncrement); when that timer fires, Airlock cancels
+// the request ctx and the agent's r.Context() drains. This ceiling is
+// purely defense in depth — covers the case where Airlock loses track of
+// the run (process restart) and the agent would otherwise spin forever.
+// Set generously above Airlock's PromptHTTPCeiling (35 min) plus grace.
+const promptTimeout = 40 * time.Minute
 
 // handlePrompt returns the HTTP handler for POST /prompt.
 // Uses Sol's Runner for the thinking loop, with agentsdk tools (run_js, request_upgrade).

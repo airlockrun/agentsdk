@@ -33,6 +33,40 @@ func TestRenderToolDecls_FromRawJSONSchema(t *testing.T) {
 	}
 }
 
+// LLMHint, when set, surfaces in the JSDoc block under the description in
+// `[brackets]`. This is the model-only steer that pairs with Description
+// (which may also surface in member-facing UIs).
+func TestRenderToolDecls_LLMHintInJSDoc(t *testing.T) {
+	in := json.RawMessage(`{"type":"object"}`)
+	out := json.RawMessage(`{"type":"object"}`)
+	got := RenderToolDecls([]ToolRender{{
+		Name:         "search",
+		Description:  "Search the web.",
+		LLMHint:      "expensive; cache results before re-calling",
+		InputSchema:  in,
+		OutputSchema: out,
+	}})
+	if !strings.Contains(got, " * Search the web.") {
+		t.Errorf("description should render in JSDoc:\n%s", got)
+	}
+	if !strings.Contains(got, " * [expensive; cache results before re-calling]") {
+		t.Errorf("LLMHint should render below description in brackets:\n%s", got)
+	}
+}
+
+// Without an LLMHint the JSDoc stays clean (no empty bracket line).
+func TestRenderToolDecls_OmitsEmptyLLMHint(t *testing.T) {
+	got := RenderToolDecls([]ToolRender{{
+		Name:         "search",
+		Description:  "Search the web.",
+		InputSchema:  json.RawMessage(`{"type":"object"}`),
+		OutputSchema: json.RawMessage(`{"type":"object"}`),
+	}})
+	if strings.Contains(got, "[]") {
+		t.Errorf("missing LLMHint should not produce empty brackets:\n%s", got)
+	}
+}
+
 func TestRenderMCPNamespace_Empty(t *testing.T) {
 	if got := RenderMCPNamespace("github", nil); got != "" {
 		t.Errorf("empty tools: want empty string, got %q", got)

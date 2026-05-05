@@ -15,7 +15,7 @@ import (
 // output truncation and media generation. Builders may RegisterDirectory
 // at this path — the register helper preserves the framework caps but
 // allows a custom Description.
-const reservedTmpPath = "/tmp"
+const reservedTmpPath = "tmp"
 
 // ErrNotFound is returned by CheckFileAccess and the storage methods for
 // both "directory not registered" and "caller does not have access" — the
@@ -51,9 +51,7 @@ func WithCaller(ctx context.Context, c Caller) context.Context {
 
 // CallerFrom returns the Caller attached to ctx, defaulting to
 // AccessPublic when none is set. This is the fail-closed default:
-// forgetting to tag ctx denies access to anything user/admin/internal.
-// AccessInternal is intentionally unreachable here — internal directories
-// are reserved for builder Go code, which doesn't pass through this gate.
+// forgetting to tag ctx denies access to anything user-or-above.
 func CallerFrom(ctx context.Context) Caller {
 	if v, ok := ctx.Value(callerCtxKey{}).(Caller); ok {
 		if v.Access == "" {
@@ -66,26 +64,32 @@ func CallerFrom(ctx context.Context) Caller {
 
 // --- Path normalization ---
 
-// normalizePath enforces:
-//   - leading '/'
-//   - no '..' segment
+// normalizePath enforces the storage-path conventions:
+//   - no leading '/' (paths are S3-style: "uploads/x.csv", not
+//     "/uploads/x.csv"). Leading slash is a hard error so the LLM and
+//     builders converge on one form.
+//   - no trailing '/' (canonical form has none)
 //   - no empty segment ('//')
-//   - no trailing '/' on the canonical form (root '/' is rejected)
+//   - no '.' or '..' segment
+//   - non-empty
 //
 // Returns the canonical path or ErrInvalidPath.
 func normalizePath(p string) (string, error) {
-	if p == "" || p[0] != '/' {
-		return "", fmt.Errorf("%w: must be absolute (start with '/')", ErrInvalidPath)
+	if p == "" {
+		return "", fmt.Errorf("%w: path is empty", ErrInvalidPath)
 	}
-	// Strip trailing slash unless it's just '/'.
-	if len(p) > 1 && p[len(p)-1] == '/' {
+	if p[0] == '/' {
+		return "", fmt.Errorf("%w: must be slashless (S3-style); got %q with leading '/'", ErrInvalidPath, p)
+	}
+	// Strip trailing slash.
+	if p[len(p)-1] == '/' {
 		p = p[:len(p)-1]
 	}
-	if p == "/" {
-		return "", fmt.Errorf("%w: root '/' is not a valid file path", ErrInvalidPath)
+	if p == "" {
+		return "", fmt.Errorf("%w: path is empty after trimming '/'", ErrInvalidPath)
 	}
 	// Walk segments, reject empty (//), '.', '..'.
-	for _, seg := range strings.Split(p[1:], "/") {
+	for _, seg := range strings.Split(p, "/") {
 		if seg == "" {
 			return "", fmt.Errorf("%w: empty segment ('//' in path)", ErrInvalidPath)
 		}
@@ -97,9 +101,9 @@ func normalizePath(p string) (string, error) {
 }
 
 // pathHasPrefix reports whether `p` lies under directory `dir`. Both must
-// be canonical (no trailing slash). A directory is its own prefix only at
-// directory granularity: dir="/reports" matches p="/reports/x" but NOT
-// p="/reportsx" — the segment boundary matters.
+// be canonical (slashless, no trailing slash). A directory is its own
+// prefix only at directory granularity: dir="reports" matches p="reports/x"
+// but NOT p="reportsx" — the segment boundary matters.
 func pathHasPrefix(p, dir string) bool {
 	if p == dir {
 		return true
@@ -129,7 +133,8 @@ func (a *Agent) lookupDirectory(p string) *Directory {
 }
 
 // dirCap returns the directory's access cap for `op`. Delete folds into
-// Write.
+// Write. Unknown ops fall back to AccessAdmin (deny all but admin) so
+// future op tags fail closed if added without updating this switch.
 func dirCap(d *Directory, op FileOp) Access {
 	switch op {
 	case OpRead:
@@ -139,7 +144,22 @@ func dirCap(d *Directory, op FileOp) Access {
 	case OpList:
 		return d.List
 	}
-	return AccessInternal
+	return AccessAdmin
+}
+
+// hasPublicDirCap reports whether at least one registered directory grants
+// AccessPublic for the given op. Used at VM bind time so file primitives
+// (readFile, writeFile, listDir, etc.) appear in a public-caller's
+// runtime only when there's actually some directory they could touch —
+// keeps the public attack surface tight and avoids dangling bindings
+// that would just throw on every CheckFileAccess.
+func (a *Agent) hasPublicDirCap(op FileOp) bool {
+	for _, d := range a.directories {
+		if dirCap(d, op) == AccessPublic {
+			return true
+		}
+	}
+	return false
 }
 
 // --- Public access gate ---
@@ -231,27 +251,18 @@ func (a *Agent) StatFile(ctx context.Context, path string) (FileInfo, error) {
 // ListOpts controls ListDir.
 type ListOpts struct {
 	// Recursive walks the entire subtree. Zero value (false) lists only
-	// files directly under the path (POSIX ls).
+	// files directly under the path (one level only, like `ls`).
 	Recursive bool
 }
 
-// ListDir enumerates files under `path`. Trusted: no access check.
+// ListDir enumerates files under `path`. Trusted: no access check. The
+// empty string lists the agent root.
 func (a *Agent) ListDir(ctx context.Context, path string, opts ListOpts) ([]FileInfo, error) {
-	// path here may be a directory prefix (we want it to end with `/` to
-	// match cleanly), but normalizePath strips trailing slashes. Accept a
-	// "/" or "/something" form, store back the listing prefix.
-	prefix := path
-	if prefix == "" {
-		return nil, ErrInvalidPath
-	}
-	if prefix[0] != '/' {
-		return nil, fmt.Errorf("%w: must be absolute (start with '/')", ErrInvalidPath)
-	}
-	// Reject `..` / empty segments (allow trailing slash on a directory
-	// listing — that's expected).
-	clean := strings.TrimRight(prefix, "/")
-	if clean != "" {
-		if _, err := normalizePath(clean); err != nil {
+	// path is a directory prefix; trailing slash is allowed (and expected
+	// for clarity), normalizePath rejects it for files.
+	prefix := strings.TrimRight(path, "/")
+	if prefix != "" {
+		if _, err := normalizePath(prefix); err != nil {
 			return nil, err
 		}
 	}
@@ -283,6 +294,33 @@ func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
 	return a.copyFileRaw(ctx, srcCanon, dstCanon)
 }
 
+// ShareFileURL returns a presigned, unauthenticated, time-limited URL
+// pointing at the given storage path. ttl <= 0 picks the server default
+// (1h); the server caps anything over 24h. The URL is signed for the
+// public S3 endpoint when configured, so it works from outside the docker
+// network (browsers, LLM providers, external tools). Trusted: no access
+// check — the JS binding gates LLM-supplied paths via CheckFileAccess.
+//
+// Use cases: embedding in markdown ([file](url)), sharing externally,
+// cases where the agent's authenticated /__air/storage subdomain route
+// isn't reachable for the recipient. For showing files in chat, prefer
+// printToUser({type:"file", source:path}).
+func (a *Agent) ShareFileURL(ctx context.Context, path string, ttl time.Duration) (*ShareFileResponse, error) {
+	canon, err := normalizePath(path)
+	if err != nil {
+		return nil, err
+	}
+	body := ShareFileRequest{
+		Path:           canon,
+		ExpiresSeconds: int64(ttl.Seconds()),
+	}
+	var resp ShareFileResponse
+	if err := a.client.doJSON(ctx, "POST", "/api/agent/storage/share", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // --- Internal helpers ---
 
 func pathBase(p string) string {
@@ -297,13 +335,13 @@ func pathBase(p string) string {
 // Whether the URL succeeds depends on the directory's Read cap and the
 // caller's auth state — see serveStoragePath on the airlock side.
 func (a *Agent) publicURLForPath(path string) string {
-	return a.publicStorageBaseSnapshot() + path
+	return a.publicStorageBaseSnapshot() + "/" + path
 }
 
 // --- HTTP client (raw helpers — Trusted Go API wraps these) ---
 
 func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, contentType, originalFilename string) error {
-	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage"+path, data)
+	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+path, data)
 	if err != nil {
 		return err
 	}
@@ -324,7 +362,7 @@ func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, c
 }
 
 func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, error) {
-	resp, err := a.client.do(ctx, "GET", "/api/agent/storage"+path, nil)
+	resp, err := a.client.do(ctx, "GET", "/api/agent/storage/"+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +378,7 @@ func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, er
 }
 
 func (a *Agent) deleteFileRaw(ctx context.Context, path string) error {
-	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage"+path, nil)
+	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage/"+path, nil)
 	if err != nil {
 		return err
 	}

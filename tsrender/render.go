@@ -24,9 +24,15 @@ import (
 // from the hydrated DB/sync payload; the agent assembles it from the
 // registered-tool schemas in tests. Both paths go through the same
 // renderer so the LLM sees one format.
+//
+// LLMHint is optional model-only guidance that pairs with Description
+// (which may also surface in member-facing UIs). When non-empty it's
+// appended to the JSDoc block in `[brackets]` so the LLM gets the
+// extra steer without polluting the user-visible description.
 type ToolRender struct {
 	Name          string
 	Description   string
+	LLMHint       string
 	InputSchema   json.RawMessage
 	OutputSchema  json.RawMessage
 	InputExamples []json.RawMessage
@@ -52,12 +58,17 @@ func renderToolDecl(b *strings.Builder, t ToolRender) {
 	inSchema := decodeSchema(t.InputSchema)
 	outSchema := decodeSchema(t.OutputSchema)
 
-	// JSDoc block: description + @example lines.
+	// JSDoc block: description (+ optional LLMHint in brackets) + @example lines.
 	b.WriteString("/**\n")
 	for _, line := range strings.Split(strings.TrimSpace(t.Description), "\n") {
 		b.WriteString(" * ")
 		b.WriteString(line)
 		b.WriteString("\n")
+	}
+	if hint := strings.TrimSpace(t.LLMHint); hint != "" {
+		b.WriteString(" * [")
+		b.WriteString(hint)
+		b.WriteString("]\n")
 	}
 	for _, ex := range t.InputExamples {
 		b.WriteString(" * @example ")
@@ -222,6 +233,39 @@ type MCPToolRender struct {
 	InputSchema json.RawMessage
 }
 
+// JSToolNames maps each MCP tool name to a JS-identifier-safe property
+// name. MCP tool names commonly include hyphens (`notion-update-page`);
+// JS parses `obj.notion-update-page(...)` as arithmetic and throws
+// ReferenceError. The original hyphenated name stays canonical on the
+// wire (tool/call JSON-RPC); only the JS surface is renamed.
+//
+// Collision handling: when the `-` → `_` rename would clash with
+// another tool's original name on the same server (e.g. `foo-bar` AND
+// `foo_bar` both exist), the hyphenated tool keeps its original name —
+// the LLM has to use bracket notation for that one, but every other
+// tool on the server still gets the dot-friendly form. Iteration is
+// over a sorted copy so the resulting map is stable across syncs.
+func JSToolNames(names []string) map[string]string {
+	taken := make(map[string]bool, len(names))
+	for _, n := range names {
+		taken[n] = true
+	}
+	sorted := make([]string, len(names))
+	copy(sorted, names)
+	sort.Strings(sorted)
+	out := make(map[string]string, len(sorted))
+	for _, n := range sorted {
+		renamed := strings.ReplaceAll(n, "-", "_")
+		if renamed == n || taken[renamed] {
+			out[n] = n
+			continue
+		}
+		taken[renamed] = true
+		out[n] = renamed
+	}
+	return out
+}
+
 // RenderMCPNamespace emits a typed `declare const mcp_{slug}: { ... };`
 // block describing each discovered MCP tool as a method on the namespace
 // object. Mirrors the JS binding shape installed by agentsdk's vm.go so
@@ -236,10 +280,15 @@ func RenderMCPNamespace(slug string, tools []MCPToolRender) string {
 	if len(tools) == 0 {
 		return ""
 	}
-	// Stable ordering so the rendered prompt doesn't churn between syncs.
 	sorted := make([]MCPToolRender, len(tools))
 	copy(sorted, tools)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+
+	names := make([]string, len(sorted))
+	for i, t := range sorted {
+		names[i] = t.Name
+	}
+	jsNames := JSToolNames(names)
 
 	var b strings.Builder
 	b.WriteString("declare const mcp_")
@@ -251,8 +300,19 @@ func RenderMCPNamespace(slug string, tools []MCPToolRender) string {
 			b.WriteString(strings.ReplaceAll(desc, "\n", " "))
 			b.WriteString(" */\n")
 		}
+		jsName := jsNames[t.Name]
+		// Quote when the name still has illegal-identifier chars (the
+		// collision fallback path). TS object literal type syntax accepts
+		// quoted property names; keeps the declaration valid even though
+		// the LLM will need bracket notation to call it.
 		b.WriteString("  ")
-		b.WriteString(t.Name)
+		if jsName == t.Name && strings.ContainsAny(jsName, "-") {
+			b.WriteString(`"`)
+			b.WriteString(jsName)
+			b.WriteString(`"`)
+		} else {
+			b.WriteString(jsName)
+		}
 		b.WriteString("(args: ")
 		b.WriteString(tsTypeFromSchema(decodeSchema(t.InputSchema), 1))
 		b.WriteString("): unknown;\n")

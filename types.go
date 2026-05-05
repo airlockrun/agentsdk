@@ -105,9 +105,24 @@ type ConnectionDef struct {
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
 type AuthInjection struct {
-	Type string `json:"type"`           // "bearer", "api_key_header", "bot_token_url_prefix"
-	Name string `json:"name,omitempty"` // header name for api_key_header (default: "X-API-Key")
+	Type AuthInjectionType `json:"type"`
+	Name string            `json:"name,omitempty"` // header name for api_key_header (default: "X-API-Key")
 }
+
+// AuthInjectionType selects how the proxy injects the stored credential into
+// each upstream request.
+type AuthInjectionType string
+
+const (
+	// AuthInjectBearer sets `Authorization: Bearer {token}`.
+	AuthInjectBearer AuthInjectionType = "bearer"
+	// AuthInjectAPIKey sets a custom header `{Name}: {token}` (Name defaults
+	// to "X-API-Key").
+	AuthInjectAPIKey AuthInjectionType = "api_key_header"
+	// AuthInjectPathPrefix prepends `/{token}` to the URL path. Used by
+	// APIs that carry credentials in the path (e.g. Telegram bot API).
+	AuthInjectPathPrefix AuthInjectionType = "path_prefix"
+)
 
 // --- Run recording ---
 
@@ -129,7 +144,7 @@ type Action struct {
 // metadata so the LLM can refer to "Q1 Report.pdf" while the path uses a
 // uuid-prefixed safe filename.
 type FileInfo struct {
-	Path         string    `json:"path"`         // absolute, e.g. "/uploads/foo.png"
+	Path         string    `json:"path"`         // S3-style storage path, e.g. "uploads/foo.png"
 	Filename     string    `json:"filename"`     // original upload name; S3 metadata
 	ContentType  string    `json:"contentType"`
 	Size         int64     `json:"size"`
@@ -200,24 +215,39 @@ type PromptInput struct {
 
 // Directory is the self-contained declaration registered via
 // agent.RegisterDirectory. Each directory owns an S3 prefix
-// ("agents/{agentID}{Path}") and gates access through three independent
-// caps. AccessInternal directories are reachable only from trusted Go
-// code (the framework never wires them into the JS runtime, and the
-// CheckFileAccess gate denies every external caller).
+// ("agents/{agentID}/{Path}") and gates access through three independent
+// caps.
 //
-// The framework auto-registers a reserved directory "/tmp" at
-// Read=Write=List=AccessUser; builder calls with Path="/tmp" silently
+// The framework auto-registers a reserved directory "tmp" at
+// Read=Write=List=AccessUser; builder calls with Path="tmp" silently
 // keep the framework's caps (Description may still be supplied).
 //
-// Read, Write, and List are independent. delete folds into Write
-// (POSIX-style: write on the parent governs unlink), so DeleteFile
-// requires Write access.
+// Read, Write, and List are independent. delete folds into Write (write
+// on the parent governs unlink), so DeleteFile requires Write access.
 type Directory struct {
-	Path        string // absolute path, e.g. "/reports"; no `..` or `//`; no trailing slash
+	Path        string // S3-style path with no leading '/', e.g. "reports"; no '..' or '//'; no trailing slash
 	Read        Access // gates ReadFile / OpenFile / StatFile + the public read route
 	Write       Access // gates WriteFile / DeleteFile + the public write route
 	List        Access // gates ListDir
 	Description string // shown in the system prompt's directories section
+
+	// LLMHint is optional guidance shown to the LLM in the system prompt
+	// alongside the directory entry, e.g. "internal cache; avoid listing
+	// or modifying" or "user-uploaded reports; prefer summarizing over
+	// quoting". Authorization stays with Read/Write/List — LLMHint only
+	// steers the model. Empty by default.
+	LLMHint string
+
+	// RetentionHours, when > 0, opts the directory into Airlock's storage
+	// sweeper: any file in the S3 prefix older than this many hours is
+	// deleted on the next sweep tick (~6h cadence). Zero means files
+	// stay forever — that's the default for normal builder directories.
+	// The framework's /tmp registers with 72 to garbage-collect chat
+	// uploads and generated media; tools that produce throwaway artifacts
+	// (e.g. AI-generated images served via shareFileURL with a 1h URL
+	// expiry) should set a matching short TTL so the bytes go away when
+	// the URL does.
+	RetentionHours int
 }
 
 // DirectoryOpts is the option struct accepted by RegisterDirectory.
@@ -226,19 +256,28 @@ type DirectoryOpts struct {
 	Write       Access // default AccessUser
 	List        Access // default AccessUser
 	Description string
+
+	// LLMHint: see Directory.LLMHint. Optional model-facing guidance.
+	LLMHint string
+
+	// RetentionHours: see Directory.RetentionHours. Zero = no sweep.
+	RetentionHours int
 }
 
 // DirectoryDef is the wire format sent in SyncRequest.
 type DirectoryDef struct {
-	Path        string `json:"path"`
-	Read        Access `json:"read"`
-	Write       Access `json:"write"`
-	List        Access `json:"list"`
-	Description string `json:"description"`
+	Path           string `json:"path"`
+	Read           Access `json:"read"`
+	Write          Access `json:"write"`
+	List           Access `json:"list"`
+	Description    string `json:"description"`
+	LLMHint        string `json:"llmHint,omitempty"`
+	RetentionHours int    `json:"retentionHours,omitempty"`
 }
 
 // FileOp tags an operation passed to CheckFileAccess. Delete folds into
-// OpWrite (POSIX-style); there is no separate OpDelete.
+// OpWrite (write on the parent governs unlink); there is no separate
+// OpDelete.
 type FileOp string
 
 const (
@@ -255,6 +294,7 @@ const (
 type Topic struct {
 	Slug        string
 	Description string
+	LLMHint     string // optional model-only guidance — see Directory.LLMHint
 	Access      Access // who may subscribe via topic_{slug}.subscribe(); default AccessUser
 }
 
@@ -262,6 +302,7 @@ type Topic struct {
 type TopicDef struct {
 	Slug        string `json:"slug"`
 	Description string `json:"description"`
+	LLMHint     string `json:"llmHint,omitempty"`
 	Access      Access `json:"access"`
 }
 
@@ -337,12 +378,6 @@ const (
 	AccessAdmin  Access = "admin"
 	AccessUser   Access = "user"
 	AccessPublic Access = "public"
-	// AccessInternal is the strictest level — builder Go code only. Items
-	// registered with AccessInternal are never exposed to the JS runtime
-	// and are never reachable from external callers regardless of role.
-	// Use it when you have, say, a storage zone that holds builder-only
-	// caches you don't want the LLM to discover, mutate, or list.
-	AccessInternal Access = "internal"
 )
 
 // --- Auth modes ---
@@ -494,10 +529,10 @@ type SyncResponse struct {
 	MCPSchemas map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
 	// PublicStorageBase is the URL prefix at which directories are reachable
 	// on the agent's subdomain, ending without a trailing slash. Callers
-	// append the absolute path (e.g. "/reports/q1.csv") to construct a URL.
-	// Of the form https://{slug}.{agentDomain}/__air/storage. The proxy
-	// enforces the directory's Read cap at fetch time — public dirs serve
-	// unauthenticated, user/admin dirs require subdomain login
+	// join with '/' and the storage path (e.g. "reports/q1.csv") to
+	// construct a URL: "https://{slug}.{domain}/__air/storage/reports/q1.csv".
+	// The proxy enforces the directory's Read cap at fetch time — public
+	// dirs serve unauthenticated, user/admin dirs require subdomain login
 	// (redirect-on-missing-cookie).
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
 }
@@ -508,6 +543,7 @@ type SyncResponse struct {
 type ToolDef struct {
 	Name          string            `json:"name"`
 	Description   string            `json:"description"`
+	LLMHint       string            `json:"llmHint,omitempty"`
 	Access        Access            `json:"access"`
 	InputSchema   json.RawMessage   `json:"inputSchema,omitempty"`
 	OutputSchema  json.RawMessage   `json:"outputSchema,omitempty"`
@@ -566,6 +602,22 @@ type ProxyRequest struct {
 	Method string `json:"method"`
 	Path   string `json:"path"`
 	Body   string `json:"body,omitempty"`
+}
+
+// ShareFileRequest is the body for POST /api/agent/storage/share.
+// Path is an S3-style storage path (no leading slash); ExpiresSeconds
+// caps how long the returned URL is valid for. Server defaults to 1h if
+// 0, caps at 24h.
+type ShareFileRequest struct {
+	Path           string `json:"path"`
+	ExpiresSeconds int64  `json:"expiresSeconds,omitempty"`
+}
+
+// ShareFileResponse is returned by POST /api/agent/storage/share.
+// URL is unauthenticated and valid until ExpiresAtMs (ms epoch).
+type ShareFileResponse struct {
+	URL         string `json:"url"`
+	ExpiresAtMs int64  `json:"expiresAtMs"`
 }
 
 // --- Model capability types ---

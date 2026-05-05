@@ -30,13 +30,13 @@ func TestConnectionHandleProxy(t *testing.T) {
 
 func TestDirectoryWriteAndRead(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("/uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 
-	if _, err := a.WriteFile(context.Background(), "/uploads/test.txt", strings.NewReader("hello"), "text/plain"); err != nil {
+	if _, err := a.WriteFile(context.Background(), "uploads/test.txt", strings.NewReader("hello"), "text/plain"); err != nil {
 		t.Fatal(err)
 	}
 
-	rc, err := a.OpenFile(context.Background(), "/uploads/test.txt")
+	rc, err := a.OpenFile(context.Background(), "uploads/test.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

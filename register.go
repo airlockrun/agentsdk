@@ -142,11 +142,16 @@ func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
 	return &ConnectionHandle{slug: c.Slug, agent: a}
 }
 
-// RegisterDirectory declares an S3-backed directory at the given absolute
-// path, gated by independent Read / Write / List caps. Inside run_js the
-// flat verbs (readFile, writeFile, listDir, deleteFile, statFile,
-// readBytes, fileExists) check the calling run's access against the
-// directory's caps via CheckFileAccess.
+// RegisterDirectory declares an S3-backed directory at the given path,
+// gated by independent Read / Write / List caps. Inside run_js the flat
+// verbs (readFile, writeFile, listDir, deleteFile, statFile, readBytes,
+// fileExists) check the calling run's access against the directory's
+// caps via CheckFileAccess.
+//
+// Path is S3-style: no leading '/', no trailing '/', e.g. "uploads" or
+// "reports/q1". A leading slash is rejected — the LLM and builders share
+// one canonical form. Files under the directory are addressed as
+// "uploads/doc.pdf", never "/uploads/doc.pdf".
 //
 // Builder Go code reads and writes the directory through the trusted
 // file API (agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir /
@@ -156,16 +161,16 @@ func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
 // an Input struct), the builder must call agent.CheckFileAccess
 // explicitly before passing the path anywhere.
 //
-// The framework reserves "/tmp" for its own scratch (truncated tool
+// The framework reserves "tmp" for its own scratch (truncated tool
 // output, generated media) at Read=Write=List=AccessUser. Builders may
-// call RegisterDirectory("/tmp", ...) to override the description; the
+// call RegisterDirectory("tmp", ...) to override the description; the
 // access caps are kept at the framework's defaults.
 //
-//	agent.RegisterDirectory("/uploads", agentsdk.DirectoryOpts{
+//	agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
 //	    Read: agentsdk.AccessUser, Write: agentsdk.AccessUser, List: agentsdk.AccessUser,
 //	    Description: "User uploads",
 //	})
-//	err := agent.WriteFile(ctx, "/uploads/doc.pdf", reader, "application/pdf")
+//	err := agent.WriteFile(ctx, "uploads/doc.pdf", reader, "application/pdf")
 func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 	canon, err := normalizePath(path)
 	if err != nil {
@@ -196,11 +201,13 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 		}
 	}
 	a.directories = append(a.directories, &Directory{
-		Path:        canon,
-		Read:        opts.Read,
-		Write:       opts.Write,
-		List:        opts.List,
-		Description: opts.Description,
+		Path:           canon,
+		Read:           opts.Read,
+		Write:          opts.Write,
+		List:           opts.List,
+		Description:    opts.Description,
+		LLMHint:        opts.LLMHint,
+		RetentionHours: opts.RetentionHours,
 	})
 }
 

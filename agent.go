@@ -137,15 +137,16 @@ func New(cfg Config) *Agent {
 	}
 	a.logger = logger
 	// Framework-owned scratch directory — used by run_js output truncation
-	// and generated media. Builders may RegisterDirectory("/tmp", ...); the
+	// and generated media. Builders may RegisterDirectory("tmp", ...); the
 	// register helper preserves the framework's caps (the description may
 	// still be supplied) so both sides share the same directory.
 	a.directories = append(a.directories, &Directory{
-		Path:        reservedTmpPath,
-		Read:        AccessUser,
-		Write:       AccessUser,
-		List:        AccessUser,
-		Description: "Ephemeral scratch (auto-managed by the framework — truncated tool output, generated media).",
+		Path:           reservedTmpPath,
+		Read:           AccessUser,
+		Write:          AccessUser,
+		List:           AccessUser,
+		Description:    "Ephemeral scratch (auto-managed by the framework — truncated tool output, generated media).",
+		RetentionHours: 72, // sweeper drops files older than 3 days
 	})
 	return a
 }
