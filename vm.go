@@ -84,8 +84,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("%s: marshal args: %w", t.Name, err)))
 			}
-			ctx := contextWithRun(run.ctx, run)
-			outJSON, err := t.Execute(ctx, raw)
+			outJSON, err := t.Execute(run.checkedCtx(), raw)
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
