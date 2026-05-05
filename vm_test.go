@@ -73,6 +73,33 @@ func TestVM(t *testing.T) {
 		}
 	})
 
+	// Regression: user-registered tools dispatched from the VM must
+	// receive a ctx with the caller attached, so their own
+	// CheckFileAccess calls see the run's resolved access level instead
+	// of the AccessPublic zero-value (which would deny every write).
+	t.Run("user tool gets caller in ctx", func(t *testing.T) {
+		a, _ := testAgent(t)
+		a.RegisterDirectory("downloads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		var checkErr error
+		a.RegisterTool(&Tool[runIDIn, runIDOut]{
+			Name:        "probe_write",
+			Description: "Probes write access on downloads/.",
+			Execute: func(ctx context.Context, in runIDIn) (runIDOut, error) {
+				checkErr = a.CheckFileAccess(ctx, "downloads/x.bin", OpWrite)
+				return runIDOut{}, nil
+			},
+		})
+
+		run := newRun(a, "run-1", "", "", context.Background())
+		run.callerAccess = AccessUser
+		if _, err := executeJS(run.vmRuntime(), "probe_write()"); err != nil {
+			t.Fatal(err)
+		}
+		if checkErr != nil {
+			t.Fatalf("CheckFileAccess from user tool: %v", checkErr)
+		}
+	})
+
 	t.Run("log binding", func(t *testing.T) {
 		a, _ := testAgent(t)
 		run := newRun(a, "run-1", "", "", context.Background())

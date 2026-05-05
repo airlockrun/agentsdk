@@ -44,13 +44,16 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 	}
 }
 
-// checkedCtx returns r.ctx with this run's caller attached. VM bindings
-// that reach untrusted territory (storage paths, etc.) call this and
-// then pass the resulting ctx to agent.CheckFileAccess. Builder Go code
-// that calls the trusted file API directly (agent.OpenFile/ReadFile/...)
-// does not need this — those methods skip the access check.
+// checkedCtx returns r.ctx with both the run pointer and the caller
+// attached. VM bindings that reach untrusted territory (storage paths,
+// etc.) call this and then pass the resulting ctx to
+// agent.CheckFileAccess. User-registered tools dispatched from the VM
+// also receive this ctx so their bodies can call CheckFileAccess
+// without losing the caller's access level. Builder Go code that calls
+// the trusted file API directly (agent.OpenFile/ReadFile/...) does not
+// need this — those methods skip the access check.
 func (r *run) checkedCtx() context.Context {
-	return WithCaller(r.ctx, Caller{
+	return WithCaller(contextWithRun(r.ctx, r), Caller{
 		Access: r.callerAccess,
 		RunID:  r.id,
 	})
