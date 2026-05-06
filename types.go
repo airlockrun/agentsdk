@@ -104,9 +104,13 @@ type ConnectionDef struct {
 }
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
+// Name carries the header or query-parameter name depending on Type:
+//   - api_key_header: header name (default "X-API-Key")
+//   - query_param:    query-string key (default "token")
+//   - bearer / path_prefix: ignored
 type AuthInjection struct {
 	Type AuthInjectionType `json:"type"`
-	Name string            `json:"name,omitempty"` // header name for api_key_header (default: "X-API-Key")
+	Name string            `json:"name,omitempty"`
 }
 
 // AuthInjectionType selects how the proxy injects the stored credential into
@@ -122,6 +126,10 @@ const (
 	// AuthInjectPathPrefix prepends `/{token}` to the URL path. Used by
 	// APIs that carry credentials in the path (e.g. Telegram bot API).
 	AuthInjectPathPrefix AuthInjectionType = "path_prefix"
+	// AuthInjectQueryParam appends `?{Name}={token}` (or merges into existing
+	// query string). Name defaults to "token". Used by MCP servers and APIs
+	// that auth via URL query strings.
+	AuthInjectQueryParam AuthInjectionType = "query_param"
 )
 
 // --- Run recording ---
@@ -417,21 +425,26 @@ type MCP struct {
 	AuthURL  string
 	TokenURL string
 	Scopes   []string
-	Access   Access // who may invoke mcp_{slug}; default AccessUser
+	// AuthInjection picks how the stored credential is added to each MCP
+	// HTTP call: bearer header (default), custom header, query parameter,
+	// or path prefix. Mirrors Connection.AuthInjection.
+	AuthInjection AuthInjection
+	Access        Access // who may invoke mcp_{slug}; default AccessUser
 }
 
 // MCPDef is the wire format used by PUT /api/agent/mcp-servers/{slug} and
 // (with Slug populated) by SyncRequest.MCPServers. Slug is sent in the URL
 // for the per-slug PUT and in the body for the bulk sync.
 type MCPDef struct {
-	Slug     string   `json:"slug,omitempty"`
-	Name     string   `json:"name"`
-	URL      string   `json:"url"`
-	AuthMode MCPAuth  `json:"authMode"`
-	AuthURL  string   `json:"authUrl,omitempty"`
-	TokenURL string   `json:"tokenUrl,omitempty"`
-	Scopes   []string `json:"scopes,omitempty"`
-	Access   Access   `json:"access,omitempty"`
+	Slug          string        `json:"slug,omitempty"`
+	Name          string        `json:"name"`
+	URL           string        `json:"url"`
+	AuthMode      MCPAuth       `json:"authMode"`
+	AuthURL       string        `json:"authUrl,omitempty"`
+	TokenURL      string        `json:"tokenUrl,omitempty"`
+	Scopes        []string      `json:"scopes,omitempty"`
+	AuthInjection AuthInjection `json:"authInjection"`
+	Access        Access        `json:"access,omitempty"`
 }
 
 // MCPToolSchema is a discovered MCP tool schema returned in SyncResponse.

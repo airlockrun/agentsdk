@@ -35,13 +35,14 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	// Register each MCP server.
 	for slug, m := range a.mcps {
 		def := MCPDef{
-			Name:     m.Name,
-			URL:      m.URL,
-			AuthMode: m.AuthMode,
-			AuthURL:  m.AuthURL,
-			TokenURL: m.TokenURL,
-			Scopes:   m.Scopes,
-			Access:   m.Access,
+			Name:          m.Name,
+			URL:           m.URL,
+			AuthMode:      m.AuthMode,
+			AuthURL:       m.AuthURL,
+			TokenURL:      m.TokenURL,
+			Scopes:        m.Scopes,
+			AuthInjection: m.AuthInjection,
+			Access:        m.Access,
 		}
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/mcp-servers/"+slug, def, nil); err != nil {
 			return fmt.Errorf("register MCP server %s: %w", slug, err)
@@ -120,14 +121,15 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	mcpServers := make([]MCPDef, 0, len(a.mcps))
 	for _, m := range a.mcps {
 		mcpServers = append(mcpServers, MCPDef{
-			Slug:     m.Slug,
-			Name:     m.Name,
-			URL:      m.URL,
-			AuthMode: m.AuthMode,
-			AuthURL:  m.AuthURL,
-			TokenURL: m.TokenURL,
-			Scopes:   m.Scopes,
-			Access:   m.Access,
+			Slug:          m.Slug,
+			Name:          m.Name,
+			URL:           m.URL,
+			AuthMode:      m.AuthMode,
+			AuthURL:       m.AuthURL,
+			TokenURL:      m.TokenURL,
+			Scopes:        m.Scopes,
+			AuthInjection: m.AuthInjection,
+			Access:        m.Access,
 		})
 	}
 
