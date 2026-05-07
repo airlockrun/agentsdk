@@ -3,6 +3,7 @@ package agentsdk
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sync"
 )
 
@@ -62,9 +63,10 @@ type EnvVar struct {
 // lifetime of the agent process — call Refresh() to force a re-fetch
 // (e.g. after the operator rotates the value).
 type EnvVarHandle struct {
-	slug   string
-	secret bool
-	agent  *Agent
+	slug    string
+	secret  bool
+	pattern *regexp.Regexp // nil when EnvVar.Pattern == ""
+	agent   *Agent
 
 	mu     sync.Mutex
 	cached string
@@ -85,16 +87,17 @@ type envVarResponse struct {
 // Return shape:
 //   - (s, nil)        — the stored value (or Default if no value was set,
 //                        or "" if neither). Empty string IS a valid
-//                        successful return.
-//   - ("", non-nil)   — transport / decrypt error. Empty string with no
-//                        error means the operator hasn't configured the
-//                        slot AND there's no Default — handle as you
-//                        would any unset config.
-//
-// To require a non-empty value, declare a Pattern (e.g. "^.+$") on the
-// EnvVar. Operators can only save matching values, so an empty string
-// at runtime then means "operator hasn't set anything yet" rather than
-// "operator set it to empty".
+//                        successful return when no Pattern is declared.
+//   - ("", non-nil)   — transport / decrypt error, or the value does not
+//                        match the declared Pattern. Pattern is checked
+//                        unconditionally, including against empty
+//                        strings — declare Pattern="^.+$" to enforce
+//                        non-empty, or any tighter regex for a known
+//                        shape. Operators are blocked from saving a
+//                        non-matching value at the UI, so a mismatch
+//                        here usually means nothing has been configured
+//                        yet (or the Pattern was tightened after a
+//                        save).
 //
 // Subsequent calls return the cached value until Refresh() is invoked.
 func (h *EnvVarHandle) Get(ctx context.Context) (string, error) {
@@ -109,6 +112,10 @@ func (h *EnvVarHandle) Get(ctx context.Context) (string, error) {
 	var resp envVarResponse
 	if err := h.agent.client.doJSON(ctx, "GET", "/api/agent/env-vars/"+h.slug, nil, &resp); err != nil {
 		return "", fmt.Errorf("agentsdk: get env var %q: %w", h.slug, err)
+	}
+
+	if h.pattern != nil && !h.pattern.MatchString(resp.Value) {
+		return "", fmt.Errorf("agentsdk: env var %q value does not match Pattern %q", h.slug, h.pattern.String())
 	}
 
 	if h.secret {

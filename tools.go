@@ -284,7 +284,7 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	b.WriteString("- speak(text, opts?) → {file: FileInfo, mimeType, size} — text-to-speech; result auto-saved. Pass `file.path` to printToUser({source: file.path, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
 	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {
-		b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities. The current agent keeps running until the new build finishes; the description should specify what to add or change.\n")
+		b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities. The current agent keeps running until the new build finishes; the description should specify what to add or change. The builder writes the agent's Go code to expose new tools, add routes, crons, webhooks etc. It is constrained by agent's SDK and platform limitations: it has access to DB, file system, and network, and can add container dependencies (e.g. a CLI utility), but cannot start new services (e.g. redis), or create React apps, or install DB extensions.\n")
 	}
 
 	// Directory inventory — which paths the LLM can read/write/list, and

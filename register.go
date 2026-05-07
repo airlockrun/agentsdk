@@ -173,19 +173,19 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 	if e.Secret && e.Default != "" {
 		panic("agentsdk: RegisterEnvVar(" + e.Slug + "): Default is not allowed for Secret=true — secrets must come from the operator, not source code")
 	}
+	var compiled *regexp.Regexp
 	if e.Pattern != "" {
-		if _, err := regexp.Compile(e.Pattern); err != nil {
+		re, err := regexp.Compile(e.Pattern)
+		if err != nil {
 			panic("agentsdk: RegisterEnvVar(" + e.Slug + "): invalid Pattern: " + err.Error())
 		}
-		if e.Default != "" {
-			re := regexp.MustCompile(e.Pattern)
-			if !re.MatchString(e.Default) {
-				panic("agentsdk: RegisterEnvVar(" + e.Slug + "): Default does not match Pattern")
-			}
+		if e.Default != "" && !re.MatchString(e.Default) {
+			panic("agentsdk: RegisterEnvVar(" + e.Slug + "): Default does not match Pattern")
 		}
+		compiled = re
 	}
 	a.envVars[e.Slug] = e
-	return &EnvVarHandle{slug: e.Slug, secret: e.Secret, agent: a}
+	return &EnvVarHandle{slug: e.Slug, secret: e.Secret, pattern: compiled, agent: a}
 }
 
 // RegisterDirectory declares an S3-backed directory at the given path,
