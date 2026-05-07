@@ -49,8 +49,14 @@ type Agent struct {
 	// Airlock-owned state: rendered/discovered server-side at sync time and
 	// pushed back via SyncResponse. /refresh re-runs sync to pick up changes
 	// (e.g. MCP OAuth completion) without restarting the container.
-	syncMu            sync.RWMutex
-	systemPrompt      string                     // rendered by Airlock
+	syncMu sync.RWMutex
+	// systemPrompt is the unfiltered admin variant; systemPromptUser and
+	// systemPromptPublic carry the access-filtered variants returned by
+	// Airlock at sync time. solagent.go selects per-run via callerAccess
+	// with no cross-tier fallback — see systemPromptSnapshot.
+	systemPrompt       string
+	systemPromptUser   string
+	systemPromptPublic string
 	mcpSchemas        map[string][]MCPToolSchema // server slug → discovered tools
 	publicStorageBase string                     // base URL for AccessPublic zone reads (subdomain or host-level fallback)
 
@@ -206,13 +212,30 @@ func (a *Agent) DB() *AgentDB {
 }
 
 // systemPromptSnapshot returns the cached system prompt last rendered by
-// Airlock. Mutex-guarded so concurrent /refresh writes don't race the read.
-// Lowercase deliberately — builders never need this; only solagent.go reads
-// it when assembling the Sol agent for a run.
-func (a *Agent) systemPromptSnapshot() string {
+// Airlock for the given caller access. Mutex-guarded so concurrent
+// /refresh writes don't race the read. Lowercase deliberately — builders
+// never need this; only solagent.go reads it when assembling the Sol
+// agent for a run.
+//
+// One variant per tier — no fallback. If Airlock returned empty for the
+// matching tier, that's what the run gets; an empty system prompt is a
+// loud, visible failure mode by design (the agent operator notices
+// missing capabilities) instead of a silent admin-prompt leak. Empty
+// caller is treated as AccessUser to match accessSatisfies's default.
+// Unknown access values panic — they can only happen via a wire-shape
+// bug, and silently mapping them to "user" would mask it.
+func (a *Agent) systemPromptSnapshot(caller Access) string {
 	a.syncMu.RLock()
 	defer a.syncMu.RUnlock()
-	return a.systemPrompt
+	switch caller {
+	case AccessAdmin:
+		return a.systemPrompt
+	case AccessUser, "":
+		return a.systemPromptUser
+	case AccessPublic:
+		return a.systemPromptPublic
+	}
+	panic("agentsdk: systemPromptSnapshot: unknown caller access " + string(caller))
 }
 
 // snapshotMCPSchemas returns a value-copy of the MCP schema map. Callers
@@ -238,6 +261,8 @@ func (a *Agent) snapshotMCPSchemas() map[string][]MCPToolSchema {
 func (a *Agent) applySyncResponse(resp SyncResponse) {
 	a.syncMu.Lock()
 	a.systemPrompt = resp.SystemPrompt
+	a.systemPromptUser = resp.SystemPromptUser
+	a.systemPromptPublic = resp.SystemPromptPublic
 	a.mcpSchemas = resp.MCPSchemas
 	a.publicStorageBase = resp.PublicStorageBase
 	a.syncMu.Unlock()

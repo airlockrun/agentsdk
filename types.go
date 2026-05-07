@@ -544,9 +544,19 @@ type ModelSlot struct {
 }
 
 // SyncResponse is the response from PUT /api/agent/sync.
+//
+// All three SystemPrompt* fields are required: SystemPrompt is the
+// unfiltered admin variant; SystemPromptUser and SystemPromptPublic are
+// pre-filtered for AccessUser and AccessPublic runs and omit any tool,
+// connection, MCP server, topic, or route the caller can't reach. A
+// public DM must never see the admin-tier surface listed in the prompt.
+// solagent.go picks the variant per run via run.callerAccess and does
+// not fall back across tiers.
 type SyncResponse struct {
-	SystemPrompt  string          `json:"systemPrompt"`
-	MCPAuthStatus []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
+	SystemPrompt       string          `json:"systemPrompt"`
+	SystemPromptUser   string          `json:"systemPromptUser"`
+	SystemPromptPublic string          `json:"systemPromptPublic"`
+	MCPAuthStatus      []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
 	// MCPSchemas carries discovered tool schemas per MCP server slug.
 	// Airlock populates these from its server-side discovery cache so the
 	// agent's VM can install one typed JS method per tool on each
