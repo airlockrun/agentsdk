@@ -493,9 +493,21 @@ type SyncRequest struct {
 	Routes       []RouteDef       `json:"routes,omitempty"`
 	Topics       []TopicDef       `json:"topics,omitempty"`
 	MCPServers   []MCPDef         `json:"mcpServers,omitempty"`
+	EnvVars      []EnvVarDef      `json:"envVars,omitempty"`
 	Directories  []DirectoryDef   `json:"directories,omitempty"`
 	ExtraPrompts []ExtraPromptDef `json:"extraPrompts,omitempty"`
 	ModelSlots   []ModelSlotDef   `json:"modelSlots,omitempty"`
+}
+
+// EnvVarDef is the wire format used by PUT /api/agent/env-vars/{slug}
+// and (with Slug populated) by SyncRequest.EnvVars. Mirrors the
+// agentsdk.EnvVar struct one-to-one.
+type EnvVarDef struct {
+	Slug        string `json:"slug,omitempty"`
+	Description string `json:"description"`
+	Secret      bool   `json:"secret"`
+	Default     string `json:"default,omitempty"`
+	Pattern     string `json:"pattern,omitempty"`
 }
 
 // ExtraPrompt is the self-contained declaration passed to agent.AddExtraPrompt.

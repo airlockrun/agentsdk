@@ -20,6 +20,10 @@ func newSolAgent(a *Agent, run *run, supportedModalities []string) *agent.Agent 
 		MaxSteps:          maxToolSteps,
 		SystemPrompt:      a.systemPromptSnapshot(), // rendered by Airlock during sync; mutex-guarded so /refresh updates are visible
 		EnvironmentPrompt: buildEnvironmentPrompt(run),
+		// Redactor closes over a's live sensitive set so values
+		// registered after Run start (via secret.Get inside a tool) are
+		// stripped from the next-step LLM input.
+		Redactor: a.redactSensitive,
 		HistoryPolicy: agent.HistoryPolicy{
 			// FilesRetainTurns=0 keeps every attached image/file in history
 			// across the whole conversation. The earlier 3-turn window was

@@ -39,6 +39,7 @@ type Agent struct {
 	routes      map[string]*Route
 	auths       map[string]*Connection
 	mcps        map[string]*MCP
+	envVars     map[string]*EnvVar
 	topics      map[string]*Topic
 	directories []*Directory // registration order; longest-prefix wins at lookup
 
@@ -125,6 +126,7 @@ func New(cfg Config) *Agent {
 		routes:       make(map[string]*Route),
 		auths:        make(map[string]*Connection),
 		mcps:         make(map[string]*MCP),
+		envVars:      make(map[string]*EnvVar),
 		topics:       make(map[string]*Topic),
 		convVMConfig: DefaultConversationVMConfig(),
 	}

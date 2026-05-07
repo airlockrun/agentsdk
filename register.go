@@ -1,6 +1,9 @@
 package agentsdk
 
-import "fmt"
+import (
+	"fmt"
+	"regexp"
+)
 
 // RegisterTool registers a typed, schema-bearing capability the LLM can
 // invoke via run_js. The tool auto-binds as a global inside the goja VM;
@@ -140,6 +143,49 @@ func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
 	}
 	a.auths[c.Slug] = c
 	return &ConnectionHandle{slug: c.Slug, agent: a}
+}
+
+// RegisterEnvVar declares an operator-configured environment variable
+// the agent will read at runtime. Returned handle's Get(ctx) fetches the
+// value through Airlock; operators populate the value via the agent's
+// "Environment" tab in the admin UI.
+//
+// See the EnvVar type doc for the Secret flag's semantics (write-only UI
+// + redaction).
+//
+//	bbKey := agent.RegisterEnvVar(&agentsdk.EnvVar{
+//	    Slug:        "browserbase_api_key",
+//	    Description: "Browserbase API key",
+//	    Secret:      true,
+//	})
+//	// later, inside a tool:
+//	key, err := bbKey.Get(ctx)
+func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
+	if e == nil {
+		panic("agentsdk: RegisterEnvVar: nil *EnvVar")
+	}
+	if e.Slug == "" {
+		panic("agentsdk: RegisterEnvVar: Slug is required")
+	}
+	if _, exists := a.envVars[e.Slug]; exists {
+		panic("agentsdk: duplicate RegisterEnvVar: " + e.Slug)
+	}
+	if e.Secret && e.Default != "" {
+		panic("agentsdk: RegisterEnvVar(" + e.Slug + "): Default is not allowed for Secret=true — secrets must come from the operator, not source code")
+	}
+	if e.Pattern != "" {
+		if _, err := regexp.Compile(e.Pattern); err != nil {
+			panic("agentsdk: RegisterEnvVar(" + e.Slug + "): invalid Pattern: " + err.Error())
+		}
+		if e.Default != "" {
+			re := regexp.MustCompile(e.Pattern)
+			if !re.MatchString(e.Default) {
+				panic("agentsdk: RegisterEnvVar(" + e.Slug + "): Default does not match Pattern")
+			}
+		}
+	}
+	a.envVars[e.Slug] = e
+	return &EnvVarHandle{slug: e.Slug, secret: e.Secret, agent: a}
 }
 
 // RegisterDirectory declares an S3-backed directory at the given path,

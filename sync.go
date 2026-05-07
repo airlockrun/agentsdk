@@ -49,6 +49,20 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		}
 	}
 
+	// Register each env var slot. Operators set values separately via the
+	// admin UI; we only declare the slot here.
+	for slug, e := range a.envVars {
+		def := EnvVarDef{
+			Description: e.Description,
+			Secret:      e.Secret,
+			Default:     e.Default,
+			Pattern:     e.Pattern,
+		}
+		if err := a.client.doJSON(ctx, "PUT", "/api/agent/env-vars/"+slug, def, nil); err != nil {
+			return fmt.Errorf("register env var %s: %w", slug, err)
+		}
+	}
+
 	// Build sync payload — convert builder structs to wire formats.
 	webhooks := make([]WebhookDef, 0, len(a.webhooks))
 	for _, w := range a.webhooks {
