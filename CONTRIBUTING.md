@@ -46,9 +46,8 @@ If you have an API improvement in mind, please open a Discussion before writing 
 
 ## Branch model
 
-- **`dev`** is the active development line and the default branch. PRs land here.
-- **`main`** is the release surface. Each commit on `main` corresponds to a tagged release (`vX.Y.Z`).
-- Releases are cut by opening a `dev` → `main` PR, merging, then tagging `vX.Y.Z` on the resulting `main` commit.
+- **`main`** is the only long-lived branch. PRs target `main`; tags are the releases.
+- Each tagged commit (`vX.Y.Z`) becomes the version `go get` consumers see. Pre-releases (`vX.Y.Z-rc.N`) are tagged the same way, opt-in via `go get .../agentsdk@vX.Y.Z-rc.N`.
 
 ## Dev setup
 
