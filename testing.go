@@ -163,7 +163,7 @@ func NewMockAirlock() (*MockAirlock, string) {
 	mux.HandleFunc("PUT /api/agent/sync", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(SyncResponse{SystemPrompt: "mock system prompt"})
+		json.NewEncoder(w).Encode(SyncResponse{PromptData: PromptData{AgentRouteURL: "https://mock-agent.test"}})
 	})
 
 	// Upgrade endpoint.

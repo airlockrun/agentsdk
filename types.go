@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/goai/message"
+	"github.com/google/uuid"
 )
 
 // defaultTimeout is the default execution timeout for webhooks and crons.
@@ -210,6 +211,16 @@ type PromptInput struct {
 	// Airlock sets this from trigger.ResolveAgentAccess. For trusted server
 	// triggers (webhooks, crons) Airlock sends AccessAdmin.
 	CallerAccess Access `json:"callerAccess,omitempty"`
+
+	// VisibleSiblings are the sibling-agent IDs this run's user is
+	// authorized to A2A-call. UUIDs (not slugs) so a mid-run rename
+	// doesn't silently revoke or reassign bindings. Computed by Airlock
+	// at dispatch using the same access ladder that gates the MCP
+	// endpoint. agentsdk intersects this with the sync-cached
+	// PromptData.Siblings (matched on .ID) for both prompt rendering
+	// and VM bindings — so the prompt and the runtime agree about which
+	// agent_<slug> namespaces are reachable on this run.
+	VisibleSiblings []uuid.UUID `json:"visibleSiblings,omitempty"`
 
 	// ForceCompact tells the agent to skip the thinking loop and run a
 	// user-triggered compaction instead. Message is ignored when set. The
@@ -545,18 +556,22 @@ type ModelSlot struct {
 
 // SyncResponse is the response from PUT /api/agent/sync.
 //
-// All three SystemPrompt* fields are required: SystemPrompt is the
-// unfiltered admin variant; SystemPromptUser and SystemPromptPublic are
-// pre-filtered for AccessUser and AccessPublic runs and omit any tool,
-// connection, MCP server, topic, or route the caller can't reach. A
-// public DM must never see the admin-tier surface listed in the prompt.
-// solagent.go picks the variant per run via run.callerAccess and does
-// not fall back across tiers.
+// The agent renders its own system prompt per run from PromptData
+// (platform-side data) plus its in-memory registrations. Airlock no
+// longer ships a pre-rendered SystemPrompt: per-run rendering is the
+// only way to express per-user sibling visibility without exploding
+// the wire payload into N variants.
 type SyncResponse struct {
-	SystemPrompt       string          `json:"systemPrompt"`
-	SystemPromptUser   string          `json:"systemPromptUser"`
-	SystemPromptPublic string          `json:"systemPromptPublic"`
-	MCPAuthStatus      []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
+	// PromptData carries the slice of system-prompt input the agent
+	// can't derive locally: dashboard / route URLs, the full sibling
+	// address book with their published tool schemas. Required. An
+	// older agentsdk that doesn't know about PromptData would have
+	// produced an empty system prompt; the new agentsdk's
+	// applySyncResponse panics on a zero-value PromptData with a
+	// clear "your airlock is newer than your agentsdk" message.
+	PromptData PromptData `json:"promptData"`
+
+	MCPAuthStatus []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
 	// MCPSchemas carries discovered tool schemas per MCP server slug.
 	// Airlock populates these from its server-side discovery cache so the
 	// agent's VM can install one typed JS method per tool on each
@@ -570,6 +585,43 @@ type SyncResponse struct {
 	// dirs serve unauthenticated, user/admin dirs require subdomain login
 	// (redirect-on-missing-cookie).
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
+}
+
+// PromptData is the platform-supplied slice of the prompt-render
+// input — everything the agent can't compute locally from its own
+// in-memory registrations.
+type PromptData struct {
+	// AgentDashboardURL points at the agent's settings page in the
+	// Airlock UI; the prompt tells the LLM to direct users there when
+	// a connection or MCP server needs OAuth.
+	AgentDashboardURL string `json:"agentDashboardUrl"`
+
+	// AgentRouteURL is the agent's public subdomain (scheme + host +
+	// optional port). The prompt embeds it for "share file at this
+	// URL" guidance. Derived server-side because the scheme/port
+	// logic lives in airlock's PUBLIC_URL parsing.
+	AgentRouteURL string `json:"agentRouteUrl"`
+
+	// Siblings is the FULL configured sibling list with each one's
+	// tool schemas. Static at sync time (changes when the operator
+	// edits the address book). Per-user visibility is layered on at
+	// dispatch via PromptInput.VisibleSiblings.
+	Siblings []SiblingInfo `json:"siblings,omitempty"`
+}
+
+// SiblingInfo describes one sibling agent in the caller's address
+// book. Travels in PromptData.Siblings.
+type SiblingInfo struct {
+	// ID is the canonical, rename-safe identifier. MCP outbound calls
+	// use the UUID in the URL path so a sibling rename doesn't break
+	// in-flight bindings.
+	ID uuid.UUID `json:"id"`
+	// Slug is the human-readable binding name — appears in the prompt
+	// and as the `agent_<slug>` namespace on this agent's VM.
+	Slug        string          `json:"slug"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Tools       []MCPToolSchema `json:"tools,omitempty"`
 }
 
 // ToolDef describes a registered tool sent during sync. Carries the JSON

@@ -6,6 +6,7 @@ import (
 
 	"github.com/airlockrun/goai/tool"
 	"github.com/dop251/goja"
+	"github.com/google/uuid"
 )
 
 // run is an unexported per-request bookkeeping struct. Accumulates actions
@@ -17,7 +18,8 @@ type run struct {
 	bridgeID            string
 	conversationID      string
 	supportedModalities []string
-	callerAccess        Access // resolved per-turn access level (default AccessAdmin for trusted triggers)
+	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
+	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with PromptData.Siblings at render time
 	ctx                 context.Context
 	actions             []Action
 	logs                []LogEntry

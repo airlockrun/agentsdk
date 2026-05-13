@@ -45,6 +45,9 @@ func (a *Agent) Serve() {
 	mux.HandleFunc("POST /cron/{name}", a.handleCron)
 	mux.HandleFunc("POST /refresh", a.handleRefresh)
 	mux.HandleFunc("GET /health", a.handleHealth)
+	// A2A: airlock's MCP server forwards user-registered tool calls
+	// here so sibling agents can invoke them directly (no LLM loop).
+	mux.HandleFunc("POST /__air/tool/{name}", a.handleDirectTool)
 
 	// Mount custom routes registered via RegisterRoute.
 	// Each route gets a lazy-run installed in ctx — a run is only created
@@ -175,6 +178,67 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run.complete(ctx, "success", "", "", "")
+}
+
+// handleDirectTool dispatches a user-registered tool by name without
+// running the LLM loop. Used by Airlock's MCP server endpoint to expose
+// tools to sibling agents (A2A): the calling agent sees a typed
+// `agent_<slug>.toolName(...)` binding, the MCP server forwards the
+// call to airlock, and airlock forwards here with the resolved
+// caller access in X-Caller-Access.
+//
+// Access gating mirrors what the VM does at call time: the caller's
+// access must be >= the tool's registered Access (typically AccessUser).
+// Reject otherwise with 403 — the MCP server propagates that as a
+// JSON-RPC error to the caller.
+func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	tool, ok := a.tools[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	caller := Access(r.Header.Get("X-Caller-Access"))
+	if caller == "" {
+		caller = AccessUser
+	}
+	if !accessSatisfies(caller, tool.Access) {
+		http.Error(w, `{"error":"tool requires higher access"}`, http.StatusForbidden)
+		return
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4*1024*1024))
+	if err != nil {
+		http.Error(w, `{"error":"read body"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Run in a fresh ctx with a per-tool budget. No agentsdk run is
+	// created here — direct-dispatch is meant to be one-shot, no
+	// LLM loop, no per-run bookkeeping. If the tool wants to call
+	// other agentsdk primitives (LLM, storage, etc.) it gets the
+	// bare ctx from this request; admin-only verbs gate on the
+	// run-bound caller access, which is absent here, so callers
+	// dispatched via A2A see the public/user fence.
+	timeout := defaultTimeout
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("agentsdk: /__air/tool/%s panic: %v\n%s", name, rec, debug.Stack())
+			http.Error(w, `{"error":"tool panicked"}`, http.StatusInternalServerError)
+		}
+	}()
+
+	out, err := tool.Execute(ctx, raw)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(out))
 }
 
 // wrapRoute converts a RouteHandlerFunc into http.HandlerFunc, installing

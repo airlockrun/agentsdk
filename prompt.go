@@ -59,6 +59,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		} else {
 			run.callerAccess = AccessUser
 		}
+		run.visibleSiblings = input.VisibleSiblings
 		ctx = contextWithRun(ctx, run)
 
 		// Build prompt text from user message + file metadata.

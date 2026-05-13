@@ -3,11 +3,14 @@ package agentsdk
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"sync"
 
+	"github.com/airlockrun/agentsdk/prompt"
+	"github.com/google/uuid"
 	_ "github.com/lib/pq" // register "postgres" driver for agent.DB()
 	"go.uber.org/zap"
 )
@@ -46,17 +49,12 @@ type Agent struct {
 	extraPrompts []*ExtraPrompt   // access-scoped system prompt fragments; see AddExtraPrompt
 	modelSlots   []*ModelSlot     // named model slots; see RegisterModel
 
-	// Airlock-owned state: rendered/discovered server-side at sync time and
-	// pushed back via SyncResponse. /refresh re-runs sync to pick up changes
+	// Airlock-owned state: discovered server-side at sync time and pushed
+	// back via SyncResponse. /refresh re-runs sync to pick up changes
 	// (e.g. MCP OAuth completion) without restarting the container.
-	syncMu sync.RWMutex
-	// systemPrompt is the unfiltered admin variant; systemPromptUser and
-	// systemPromptPublic carry the access-filtered variants returned by
-	// Airlock at sync time. solagent.go selects per-run via callerAccess
-	// with no cross-tier fallback — see systemPromptSnapshot.
-	systemPrompt       string
-	systemPromptUser   string
-	systemPromptPublic string
+	syncMu            sync.RWMutex
+	promptData        PromptData                 // platform-supplied prompt inputs (siblings, URLs); filled by applySyncResponse
+	mcpAuthStatus     []MCPAuthStatus            // per-server auth status (for prompt status lines)
 	mcpSchemas        map[string][]MCPToolSchema // server slug → discovered tools
 	publicStorageBase string                     // base URL for AccessPublic zone reads (subdomain or host-level fallback)
 
@@ -211,31 +209,39 @@ func (a *Agent) DB() *AgentDB {
 	return a.db
 }
 
-// systemPromptSnapshot returns the cached system prompt last rendered by
-// Airlock for the given caller access. Mutex-guarded so concurrent
-// /refresh writes don't race the read. Lowercase deliberately — builders
-// never need this; only solagent.go reads it when assembling the Sol
-// agent for a run.
+// renderSystemPrompt builds the per-run system prompt from the agent's
+// live registrations + the platform-supplied PromptData. Replaces the
+// old systemPromptSnapshot lookup table (3 pre-rendered variants from
+// airlock) with on-demand rendering, which is what makes per-user
+// sibling visibility expressible at all.
 //
-// One variant per tier — no fallback. If Airlock returned empty for the
-// matching tier, that's what the run gets; an empty system prompt is a
-// loud, visible failure mode by design (the agent operator notices
-// missing capabilities) instead of a silent admin-prompt leak. Empty
-// caller is treated as AccessUser to match accessSatisfies's default.
-// Unknown access values panic — they can only happen via a wire-shape
-// bug, and silently mapping them to "user" would mask it.
-func (a *Agent) systemPromptSnapshot(caller Access) string {
-	a.syncMu.RLock()
-	defer a.syncMu.RUnlock()
+// caller is the resolved access level for the run; visibleSiblings is
+// the set of sibling IDs this run's user can A2A-call (uuid.Nil
+// excluded). Pass nil to disable the sibling section entirely (e.g.
+// cron/webhook runs with no original user).
+//
+// Unknown caller access values panic — they can only happen via a
+// wire-shape bug, and silently mapping would mask it.
+func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID) string {
 	switch caller {
-	case AccessAdmin:
-		return a.systemPrompt
-	case AccessUser, "":
-		return a.systemPromptUser
-	case AccessPublic:
-		return a.systemPromptPublic
+	case AccessAdmin, AccessUser, AccessPublic, "":
+		// ok
+	default:
+		panic("agentsdk: renderSystemPrompt: unknown caller access " + string(caller))
 	}
-	panic("agentsdk: systemPromptSnapshot: unknown caller access " + string(caller))
+	data := a.buildPromptData(caller, visibleSiblings)
+	tier := string(caller)
+	if tier == "" {
+		tier = string(AccessUser)
+	}
+	out, err := prompt.Render(data, tier)
+	if err != nil {
+		// Render errors here are template bugs, not user input — panic
+		// loud so the operator notices in test rather than shipping a
+		// silently-broken prompt.
+		panic("agentsdk: renderSystemPrompt: " + err.Error())
+	}
+	return out
 }
 
 // snapshotMCPSchemas returns a value-copy of the MCP schema map. Callers
@@ -254,18 +260,182 @@ func (a *Agent) snapshotMCPSchemas() map[string][]MCPToolSchema {
 	return out
 }
 
-// applySyncResponse atomically replaces the cached system prompt + MCP
-// schemas + public storage base URL with what Airlock returned from a
-// sync round-trip. Called both at startup (from syncWithAirlock in
-// sync.go) and on /refresh.
+// applySyncResponse atomically stores the platform-supplied PromptData
+// + MCP discovery results + public storage base URL returned by an
+// Airlock sync round-trip. Called both at startup (from
+// syncWithAirlock in sync.go) and on /refresh.
+//
+// PromptData zero-value (no AgentRouteURL — required field) means
+// either an older Airlock that doesn't speak the new wire shape, or a
+// genuine handler bug. Either way panic loud so the operator sees
+// "your airlock is older than your agentsdk" rather than a silently
+// broken (empty) system prompt.
 func (a *Agent) applySyncResponse(resp SyncResponse) {
+	if resp.PromptData.AgentRouteURL == "" {
+		panic("agentsdk: applySyncResponse: empty PromptData.AgentRouteURL — Airlock is older than the prompt-rendering migration; upgrade Airlock to at least the version that ships PromptData")
+	}
 	a.syncMu.Lock()
-	a.systemPrompt = resp.SystemPrompt
-	a.systemPromptUser = resp.SystemPromptUser
-	a.systemPromptPublic = resp.SystemPromptPublic
+	a.promptData = resp.PromptData
+	a.mcpAuthStatus = resp.MCPAuthStatus
 	a.mcpSchemas = resp.MCPSchemas
 	a.publicStorageBase = resp.PublicStorageBase
 	a.syncMu.Unlock()
+}
+
+// buildPromptData assembles prompt.AgentData from the agent's
+// in-memory registrations + the platform's PromptData. Caller holds
+// no locks; we grab syncMu.RLock internally.
+//
+// caller filtering happens inside prompt.Render — we just hand it
+// every tool/conn/etc. registered with the agent. Sibling visibility
+// is per-user (not per-tier) so we intersect PromptData.Siblings
+// with visibleSiblings here.
+func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prompt.AgentData {
+	a.syncMu.RLock()
+	pd := a.promptData
+	auth := append([]MCPAuthStatus(nil), a.mcpAuthStatus...)
+	schemas := make(map[string][]MCPToolSchema, len(a.mcpSchemas))
+	for k, v := range a.mcpSchemas {
+		schemas[k] = v
+	}
+	a.syncMu.RUnlock()
+
+	tools := make([]prompt.ToolInfo, 0, len(a.tools))
+	for _, t := range a.tools {
+		inSchema, _ := json.Marshal(t.InputSchema)
+		outSchema, _ := json.Marshal(t.OutputSchema)
+		tools = append(tools, prompt.ToolInfo{
+			Name:         t.Name,
+			Description:  t.Description,
+			LLMHint:      t.LLMHint,
+			Access:       string(t.Access),
+			InputSchema:  inSchema,
+			OutputSchema: outSchema,
+		})
+	}
+
+	conns := make([]prompt.ConnInfo, 0, len(a.auths))
+	for _, c := range a.auths {
+		conns = append(conns, prompt.ConnInfo{
+			Slug:        c.Slug,
+			Name:        c.Name,
+			Description: c.Description,
+			LLMHint:     c.LLMHint,
+			BaseURL:     c.BaseURL,
+			Access:      string(c.Access),
+		})
+	}
+
+	topics := make([]prompt.TopicInfo, 0, len(a.topics))
+	for _, t := range a.topics {
+		topics = append(topics, prompt.TopicInfo{
+			Slug:        t.Slug,
+			Description: t.Description,
+			LLMHint:     t.LLMHint,
+			Access:      string(t.Access),
+		})
+	}
+
+	webhooks := make([]prompt.WebhookInfo, 0, len(a.webhooks))
+	for _, w := range a.webhooks {
+		webhooks = append(webhooks, prompt.WebhookInfo{
+			Path:        w.Path,
+			Description: w.Description,
+		})
+	}
+
+	crons := make([]prompt.CronInfo, 0, len(a.crons))
+	for _, c := range a.crons {
+		crons = append(crons, prompt.CronInfo{
+			Name:        c.Name,
+			Schedule:    c.Schedule,
+			Description: c.Description,
+		})
+	}
+
+	routes := make([]prompt.RouteInfo, 0, len(a.routes))
+	for _, r := range a.routes {
+		routes = append(routes, prompt.RouteInfo{
+			Method:      r.Method,
+			Path:        r.Path,
+			Access:      string(r.Access),
+			Description: r.Description,
+		})
+	}
+
+	mcpServers := make([]prompt.MCPServerStatus, 0, len(a.mcps))
+	authBySlug := make(map[string]MCPAuthStatus, len(auth))
+	for _, s := range auth {
+		authBySlug[s.Slug] = s
+	}
+	for _, m := range a.mcps {
+		status := "requires authentication"
+		var tools []prompt.ToolInfo
+		if s, ok := authBySlug[m.Slug]; ok && s.Authorized {
+			schema := schemas[m.Slug]
+			status = fmt.Sprintf("connected, %d tools", len(schema))
+			tools = make([]prompt.ToolInfo, len(schema))
+			for i, t := range schema {
+				tools[i] = prompt.ToolInfo{
+					Name:        t.Name,
+					Description: t.Description,
+					InputSchema: t.InputSchema,
+				}
+			}
+		}
+		mcpServers = append(mcpServers, prompt.MCPServerStatus{
+			Slug:   m.Slug,
+			Name:   m.Name,
+			Status: status,
+			Access: string(m.Access),
+			Tools:  tools,
+		})
+	}
+
+	// Per-user sibling visibility: intersect synced address book with
+	// the visible set passed in. If visibleSiblings is nil (cron /
+	// webhook runs, no original user) the Siblings section is omitted
+	// entirely so the LLM doesn't see bindings it can't invoke.
+	var siblings []prompt.SiblingInfo
+	if len(visibleSiblings) > 0 && len(pd.Siblings) > 0 {
+		visible := make(map[uuid.UUID]struct{}, len(visibleSiblings))
+		for _, id := range visibleSiblings {
+			visible[id] = struct{}{}
+		}
+		for _, s := range pd.Siblings {
+			if _, ok := visible[s.ID]; !ok {
+				continue
+			}
+			tools := make([]prompt.ToolInfo, len(s.Tools))
+			for i, t := range s.Tools {
+				tools[i] = prompt.ToolInfo{
+					Name:        t.Name,
+					Description: t.Description,
+					InputSchema: t.InputSchema,
+				}
+			}
+			siblings = append(siblings, prompt.SiblingInfo{
+				ID:          s.ID,
+				Slug:        s.Slug,
+				Name:        s.Name,
+				Description: s.Description,
+				Tools:       tools,
+			})
+		}
+	}
+
+	return prompt.AgentData{
+		AgentDashboardURL: pd.AgentDashboardURL,
+		AgentRouteURL:     pd.AgentRouteURL,
+		Tools:             tools,
+		Connections:       conns,
+		Topics:            topics,
+		Webhooks:          webhooks,
+		Crons:             crons,
+		Routes:            routes,
+		MCPServers:        mcpServers,
+		Siblings:          siblings,
+	}
 }
 
 // publicStorageBaseSnapshot returns the cached public-storage base URL.
