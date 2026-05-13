@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,33 @@ func TestTopicInventory_IncludesLLMHint(t *testing.T) {
 // agentsdk.Tool.LLMHint flows through into registeredTool — the tsrender
 // path picks it up from there. Verifies the field actually persists past
 // toRegistered() rather than being dropped.
+// Tool errors must surface with the tool name prefixed so the LLM /
+// operator can tell which tool failed from the JS stack trace alone.
+// Without the prefix, stdlib errors like "unexpected end of JSON input"
+// point only at agentsdk.newVM.func1 (the dispatch closure) and the
+// reader has no way to know which tool's Go code produced them.
+func TestRegisterTool_WrapsExecuteErrorWithName(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterTool(&Tool[greetIn, greetOut]{
+		Name:        "broken_tool",
+		Description: "always errors",
+		Execute: func(ctx context.Context, in greetIn) (greetOut, error) {
+			return greetOut{}, errors.New("unexpected end of JSON input")
+		},
+	})
+	rt := a.tools["broken_tool"]
+	_, err := rt.Execute(context.Background(), []byte(`{}`))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "broken_tool") {
+		t.Errorf("error %q should include tool name", err.Error())
+	}
+	if !strings.Contains(err.Error(), "unexpected end of JSON input") {
+		t.Errorf("error %q should preserve underlying message", err.Error())
+	}
+}
+
 func TestRegisterTool_PreservesLLMHint(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterTool(&Tool[greetIn, greetOut]{
