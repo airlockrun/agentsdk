@@ -32,9 +32,6 @@ func (a *Agent) Serve() {
 	// is also called from /refresh where errors propagate to Airlock.
 	a.syncOrPanic(ctx)
 
-	// Start conversation VM garbage collection.
-	a.startConvVMGC(a.convVMConfig)
-
 	// Start the background-run flusher. Closes any stale ambient run after
 	// the inactivity window elapses.
 	a.startBackgroundFlusher()

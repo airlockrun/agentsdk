@@ -607,6 +607,36 @@ type PromptData struct {
 	// edits the address book). Per-user visibility is layered on at
 	// dispatch via PromptInput.VisibleSiblings.
 	Siblings []SiblingInfo `json:"siblings,omitempty"`
+
+	// Capabilities are the model slots Airlock has bound for this
+	// agent (agent override → system default). Each bool is true iff
+	// some model is bound for that slot — the prompt branches on
+	// these to avoid recommending builtins that would 4xx at
+	// runtime (e.g. analyzeImage on an agent with no vision model).
+	Capabilities Capabilities `json:"capabilities,omitempty"`
+
+	// SupportedModalities is the chat model's declared input
+	// modality list ("text", "image", "pdf", "audio", "video") at
+	// sync time. PromptInput.SupportedModalities overrides per-run
+	// when set (the run-time value reflects the actual model that
+	// will serve THIS turn, which can differ from sync if the agent
+	// uses run.LLM(slug=...) elsewhere). The prompt template uses
+	// whichever the agent has on hand.
+	SupportedModalities []string `json:"supportedModalities,omitempty"`
+}
+
+// Capabilities is a one-bool-per-slot capability matrix. Field names
+// mirror ModelCapability constants (Vision/Transcription/Speech/
+// Embedding/Image) with one extra for the web-search service slot,
+// which is a non-LLM service but follows the same agent-override →
+// system-default resolution pattern.
+type Capabilities struct {
+	Vision        bool `json:"vision,omitempty"`        // chat with images — analyzeImage / multimodal attachToContext
+	Transcription bool `json:"transcription,omitempty"` // speech-to-text — voice-note auto-transcribe + transcribe()
+	Speech        bool `json:"speech,omitempty"`        // text-to-speech — speech()
+	Embedding     bool `json:"embedding,omitempty"`     // vector embeddings — embed()
+	Image         bool `json:"image,omitempty"`         // image generation — generateImage()
+	Search        bool `json:"search,omitempty"`        // web search — webSearch()
 }
 
 // SiblingInfo describes one sibling agent in the caller's address

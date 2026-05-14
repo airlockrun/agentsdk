@@ -28,20 +28,86 @@ var agentTmpl = template.Must(template.New("agent").Funcs(template.FuncMap{
 }).Parse(agentPromptTmpl))
 
 // AgentData is the template input. Lists are pre-filtered for the
-// caller's access level by Render before the template runs; the
-// template itself is access-blind.
+// caller's access level by Render before the template runs, so the
+// {{ range }} loops don't have to think about access. The
+// CallerAccess field is also exposed so the template CAN branch
+// on it when the difference isn't "include/exclude an item" but
+// "write a different sentence" — e.g. a public-tier preamble or
+// admin-only guidance.
 type AgentData struct {
-	AgentDashboardURL string
-	AgentRouteURL     string
-	Tools             []ToolInfo
-	Connections       []ConnInfo
-	Topics            []TopicInfo
-	Webhooks          []WebhookInfo
-	Crons             []CronInfo
-	Routes            []RouteInfo
-	MCPServers        []MCPServerStatus
-	Siblings          []SiblingInfo
+	AgentDashboardURL   string
+	AgentRouteURL       string
+	CallerAccess        Caller
+	Capabilities        Capabilities
+	SupportedModalities Modalities
+	Tools               []ToolInfo
+	Connections         []ConnInfo
+	Topics              []TopicInfo
+	Webhooks            []WebhookInfo
+	Crons               []CronInfo
+	Routes              []RouteInfo
+	MCPServers          []MCPServerStatus
+	Siblings            []SiblingInfo
+	Directories         []DirInfo
 }
+
+// Capabilities mirrors agentsdk.Capabilities — duplicated here to
+// avoid an import cycle. buildPromptData copies field-for-field.
+type Capabilities struct {
+	Vision        bool
+	Transcription bool
+	Speech        bool
+	Embedding     bool
+	Image         bool
+	Search        bool
+}
+
+// Modalities is the list of input types the chat model accepts.
+// Wrapped in a type so the template can ask `.SupportedModalities.HasImage`
+// instead of doing string comparisons.
+type Modalities []string
+
+func (m Modalities) Has(modality string) bool {
+	for _, v := range m {
+		if v == modality {
+			return true
+		}
+	}
+	return false
+}
+
+// HasImage / HasPDF / HasAudio / HasVideo are template-friendly
+// predicates for the modality strings emitted by sol's
+// provider.GetModalities. "text" is always implied so there's no
+// matching predicate for it.
+func (m Modalities) HasImage() bool { return m.Has("image") }
+func (m Modalities) HasPDF() bool   { return m.Has("pdf") }
+func (m Modalities) HasAudio() bool { return m.Has("audio") }
+func (m Modalities) HasVideo() bool { return m.Has("video") }
+
+// Caller wraps the raw access string with template-friendly
+// predicate methods so authors write
+// `{{ if .CallerAccess.IsUser }}` instead of `{{ if eq .CallerAccess "user" }}`.
+//
+// Empty Caller (zero value) is treated as Admin — matches the
+// unfiltered "render everything" mode Render uses when caller is
+// passed as "".
+type Caller string
+
+// IsAdmin reports whether the caller is at the admin tier.
+func (c Caller) IsAdmin() bool { return c == "admin" || c == "" }
+
+// IsUser reports whether the caller is exactly at the user tier
+// (not admin, not public).
+func (c Caller) IsUser() bool { return c == "user" }
+
+// IsPublic reports whether the caller is exactly at the public
+// tier — i.e. an anonymous or non-member request.
+func (c Caller) IsPublic() bool { return c == "public" }
+
+// AtLeastUser reports user-or-above. Useful for "everyone except
+// public" branches.
+func (c Caller) AtLeastUser() bool { return accessRank(string(c)) >= accessRank("user") }
 
 // ToolInfo carries the hydrated tool record for prompt rendering.
 type ToolInfo struct {
@@ -89,6 +155,19 @@ type RouteInfo struct {
 	Path        string
 	Access      string
 	Description string
+}
+
+// DirInfo describes one registered storage directory for the prompt.
+// Each cap is shown independently — a caller may, for example, have
+// list+read but not write. The template uses these to tell the LLM
+// which S3 paths it can touch on this run.
+type DirInfo struct {
+	Path        string
+	Description string
+	LLMHint     string
+	Read        string
+	Write       string
+	List        string
 }
 
 // MCPServerStatus carries the per-server status line + (when authorized)
@@ -196,11 +275,14 @@ func callerSatisfies(caller, required string) bool {
 
 // Render renders the system prompt for the given caller access. Pass
 // caller as "admin", "user", or "public"; empty means unfiltered
-// admin variant (used by tests).
+// admin variant (used by tests). The caller value is also stamped
+// onto data.CallerAccess so templates can branch on tier
+// (e.g. `{{ if .CallerAccess.IsPublic }}…{{ end }}`).
 func Render(data AgentData, caller string) (string, error) {
 	if caller != "" {
 		data = filterAgentData(data, caller)
 	}
+	data.CallerAccess = Caller(caller)
 	var buf bytes.Buffer
 	if err := agentTmpl.Execute(&buf, data); err != nil {
 		return "", err
@@ -215,6 +297,7 @@ func filterAgentData(data AgentData, caller string) AgentData {
 	out.Topics = filterTopics(data.Topics, caller)
 	out.Routes = filterRoutes(data.Routes, caller)
 	out.MCPServers = filterMCPs(data.MCPServers, caller)
+	out.Directories = filterDirs(data.Directories, caller)
 	// Siblings are not access-filtered by caller tier — visibility for
 	// siblings is per-user (visible-set intersection) and that filter
 	// is applied by the agent BEFORE calling Render. The caller here
@@ -269,6 +352,22 @@ func filterRoutes(in []RouteInfo, caller string) []RouteInfo {
 	for _, r := range in {
 		if callerSatisfies(caller, r.Access) {
 			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// filterDirs keeps a directory entry if the caller can do *anything*
+// with it (read OR write OR list satisfied). A caller with no cap on
+// the dir shouldn't be told the path exists.
+func filterDirs(in []DirInfo, caller string) []DirInfo {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]DirInfo, 0, len(in))
+	for _, d := range in {
+		if callerSatisfies(caller, d.Read) || callerSatisfies(caller, d.Write) || callerSatisfies(caller, d.List) {
+			out = append(out, d)
 		}
 	}
 	return out

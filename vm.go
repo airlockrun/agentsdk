@@ -99,33 +99,6 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 	}
 
-	// Inject persistent store for conversation-scoped runs.
-	// Uses a native goja Object (not a Go map proxy) so JS function source
-	// is preserved by toString() for serialization in teardownStore().
-	if cvm := agent.getOrCreateConvVM(run.conversationID); cvm != nil {
-		run.convVM = cvm
-		cvm.mu.Lock()
-
-		storeObj := vm.NewObject()
-
-		// Populate from Go map (plain values).
-		for key, val := range cvm.store {
-			storeObj.Set(key, val)
-		}
-
-		// Re-evaluate serialized functions in the fresh VM.
-		for key, src := range cvm.serializedFuncs {
-			val, err := vm.RunString("(" + src + ")")
-			if err == nil {
-				storeObj.Set(key, val)
-			}
-			// If eval fails (e.g. closure referencing dead scope), silently drop.
-		}
-
-		vm.Set("store", storeObj)
-		cvm.mu.Unlock()
-	}
-
 	// Register conn_{slug} objects for each registered connection.
 	// Skip any whose required Access exceeds the run's callerAccess.
 	for slug, conn := range run.agent.auths {

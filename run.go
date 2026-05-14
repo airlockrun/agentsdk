@@ -26,7 +26,6 @@ type run struct {
 	vm                  *goja.Runtime
 	vmOnce              sync.Once
 	mu                  sync.Mutex // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
-	convVM              *ConversationVM
 	attachedKeys        map[string]struct{} // keys attached this run for idempotency
 	pendingLogs         []LogEntry          // logs from current executeJS call, drained after each execution
 	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result

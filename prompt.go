@@ -168,7 +168,6 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			defer unsub()
 
 			cr, err := runner.Compact(ctx)
-			run.teardownStore()
 			if err != nil {
 				ew.WriteError(err)
 				run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
@@ -226,7 +225,6 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			}
 
 			result, err := runner.Run(ctx, resumePrompt)
-			run.teardownStore()
 			handleRunResult(ctx, run, ew, result, err)
 			return
 		}
@@ -239,7 +237,6 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		defer unsub()
 
 		result, err := runner.Run(ctx, prompt)
-		run.teardownStore()
 
 		handleRunResult(ctx, run, ew, result, err)
 	}

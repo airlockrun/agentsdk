@@ -23,7 +23,6 @@ func testAgent(t *testing.T) (*Agent, *MockAirlock) {
 		mcps:         make(map[string]*MCP),
 		topics:       make(map[string]*Topic),
 		routes:       make(map[string]*Route),
-		convVMConfig: DefaultConversationVMConfig(),
 	}
 	// Auto-register the framework's /tmp directory the same way New does,
 	// so tests have somewhere to read/write without setting it up by hand.

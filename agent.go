@@ -63,9 +63,6 @@ type Agent struct {
 	// Access from handlers via GetDeps[T](run).
 	Deps any
 
-	conversationVMs sync.Map // map[string]*ConversationVM
-	convVMConfig    ConversationVMConfig
-
 	// bg holds the rolling "background" run used for model calls made with
 	// no dispatcher-bound ctx. See background.go.
 	bg backgroundState
@@ -132,7 +129,6 @@ func New(cfg Config) *Agent {
 		mcps:         make(map[string]*MCP),
 		envVars:      make(map[string]*EnvVar),
 		topics:       make(map[string]*Topic),
-		convVMConfig: DefaultConversationVMConfig(),
 	}
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
@@ -222,14 +218,14 @@ func (a *Agent) DB() *AgentDB {
 //
 // Unknown caller access values panic — they can only happen via a
 // wire-shape bug, and silently mapping would mask it.
-func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID) string {
+func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, runModalities []string) string {
 	switch caller {
 	case AccessAdmin, AccessUser, AccessPublic, "":
 		// ok
 	default:
 		panic("agentsdk: renderSystemPrompt: unknown caller access " + string(caller))
 	}
-	data := a.buildPromptData(caller, visibleSiblings)
+	data := a.buildPromptData(caller, visibleSiblings, runModalities)
 	tier := string(caller)
 	if tier == "" {
 		tier = string(AccessUser)
@@ -290,7 +286,7 @@ func (a *Agent) applySyncResponse(resp SyncResponse) {
 // every tool/conn/etc. registered with the agent. Sibling visibility
 // is per-user (not per-tier) so we intersect PromptData.Siblings
 // with visibleSiblings here.
-func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prompt.AgentData {
+func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runModalities []string) prompt.AgentData {
 	a.syncMu.RLock()
 	pd := a.promptData
 	auth := append([]MCPAuthStatus(nil), a.mcpAuthStatus...)
@@ -363,6 +359,18 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prom
 		})
 	}
 
+	dirs := make([]prompt.DirInfo, 0, len(a.directories))
+	for _, d := range a.directories {
+		dirs = append(dirs, prompt.DirInfo{
+			Path:        d.Path,
+			Description: d.Description,
+			LLMHint:     d.LLMHint,
+			Read:        string(d.Read),
+			Write:       string(d.Write),
+			List:        string(d.List),
+		})
+	}
+
 	mcpServers := make([]prompt.MCPServerStatus, 0, len(a.mcps))
 	authBySlug := make(map[string]MCPAuthStatus, len(auth))
 	for _, s := range auth {
@@ -424,17 +432,36 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prom
 		}
 	}
 
+	// Per-run modalities override the sync-time list when supplied
+	// (web /prompt fills them from the actual model that will serve
+	// THIS turn). Bridge/webhook/cron paths leave runModalities
+	// empty and fall back to the sync default.
+	modalities := pd.SupportedModalities
+	if len(runModalities) > 0 {
+		modalities = runModalities
+	}
+
 	return prompt.AgentData{
 		AgentDashboardURL: pd.AgentDashboardURL,
 		AgentRouteURL:     pd.AgentRouteURL,
-		Tools:             tools,
-		Connections:       conns,
-		Topics:            topics,
-		Webhooks:          webhooks,
-		Crons:             crons,
-		Routes:            routes,
-		MCPServers:        mcpServers,
-		Siblings:          siblings,
+		Capabilities: prompt.Capabilities{
+			Vision:        pd.Capabilities.Vision,
+			Transcription: pd.Capabilities.Transcription,
+			Speech:        pd.Capabilities.Speech,
+			Embedding:     pd.Capabilities.Embedding,
+			Image:         pd.Capabilities.Image,
+			Search:        pd.Capabilities.Search,
+		},
+		SupportedModalities: prompt.Modalities(modalities),
+		Tools:               tools,
+		Connections:         conns,
+		Topics:              topics,
+		Webhooks:            webhooks,
+		Crons:               crons,
+		Routes:              routes,
+		MCPServers:          mcpServers,
+		Siblings:            siblings,
+		Directories:         dirs,
 	}
 }
 
