@@ -1,12 +1,14 @@
 package agentsdk
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -69,12 +71,19 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 	}
 	defer resp.Body.Close()
 
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("SiblingHandle.CallTool: read response: %w", err)
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("SiblingHandle.CallTool agent_%s.%s: status %d: %s", h.slug, toolName, resp.StatusCode, string(raw))
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("SiblingHandle.CallTool agent_%s.%s: status %d: %s", h.slug, toolName, resp.StatusCode, string(body))
+	}
+
+	// The `prompt` meta-tool answers with an SSE stream (it relays the
+	// sibling run's progress as notifications/progress and the final
+	// tool result as a terminal JSON-RPC response on the same channel);
+	// every other tool answers with a single application/json envelope.
+	// Collapse both to the one JSON-RPC response envelope.
+	raw, err := readJSONRPCResponse(resp)
+	if err != nil {
+		return nil, fmt.Errorf("SiblingHandle.CallTool agent_%s.%s: %w", h.slug, toolName, err)
 	}
 
 	// JSON-RPC response envelope.
@@ -136,4 +145,52 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 		return parsed, nil
 	}
 	return text, nil
+}
+
+// readJSONRPCResponse returns the single JSON-RPC response envelope from
+// an MCP reply. A plain application/json reply is the body verbatim. A
+// text/event-stream reply (the `prompt` meta-tool) interleaves
+// notifications/progress with the terminal response on one SSE channel;
+// we drop the notifications (they have a "method", responses don't) and
+// return the last response-shaped data event. The terminal result/error
+// is always written last by the server, so last-wins is correct.
+func readJSONRPCResponse(resp *http.Response) ([]byte, error) {
+	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("read response: %w", err)
+		}
+		return raw, nil
+	}
+
+	sc := bufio.NewScanner(resp.Body)
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	var last []byte
+	for sc.Scan() {
+		line := sc.Text()
+		data, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue // event:/id:/retry:/comment/blank — SSE framing only
+		}
+		data = strings.TrimSpace(data)
+		if data == "" {
+			continue
+		}
+		// notifications/progress is a JSON-RPC notification (has
+		// "method", no "id"); the response we want has no "method".
+		var probe struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal([]byte(data), &probe) == nil && probe.Method != "" {
+			continue
+		}
+		last = append(last[:0], data...)
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("read SSE stream: %w", err)
+	}
+	if last == nil {
+		return nil, fmt.Errorf("SSE stream ended with no JSON-RPC response")
+	}
+	return last, nil
 }
