@@ -111,7 +111,8 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 			URI  string          `json:"uri,omitempty"`
 			Data json.RawMessage `json:"data,omitempty"`
 		} `json:"content"`
-		IsError bool `json:"isError,omitempty"`
+		IsError bool            `json:"isError,omitempty"`
+		Meta    json.RawMessage `json:"_meta,omitempty"`
 	}
 	if err := json.Unmarshal(rpcResp.Result, &toolResult); err != nil {
 		return nil, fmt.Errorf("agent_%s.%s: decode result: %w", h.slug, toolName, err)
@@ -136,6 +137,46 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 	text := textBuf.String()
 	if toolResult.IsError {
 		return nil, fmt.Errorf("agent_%s.%s: %s", h.slug, toolName, text)
+	}
+
+	// A2A prompt() task result: airlock stamps _meta["airlock.run/a2a"]
+	// with the task handle + state + artifacts. Surface it to JS as a
+	// structured object {text, taskId, contextId, state, artifacts}
+	// (artifact paths are already in this agent's siblings/<slug>/).
+	// Typed tools have no _meta and fall through to the JSON/text path.
+	if len(toolResult.Meta) > 0 {
+		var meta struct {
+			A2A *struct {
+				TaskID       string          `json:"taskId"`
+				ContextID    string          `json:"contextId"`
+				State        string          `json:"state"`
+				Artifacts    json.RawMessage `json:"artifacts"`
+				Confirmation json.RawMessage `json:"confirmation"`
+			} `json:"airlock.run/a2a"`
+		}
+		if json.Unmarshal(toolResult.Meta, &meta) == nil && meta.A2A != nil {
+			var artifacts any
+			if len(meta.A2A.Artifacts) > 0 {
+				_ = json.Unmarshal(meta.A2A.Artifacts, &artifacts)
+			}
+			out := map[string]any{
+				"text":      text,
+				"taskId":    meta.A2A.TaskID,
+				"contextId": meta.A2A.ContextID,
+				"state":     meta.A2A.State,
+				"artifacts": artifacts,
+			}
+			// Leaf gate detail (input-required only) — promptAgent
+			// stamps it into ErrDelegatedSuspend so it rides up the
+			// chain to the root confirmation the human sees.
+			if len(meta.A2A.Confirmation) > 0 {
+				var confirmation any
+				if json.Unmarshal(meta.A2A.Confirmation, &confirmation) == nil {
+					out["confirmation"] = confirmation
+				}
+			}
+			return out, nil
+		}
 	}
 
 	// Tool bodies usually return JSON; decode if possible so JS sees a

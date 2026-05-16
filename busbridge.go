@@ -66,4 +66,45 @@ func emitSuspensionEvent(ew *EventWriter, sc *sol.SuspensionContext) {
 		Type: "suspended",
 		Data: m,
 	})
+
+	// A delegated suspension carries no local PermissionAsked, so no
+	// confirmation_required was emitted by the bus bridge. Synthesize
+	// one from the carried leaf gate detail so the EXISTING confirm
+	// pipeline (airlock → frontend card → approve/deny → resume with
+	// Approved → resolveDelegatedSuspension) drives it end to end —
+	// the down-cascade. Attribution rides in permission/code so the
+	// human sees which sibling wants to do what.
+	if sc.Reason == "delegated" {
+		var del struct {
+			ToolCallID string `json:"toolCallID"`
+			Child      struct {
+				Slug         string `json:"slug"`
+				Confirmation struct {
+					Agent      string   `json:"agent"`
+					Permission string   `json:"permission"`
+					Patterns   []string `json:"patterns"`
+					Code       string   `json:"code"`
+				} `json:"confirmation"`
+			} `json:"child"`
+		}
+		raw, _ := json.Marshal(sc.Data)
+		_ = json.Unmarshal(raw, &del)
+		who := del.Child.Confirmation.Agent
+		if who == "" {
+			who = del.Child.Slug
+		}
+		perm := "promptAgent"
+		if del.Child.Confirmation.Permission != "" {
+			perm = del.Child.Confirmation.Permission
+		}
+		ew.writeLine(ndjsonLine{
+			Type: "confirmation_required",
+			Data: map[string]any{
+				"permission": who + ": " + perm,
+				"patterns":   del.Child.Confirmation.Patterns,
+				"code":       del.Child.Confirmation.Code,
+				"toolCallId": del.ToolCallID,
+			},
+		})
+	}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/bus"
+	"github.com/google/uuid"
 )
 
 type runJSInput struct {
@@ -25,6 +26,15 @@ type runJSInput struct {
 func buildSolTools(agent *Agent, run *run, supportedModalities []string) tool.Set {
 	ts := tool.Set{
 		"run_js": buildRunJSTool(agent, run),
+	}
+
+	// promptAgent: open-ended A2A delegation as a first-class tool (not
+	// a run_js binding). A suspendable sibling LLM-loop round-trip must
+	// be its own pending tool call so Sol's suspend/resume handles it
+	// natively (no JS-sandbox re-run / idempotency problem). Only
+	// registered when this run can see at least one sibling.
+	if t, ok := buildPromptAgentTool(agent, run); ok {
+		ts["promptAgent"] = t
 	}
 
 	// Wrap all tool Execute functions with output truncation.
@@ -128,6 +138,121 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			return tool.Result{Output: output, Attachments: attachments}, nil
 		}).
 		Build()
+}
+
+type promptAgentInput struct {
+	Agent     string     `json:"agent" jsonschema:"description=Slug of the sibling agent to delegate to (see the Sibling agents section of the system prompt)."`
+	Message   string     `json:"message" jsonschema:"description=The task / message to send. When resuming an input-required task, put the answer here."`
+	ContextID string     `json:"contextId,omitempty" jsonschema:"description=Opaque thread handle, minted by the target agent. OMIT on the first call to an agent. Only ever pass a contextId you got back from THIS agent's own prior promptAgent result — never your own run/conversation id, never a fabricated value."`
+	TaskID    string     `json:"taskId,omitempty" jsonschema:"description=Opaque task handle. Only set when resuming a task that returned state=input-required: pass that result's taskId verbatim and put the answer in message. Never invent one."`
+	Files     []FileInfo `json:"files,omitempty" jsonschema:"description=Files to send; paths in YOUR storage, copied into the target agent's storage."`
+}
+
+// buildPromptAgentTool builds the single top-level `promptAgent` tool —
+// open-ended natural-language delegation to a visible sibling. ok=false
+// (don't register) when this run sees no siblings. The visible set is
+// frozen at run start, same as the vm.go sibling bindings.
+func buildPromptAgentTool(agent *Agent, run *run) (tool.Tool, bool) {
+	if len(run.visibleSiblings) == 0 {
+		return tool.Tool{}, false
+	}
+	visible := make(map[uuid.UUID]struct{}, len(run.visibleSiblings))
+	for _, id := range run.visibleSiblings {
+		visible[id] = struct{}{}
+	}
+	run.agent.syncMu.RLock()
+	allSibs := run.agent.promptData.Siblings
+	run.agent.syncMu.RUnlock()
+
+	type sib struct {
+		id   uuid.UUID
+		slug string
+	}
+	bySlug := make(map[string]sib)
+	var listing strings.Builder
+	for _, s := range allSibs {
+		if _, ok := visible[s.ID]; !ok {
+			continue
+		}
+		bySlug[s.Slug] = sib{id: s.ID, slug: s.Slug}
+		fmt.Fprintf(&listing, "\n- %s — %s", s.Slug, s.Description)
+	}
+	if len(bySlug) == 0 {
+		return tool.Tool{}, false
+	}
+
+	desc := "Delegate a natural-language task to a sibling agent; it runs its own LLM loop and returns " +
+		"{text, taskId, contextId, state, artifacts}. `state` is completed or input-required " +
+		"(if input-required, call again with the same taskId and the answer in message). " +
+		"artifacts are files the sibling produced, copied into your storage. Available agents:" + listing.String()
+
+	built := tool.New("promptAgent").
+		Description(desc).
+		SchemaFromStruct(promptAgentInput{}).
+		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
+			var in promptAgentInput
+			if err := json.Unmarshal(input, &in); err != nil {
+				return tool.Result{Output: "Error: invalid input: " + err.Error()}, nil
+			}
+			if in.Agent == "" || in.Message == "" {
+				return tool.Result{Output: "Error: `agent` and `message` are required"}, nil
+			}
+			target, ok := bySlug[in.Agent]
+			if !ok {
+				return tool.Result{Output: "Error: unknown or unavailable agent: " + in.Agent}, nil
+			}
+
+			handle := &SiblingHandle{slug: target.slug, agentID: target.id, agent: agent}
+			childArgs := map[string]any{"message": in.Message}
+			if in.ContextID != "" {
+				childArgs["contextId"] = in.ContextID
+			}
+			if in.TaskID != "" {
+				childArgs["taskId"] = in.TaskID
+			}
+			if len(in.Files) > 0 {
+				childArgs["files"] = in.Files
+			}
+
+			res, err := handle.CallTool(ctx, run.id, "prompt", childArgs)
+			if err != nil {
+				// failed / canceled surface as a normal tool error the
+				// LLM can react to (matches the A2A error-channel design).
+				return tool.Result{Output: "Error: " + err.Error()}, nil
+			}
+
+			// res is the structured {text,taskId,contextId,state,artifacts}.
+			// On input-required, suspend this pending tool call as a
+			// delegated suspension so it bubbles up the run tree and the
+			// decision cascades back in on resume.
+			if m, ok := res.(map[string]any); ok {
+				if st, _ := m["state"].(string); st == "input-required" {
+					child := map[string]any{
+						"agentId": target.id.String(),
+						"slug":    target.slug,
+						"taskId":  m["taskId"],
+					}
+					// Leaf gate detail so the root confirmation the
+					// human sees says WHAT this sibling wants to do.
+					if c, ok := m["confirmation"]; ok && c != nil {
+						child["confirmation"] = c
+					}
+					return tool.Result{}, &bus.ErrDelegatedSuspend{
+						ToolCallID: opts.ToolCallID,
+						Transport:  "a2a",
+						Child:      child,
+					}
+				}
+			}
+
+			out, mErr := json.Marshal(res)
+			if mErr != nil {
+				return tool.Result{Output: fmt.Sprintf("%v", res)}, nil
+			}
+			return tool.Result{Output: string(out)}, nil
+		}).
+		Build()
+	return built, true
 }
 
 // mimeMatchesModalities checks if a MIME type is supported by the given modalities.

@@ -962,10 +962,12 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 					return invokeSiblingTool(vm, run.ctx, handle, run.id, siblingSlug, toolName, call.Argument(0))
 				})
 			}
-			// Built-in prompt(): drives the sibling's full LLM loop.
-			obj.Set("prompt", func(call goja.FunctionCall) goja.Value {
-				return invokeSiblingTool(vm, run.ctx, handle, run.id, siblingSlug, "prompt", call.Argument(0))
-			})
+			// NB: open-ended delegation is the top-level `promptAgent`
+			// tool (tools.go), not a run_js binding — a suspendable
+			// LLM-loop round-trip has no business inside the JS sandbox
+			// and must be a first-class pending tool call so Sol's
+			// suspend/resume handles it natively. Only the sibling's
+			// typed tools stay as run_js bindings here.
 			vm.Set("agent_"+siblingSlug, obj)
 		}
 	}

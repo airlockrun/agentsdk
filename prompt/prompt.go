@@ -234,7 +234,15 @@ func renderMCPNamespaceFunc(server MCPServerStatus) string {
 // with the agent_ prefix. The built-in `prompt` meta-tool is added
 // at the end with a hard-coded shape (no schema diff per sibling).
 func renderSiblingNamespaceFunc(s SiblingInfo) string {
-	tools := make([]tsrender.MCPToolRender, 0, len(s.Tools)+1)
+	// Only the sibling's TYPED tools are run_js bindings on
+	// `agent_<slug>`. Open-ended natural-language delegation is the
+	// top-level `promptAgent` tool (a real tool_call, not a run_js
+	// binding) — a suspendable LLM-loop round-trip must be a
+	// first-class pending tool call, so it is NOT declared here.
+	if len(s.Tools) == 0 {
+		return ""
+	}
+	tools := make([]tsrender.MCPToolRender, 0, len(s.Tools))
 	for _, t := range s.Tools {
 		tools = append(tools, tsrender.MCPToolRender{
 			Name:        t.Name,
@@ -242,14 +250,6 @@ func renderSiblingNamespaceFunc(s SiblingInfo) string {
 			InputSchema: t.InputSchema,
 		})
 	}
-	// Built-in `prompt` meta-tool — drives the sibling's full LLM loop
-	// and returns the final assistant text. Hard-coded shape because
-	// every sibling exposes the same method.
-	tools = append(tools, tsrender.MCPToolRender{
-		Name:        "prompt",
-		Description: "Send a natural-language prompt to this agent. The agent runs its own LLM loop and returns the final assistant message. Use this for open-ended delegation; use the typed tools above for narrow tool-call shapes.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"message":{"type":"string","description":"User-facing message to send."},"conversationId":{"type":"string","description":"Optional: continue an existing conversation. Omit to start fresh."}},"required":["message"]}`),
-	})
 	return tsrender.RenderMCPNamespace("agent_"+s.Slug, tools)
 }
 

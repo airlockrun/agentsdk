@@ -277,7 +277,13 @@ If an MCP call throws `{authRequired: true, slug, serverName}`, the user hasn't 
 
 ## Sibling agents
 
-This agent can call other Airlock agents on the same instance. Each sibling exposes its registered tools plus a built-in `prompt({message, conversationId?, files?})` that drives the sibling's full LLM loop and returns the final response. Calls go through the `agent_{slug}` namespace on this run; authorization on the target is evaluated against the original user's access level, not this agent's identity — so a sibling listed here may still return 403 if the user lacks access.
+This agent can call other Airlock agents on the same instance. Two ways:
+
+- **Open-ended delegation** — the top-level `promptAgent` tool (a normal tool call, NOT a `run_js` binding). `promptAgent({ agent: "<slug>", message, contextId?, taskId?, files? })`: the sibling runs its own LLM loop and returns `{ text, taskId, contextId, state, artifacts }`. `state` is `completed` or `input-required` (if `input-required`, call `promptAgent` again with the same `taskId` and your answer in `message`). `artifacts` are files the sibling produced, copied into your storage. Use this for natural-language tasks.
+  - `contextId` and `taskId` are **opaque handles minted by the target agent**. On a first call to an agent, OMIT both — the result will carry a `contextId` you can pass back on later turns to continue that same thread. Never fabricate them, and never pass your own run id or conversation id: those belong to a different agent and will be rejected.
+- **Typed tools** — each sibling's registered tools are `run_js` bindings under the `agent_{slug}` namespace (declared below). Use these for narrow, schema-shaped calls.
+
+Authorization on the target is evaluated against the original user's access level, not this agent's identity — a sibling listed here may still return 403 if the user lacks access.
 {{ range .Siblings }}
 - `agent_{{ .Slug }}` ({{ .Name }}){{ if .Description }} — {{ .Description }}{{ end }}
 {{- $ns := renderSiblingNamespace . -}}

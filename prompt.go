@@ -14,8 +14,10 @@ import (
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
+	solagent "github.com/airlockrun/sol/agent"
 	"github.com/airlockrun/sol/bus"
 	"github.com/airlockrun/sol/session"
+	"github.com/google/uuid"
 )
 
 const maxToolSteps = 50
@@ -78,14 +80,10 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 				prompt = last.Content.Text
 			}
 		}
-		if len(input.Files) > 0 {
-			var fileInfo string
-			for _, f := range input.Files {
-				fileInfo += fmt.Sprintf("- %s (%s, %d bytes) — path: %q\n", f.Filename, f.ContentType, f.Size, f.Path)
-			}
-			note := fmt.Sprintf("Attached files:\n%sUse readFile(path) in run_js to read text contents, readBytes(path) for binary, or attachToContext(path) to load images/files into your visual context for the next turn.", fileInfo)
-			prompt += "\n\n[" + note + "]"
-		}
+		// Attached-files info is NOT inlined here. Airlock writes it as
+		// its own conversation message (trigger.PostFilesManifest,
+		// source="llm") at every files-bearing ingress — one canonical
+		// producer, in LLM context, hidden from the UI.
 
 		ew := newEventWriter(w)
 
@@ -203,10 +201,18 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			}
 			_ = agent.client.doJSON(ctx, "GET", "/api/agent/run/"+input.ResumeRunID+"/checkpoint", nil, &checkpoint)
 
-			// Execute or deny pending tool calls, then append results to store.
-			if checkpoint.SuspensionContext != nil && len(checkpoint.SuspensionContext.PendingToolCalls) > 0 {
+			// Resolve the gate with the human's decision, then append
+			// results to store. A "delegated" suspension drives the
+			// child (A2A sibling / in-process subagent) with the
+			// decision instead of locally allow/deny-ing a tool — the
+			// down-cascade of tree suspension.
+			if checkpoint.SuspensionContext != nil {
 				approved := input.Approved != nil && *input.Approved
-				resolvePendingToolCalls(ctx, solAgent.Tools, opts.SessionStore, checkpoint.SuspensionContext.PendingToolCalls, approved, ew)
+				if checkpoint.SuspensionContext.Reason == "delegated" {
+					resolveDelegatedSuspension(ctx, agent, run.id, opts, checkpoint.SuspensionContext, approved, input.Message, opts.SessionStore, ew)
+				} else if len(checkpoint.SuspensionContext.PendingToolCalls) > 0 {
+					resolvePendingToolCalls(ctx, solAgent.Tools, opts.SessionStore, checkpoint.SuspensionContext.PendingToolCalls, approved, ew)
+				}
 			}
 
 			// When not using the store, also load checkpoint messages.
@@ -375,4 +381,137 @@ func resolvePendingToolCalls(
 	if store != nil && len(resultMsgs) > 0 {
 		_ = store.Append(ctx, resultMsgs)
 	}
+}
+
+// resolveDelegatedSuspension is the down-cascade half of tree
+// suspension: drive the delegated child (A2A sibling or in-process Sol
+// subagent) to a terminal state with the human's decision, then emit +
+// persist the suspended parent tool call's result so the resumed run
+// continues. The up-cascade half is bus.ErrDelegatedSuspend →
+// runner.handleSuspension.
+func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID string, baseOpts sol.RunnerOptions, sc *sol.SuspensionContext, approved bool, denyMsg string, store session.SessionStore, ew *EventWriter) {
+	rawData, _ := json.Marshal(sc.Data)
+	var del struct {
+		ToolCallID string          `json:"toolCallID"`
+		Transport  string          `json:"transport"`
+		Child      json.RawMessage `json:"child"`
+	}
+	_ = json.Unmarshal(rawData, &del)
+
+	var output string
+	switch del.Transport {
+	case "a2a":
+		var ch struct {
+			AgentID string `json:"agentId"`
+			Slug    string `json:"slug"`
+			TaskID  string `json:"taskId"`
+		}
+		_ = json.Unmarshal(del.Child, &ch)
+		aid, perr := uuid.Parse(ch.AgentID)
+		if perr != nil {
+			output = "Error: invalid delegated agent id: " + perr.Error()
+			break
+		}
+		h := &SiblingHandle{slug: ch.Slug, agentID: aid, agent: agent}
+		decision := "deny"
+		if approved {
+			decision = "approve"
+		}
+		args := map[string]any{"taskId": ch.TaskID, "decision": decision}
+		if !approved && denyMsg != "" {
+			args["message"] = denyMsg
+		}
+		res, cerr := h.CallTool(ctx, callerRunID, "prompt", args)
+		switch {
+		case cerr != nil:
+			output = "Error: " + cerr.Error()
+		default:
+			if b, mErr := json.Marshal(res); mErr == nil {
+				output = string(b)
+			} else {
+				output = fmt.Sprintf("%v", res)
+			}
+		}
+	case "inprocess":
+		output = resumeInProcessChild(ctx, agent, callerRunID, baseOpts, del.Child, approved, denyMsg, ew)
+	default:
+		output = "Error: unknown delegated transport: " + del.Transport
+	}
+
+	toolName := "promptAgent"
+	for _, tc := range sc.PendingToolCalls {
+		if tc.ID == del.ToolCallID {
+			toolName = tc.Name
+			break
+		}
+	}
+	ew.WriteEvent(stream.Event{
+		Type: stream.EventToolResult,
+		Data: stream.ToolResultEvent{
+			ToolCallID: del.ToolCallID,
+			ToolName:   toolName,
+			Output:     stream.ToolOutput{Output: output},
+		},
+	})
+	if store != nil {
+		_ = store.Append(ctx, []session.Message{{
+			Role: "tool",
+			Parts: []session.Part{{
+				Type: "tool",
+				Tool: &session.ToolPart{
+					CallID: del.ToolCallID,
+					Name:   toolName,
+					Output: output,
+					Status: "completed",
+				},
+			}},
+		}})
+	}
+}
+
+// resumeInProcessChild reconstructs a suspended Sol subagent from the
+// nested InProcessChild checkpoint, resolves its own gate with the same
+// decision (recursing if it too delegated), runs it to terminal, and
+// returns its final text. Model/provider config is inherited from the
+// parent's resumed runner options, mirroring Runner.SpawnSubagent.
+func resumeInProcessChild(ctx context.Context, agent *Agent, callerRunID string, baseOpts sol.RunnerOptions, childRaw json.RawMessage, approved bool, denyMsg string, ew *EventWriter) string {
+	var child struct {
+		AgentName         string                 `json:"agentName"`
+		Messages          []goai.Message         `json:"messages"`
+		SuspensionContext *sol.SuspensionContext `json:"suspensionContext"`
+		CompactionState   *sol.CompactionState   `json:"compactionState"`
+	}
+	if err := json.Unmarshal(childRaw, &child); err != nil {
+		return "Error: decode in-process child: " + err.Error()
+	}
+	factory, ok := solagent.GetFactory(child.AgentName)
+	if !ok {
+		return "Error: subagent type not found on resume: " + child.AgentName
+	}
+	sub := factory("")
+	subOpts := baseOpts // inherit model / apiKey / baseURL / bus
+	subOpts.Agent = sub
+	subOpts.InitialMessages = child.Messages
+	subOpts.SessionStore = nil
+	subRunner := sol.NewRunner(subOpts)
+
+	if child.SuspensionContext != nil {
+		if child.SuspensionContext.Reason == "delegated" {
+			resolveDelegatedSuspension(ctx, agent, callerRunID, baseOpts, child.SuspensionContext, approved, denyMsg, nil, ew)
+		} else if len(child.SuspensionContext.PendingToolCalls) > 0 {
+			resolvePendingToolCalls(ctx, sub.Tools, nil, child.SuspensionContext.PendingToolCalls, approved, ew)
+		}
+	}
+	resumePrompt := ""
+	if !approved && denyMsg != "" {
+		resumePrompt = denyMsg
+	}
+	res, err := subRunner.Run(ctx, resumePrompt)
+	if err != nil {
+		return "Error: subagent resume: " + err.Error()
+	}
+	if res != nil {
+		return res.TotalText
+	}
+	return ""
 }
