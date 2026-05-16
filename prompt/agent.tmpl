@@ -201,6 +201,15 @@ printToUser({ type: "text", text: "Download (expires in 1h): " + link.url })
 The agent developer has registered these typed tools. Call them inside `run_js` by name, with a single object argument matching the declared input type. Return values are native JavaScript objects matching the declared output type.
 
 ```typescript
+// FilePath / DirPath are string aliases for storage paths owned by this
+// agent. Pass paths returned by writeFile / generateImage / sibling tools
+// directly; never invent paths. When passing a FilePath to a sibling agent
+// (agent_<slug>.tool(...)) or to an external MCP client, the platform
+// transparently copies the file across storage boundaries — you keep
+// working with the path as if it were local.
+declare type FilePath = string;
+declare type DirPath  = string;
+
 {{ renderTools .Tools }}
 ```
 {{- end }}
@@ -284,7 +293,9 @@ This agent can call other Airlock agents on the same instance. Each sibling expo
 ## Storage directories
 
 These are the S3 paths you can touch on this run. `read` lets you `readFile`/`readBytes`/`statFile`; `write` lets you `writeFile`/`deleteFile`; `list` lets you `listDir`. A `-` means you don't have that cap. Paths are slashless prefixes (no leading `/`, no trailing `/`) — join with a filename like `reports/q1.csv`.
+
+**Scoped directories** carry an extra segment in the path so each caller (user / conversation / one tool call) has its own isolated slot — e.g. `<dir>/user-<id>/...`. You never construct the scope segment yourself; `writeFile("<dir>/foo.jpg", ...)` returns the scoped path, and the path you receive is the path you read back with. Don't strip or substitute scope segments — they're the access ticket.
 {{ range .Directories }}
-- `{{ .Path }}/` — read: {{ if .Read }}{{ .Read }}{{ else }}-{{ end }}, write: {{ if .Write }}{{ .Write }}{{ else }}-{{ end }}, list: {{ if .List }}{{ .List }}{{ else }}-{{ end }}{{ if .Description }} — {{ .Description }}{{ end }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
+- `{{ .Path }}/` — read: {{ if .Read }}{{ .Read }}{{ else }}-{{ end }}, write: {{ if .Write }}{{ .Write }}{{ else }}-{{ end }}, list: {{ if .List }}{{ .List }}{{ else }}-{{ end }}{{ if .Scope }} [scope: per-{{ .Scope }}]{{ end }}{{ if .Description }} — {{ .Description }}{{ end }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{- end }}
 {{- end }}

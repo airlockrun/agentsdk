@@ -13,6 +13,7 @@ import (
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/websearch"
 	"github.com/dop251/goja"
+	"github.com/google/uuid"
 )
 
 // pathArg extracts a path string from a JS argument. Absolute unix paths
@@ -926,7 +927,65 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		vm.Set("mcp_"+slug, obj)
 	}
 
+	// Sibling agent (A2A) bindings: agent_<slug>.toolName(args). Each
+	// sibling's tool schemas were synced into promptData.Siblings by
+	// airlock; the per-user visibility filter (run.visibleSiblings)
+	// mirrors what the prompt-render path uses, so the LLM only gets
+	// JS bindings for siblings the prompt actually advertised.
+	//
+	// File arguments and returns are translated at the airlock MCP
+	// boundary (cross-bucket S3 copies) — the JS caller just sees path
+	// strings the same way same-bucket tools do.
+	if len(run.visibleSiblings) > 0 {
+		visible := make(map[uuid.UUID]struct{}, len(run.visibleSiblings))
+		for _, id := range run.visibleSiblings {
+			visible[id] = struct{}{}
+		}
+		run.agent.syncMu.RLock()
+		siblings := run.agent.promptData.Siblings
+		run.agent.syncMu.RUnlock()
+		for _, s := range siblings {
+			if _, ok := visible[s.ID]; !ok {
+				continue
+			}
+			handle := &SiblingHandle{slug: s.Slug, agentID: s.ID, agent: run.agent}
+			obj := vm.NewObject()
+			siblingSlug := s.Slug
+			names := make([]string, len(s.Tools))
+			for i, t := range s.Tools {
+				names[i] = t.Name
+			}
+			jsNames := tsrender.JSToolNames(names)
+			for _, t := range s.Tools {
+				toolName := t.Name
+				obj.Set(jsNames[toolName], func(call goja.FunctionCall) goja.Value {
+					return invokeSiblingTool(vm, run.ctx, handle, run.id, siblingSlug, toolName, call.Argument(0))
+				})
+			}
+			// Built-in prompt(): drives the sibling's full LLM loop.
+			obj.Set("prompt", func(call goja.FunctionCall) goja.Value {
+				return invokeSiblingTool(vm, run.ctx, handle, run.id, siblingSlug, "prompt", call.Argument(0))
+			})
+			vm.Set("agent_"+siblingSlug, obj)
+		}
+	}
+
 	return vm
+}
+
+// invokeSiblingTool runs an A2A tool call from a JS binding and
+// translates the result back to a JS value. Wraps SiblingHandle.CallTool
+// with goja error / panic semantics so JS code can try/catch normally.
+func invokeSiblingTool(vm *goja.Runtime, ctx context.Context, handle *SiblingHandle, callerRunID, siblingSlug, toolName string, argsArg goja.Value) goja.Value {
+	var args any
+	if argsArg != nil && !goja.IsUndefined(argsArg) && !goja.IsNull(argsArg) {
+		args = argsArg.Export()
+	}
+	result, err := handle.CallTool(ctx, callerRunID, toolName, args)
+	if err != nil {
+		panic(vm.NewGoError(fmt.Errorf("agent_%s.%s: %w", siblingSlug, toolName, err)))
+	}
+	return vm.ToValue(result)
 }
 
 // invokeMCPTool runs an MCP tool call from a JS binding and translates the
@@ -948,10 +1007,27 @@ func invokeMCPTool(vm *goja.Runtime, ctx context.Context, handle *MCPHandle, mcp
 		}
 		panic(vm.NewGoError(fmt.Errorf("mcp_%s.%s: %w", mcpSlug, toolName, err)))
 	}
+	// Collect text content blocks. Non-text shapes (resource_link, image,
+	// audio) get a best-effort surfacing so a third-party MCP server
+	// that returns them doesn't appear silent to the LLM. The A2A path
+	// never emits these — airlock's materializer rewrites file paths
+	// in-place inside the text block and skips resource_link for agent
+	// callers — but we shouldn't rely on that for non-airlock servers.
 	var out strings.Builder
 	for _, c := range resp.Content {
-		if c.Type == "text" {
+		switch c.Type {
+		case "text":
 			out.WriteString(c.Text)
+		case "resource_link":
+			out.WriteString(c.URI)
+		case "image":
+			out.WriteString("[image ")
+			out.WriteString(c.MimeType)
+			out.WriteString("]")
+		case "audio":
+			out.WriteString("[audio ")
+			out.WriteString(c.MimeType)
+			out.WriteString("]")
 		}
 	}
 	raw := out.String()

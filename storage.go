@@ -17,6 +17,24 @@ import (
 // allows a custom Description.
 const reservedTmpPath = "tmp"
 
+// reservedIncomingPath is the framework-owned ephemeral directory where
+// airlock writes files sent to this agent as A2A tool arguments or as
+// inline uploads from external MCP clients. Tool bodies don't reference
+// it directly — args are rewritten at the boundary, so the body
+// receives a path inside this prefix and readFiles it like any other
+// path. Sub-paths carry a scope key (`run-{uuid}` or `conv-{uuid}`);
+// CheckFileAccess gates reads on that scope matching the current run's
+// caller context, so callers cannot read other callers' uploads even
+// when both are anonymous. Files are auto-cleaned by retention.
+const reservedIncomingPath = "__incoming"
+
+// reservedSiblingsPath is the framework-owned directory where airlock
+// writes files returned from sibling agents' tools. Caller's run_js
+// code receives paths like "siblings/imagebot/results/cropped.png" in
+// tool results and can keep working with them as if they were locally
+// produced. Files are auto-cleaned by retention.
+const reservedSiblingsPath = "siblings"
+
 // ErrNotFound is returned by CheckFileAccess and the storage methods for
 // both "directory not registered" and "caller does not have access" — the
 // two cases are deliberately indistinguishable at the public surface so
@@ -183,10 +201,109 @@ func (a *Agent) CheckFileAccess(ctx context.Context, path string, op FileOp) err
 	}
 	cap := dirCap(d, op)
 	caller := CallerFrom(ctx)
-	if !accessSatisfies(caller.Access, cap) {
-		return ErrNotFound
+	if accessSatisfies(caller.Access, cap) {
+		return nil
 	}
-	return nil
+	// Scoped-directory overlay. Lets through ops the base ACL would
+	// reject when the path carries a scope key matching the current
+	// run's identity (user/conv/parent-run). For writes the path is
+	// allowed to be bare — WriteFile injects the scope segment
+	// downstream — provided the run has *some* key to scope by.
+	if d.Scope != ScopeNone {
+		uid, convID, parentRunID := scopeKeysFromContext(ctx)
+		switch op {
+		case OpRead, OpList:
+			if scope := scopePrefixOfPath(canon, d); scope != "" && scopeMatches(scope, uid, convID, parentRunID) {
+				return nil
+			}
+		case OpWrite:
+			// Bare path → injection will produce a scoped path the
+			// writer is the only run that owns. Already-scoped paths
+			// still need to match (so a public caller can't overwrite
+			// another caller's slot by handing us a forged scope key).
+			if scope := scopePrefixOfPath(canon, d); scope != "" {
+				if scopeMatches(scope, uid, convID, parentRunID) {
+					return nil
+				}
+				return ErrNotFound
+			}
+			if pickScopeKey(d.Scope, uid, convID, parentRunID) != "" {
+				return nil
+			}
+		}
+	}
+	return ErrNotFound
+}
+
+// scopePrefixOfPath returns the first path segment under the directory
+// prefix (e.g. "user-<uuid>" for "tmp/user-<uuid>/foo.jpg") iff it has
+// the scope-key shape "<kind>-<id>". Returns "" for bare paths so the
+// caller can decide whether absence is acceptable (it is for writes).
+func scopePrefixOfPath(canon string, d *Directory) string {
+	prefix := d.Path + "/"
+	if !strings.HasPrefix(canon, prefix) {
+		return ""
+	}
+	rest := canon[len(prefix):]
+	end := strings.IndexByte(rest, '/')
+	if end <= 0 {
+		return ""
+	}
+	seg := rest[:end]
+	// Must look like "<kind>-<id>"; otherwise it's just a regular
+	// sub-directory and not a scope key.
+	if i := strings.IndexByte(seg, '-'); i > 0 && i < len(seg)-1 {
+		return seg
+	}
+	return ""
+}
+
+// scopeMatches reports whether a "<kind>-<id>" scope segment labels a
+// context one of the supplied run keys identifies.
+func scopeMatches(scope, userID, convID, parentRunID string) bool {
+	switch {
+	case strings.HasPrefix(scope, "user-"):
+		return userID != "" && scope[len("user-"):] == userID
+	case strings.HasPrefix(scope, "conv-"):
+		return convID != "" && scope[len("conv-"):] == convID
+	case strings.HasPrefix(scope, "run-"):
+		return parentRunID != "" && scope[len("run-"):] == parentRunID
+	}
+	return false
+}
+
+// pickScopeKey returns the strongest scope key the run has for the
+// given directory scope. Falls back when a stronger identity isn't
+// available: user → conv → run. Empty string means "no scope key
+// available" — writes to scoped dirs are denied in that case so a
+// caller without any anchor (e.g. cron under public-mcp) can't produce
+// orphaned scoped paths.
+func pickScopeKey(scope DirectoryScope, userID, convID, parentRunID string) string {
+	if scope == ScopeUser && userID != "" {
+		return "user-" + userID
+	}
+	if (scope == ScopeUser || scope == ScopeConv) && convID != "" {
+		return "conv-" + convID
+	}
+	if parentRunID != "" {
+		return "run-" + parentRunID
+	}
+	return ""
+}
+
+// scopeKeysFromContext pulls the (userID, conversationID, parentRunID)
+// triple from whichever run-shaped value is on the ctx — a real run,
+// or a lazyRun whose .get() hasn't fired yet. Returns zero strings
+// when no run context is present (rare; mostly tests or builder code
+// running outside any dispatch).
+func scopeKeysFromContext(ctx context.Context) (userID, convID, parentRunID string) {
+	if r := runFromContext(ctx); r != nil {
+		return r.userID, r.conversationID, r.parentRunID
+	}
+	if l := lazyRunFromContext(ctx); l != nil {
+		return l.userID, l.conversationID, l.parentRunID
+	}
+	return "", "", ""
 }
 
 // --- Trusted Go file API ---
@@ -216,10 +333,27 @@ func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
 // WriteFile writes data with the given content type. Returns the resulting
 // FileInfo (path/filename/contentType/size/lastModified). Trusted: no
 // access check.
+//
+// For directories registered with a Scope, the destination path is
+// rewritten to include a scope segment derived from the run's identity:
+// "tmp/cat.jpg" with ScopeUser becomes "tmp/user-<id>/cat.jpg". The
+// scoped path travels back via the returned FileInfo.Path; callers use
+// that string from then on (CheckFileAccess parses the same segment to
+// gate reads). Bare paths that already contain a "<kind>-<id>" scope
+// segment are written as-is.
 func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, contentType string) (FileInfo, error) {
 	canon, err := normalizePath(path)
 	if err != nil {
 		return FileInfo{}, err
+	}
+	if d := a.lookupDirectory(canon); d != nil && d.Scope != ScopeNone {
+		if existing := scopePrefixOfPath(canon, d); existing == "" {
+			uid, convID, parentRunID := scopeKeysFromContext(ctx)
+			if scopeKey := pickScopeKey(d.Scope, uid, convID, parentRunID); scopeKey != "" {
+				prefix := d.Path + "/"
+				canon = prefix + scopeKey + "/" + canon[len(prefix):]
+			}
+		}
 	}
 	// Buffer to learn the size; the API path needs Content-Length.
 	var buf bytes.Buffer

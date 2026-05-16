@@ -133,6 +133,16 @@ func tsTypeFromSchema(s *schema.Schema, indent int) string {
 
 	switch s.Type {
 	case "string":
+		// agentsdk.FilePath / DirPath travel as `format` markers on the
+		// JSON Schema. Render them as TS type aliases so the LLM sees
+		// the semantic, not just `string`. The aliases are `declare`d
+		// once in the prompt header.
+		switch s.Format {
+		case "agent-file":
+			return "FilePath"
+		case "agent-dir":
+			return "DirPath"
+		}
 		return "string"
 	case "number", "integer":
 		return "number"
@@ -266,17 +276,20 @@ func JSToolNames(names []string) map[string]string {
 	return out
 }
 
-// RenderMCPNamespace emits a typed `declare const mcp_{slug}: { ... };`
-// block describing each discovered MCP tool as a method on the namespace
-// object. Mirrors the JS binding shape installed by agentsdk's vm.go so
-// the LLM's call site and the runtime stay in lockstep.
+// RenderMCPNamespace emits a typed `declare const {namespace}: { ... };`
+// block describing each discovered tool as a method on the namespace
+// object. namespace is the FULL JS identifier the runtime binds (e.g.
+// "mcp_github" for an MCP server, "agent_spotify" for a sibling) — the
+// caller owns the prefix so the declaration matches the binding name
+// exactly. Mirrors the JS binding shape installed by agentsdk's vm.go
+// so the LLM's call site and the runtime stay in lockstep.
 //
 //	declare const mcp_github: {
 //	  /** Search for GitHub repositories. */
 //	  search_repos(args: { query: string }): unknown;
 //	  ...
 //	};
-func RenderMCPNamespace(slug string, tools []MCPToolRender) string {
+func RenderMCPNamespace(namespace string, tools []MCPToolRender) string {
 	if len(tools) == 0 {
 		return ""
 	}
@@ -291,8 +304,8 @@ func RenderMCPNamespace(slug string, tools []MCPToolRender) string {
 	jsNames := JSToolNames(names)
 
 	var b strings.Builder
-	b.WriteString("declare const mcp_")
-	b.WriteString(slug)
+	b.WriteString("declare const ")
+	b.WriteString(namespace)
 	b.WriteString(": {\n")
 	for _, t := range sorted {
 		if desc := strings.TrimSpace(t.Description); desc != "" {

@@ -211,21 +211,41 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Run in a fresh ctx with a per-tool budget. No agentsdk run is
-	// created here — direct-dispatch is meant to be one-shot, no
-	// LLM loop, no per-run bookkeeping. If the tool wants to call
-	// other agentsdk primitives (LLM, storage, etc.) it gets the
-	// bare ctx from this request; admin-only verbs gate on the
-	// run-bound caller access, which is absent here, so callers
-	// dispatched via A2A see the public/user fence.
+	// Bind a lazyRun into ctx so anything the tool reaches for —
+	// GetDeps[T], conn_X.Request, agent.Storage, agent.LLM — can
+	// resolve the Agent (and materialize a real run if it actually
+	// performs an LLM call / log / action). Without this, the tool
+	// gets a bare http.Request ctx and any AgentFromContext lookup
+	// panics. Mirrors the lazyRun setup wrapRoute uses for custom
+	// HTTP routes.
+	//
+	// Scope keys (parentRun/user) ride on headers airlock sets for
+	// A2A and external MCP tool calls; CheckFileAccess consults them
+	// when gating reads on scoped directories.
+	lazy := &lazyRun{
+		agent:       a,
+		triggerRef:  "mcp-tool:" + name,
+		parentRunID: r.Header.Get("X-Parent-Run-ID"),
+		userID:      r.Header.Get("X-User-ID"),
+	}
+
 	timeout := defaultTimeout
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	baseCtx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	ctx := contextWithLazyRun(baseCtx, lazy)
 
 	defer func() {
 		if rec := recover(); rec != nil {
 			log.Printf("agentsdk: /__air/tool/%s panic: %v\n%s", name, rec, debug.Stack())
 			http.Error(w, `{"error":"tool panicked"}`, http.StatusInternalServerError)
+		}
+		// If the tool materialized a real run (made an LLM call,
+		// wrote actions, etc.) flush its terminal state so airlock
+		// records the run as success and the action timeline is
+		// persisted. Best-effort — failures here don't change the
+		// already-written response.
+		if run := lazy.materialized(); run != nil {
+			_ = run.complete(ctx, "success", "", "", "")
 		}
 	}()
 

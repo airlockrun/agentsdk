@@ -267,6 +267,17 @@ type Directory struct {
 	// expiry) should set a matching short TTL so the bytes go away when
 	// the URL does.
 	RetentionHours int
+
+	// Scope opts the directory into per-context isolation: WriteFile
+	// transparently inserts a scope segment (user-<id>/conv-<id>/run-<id>)
+	// between the directory prefix and the rest of the path, and reads
+	// only succeed when the scope key in the path matches one the
+	// current run owns. Use it for directories accessible to lower-trust
+	// callers (public-MCP, anon) where you need per-caller isolation
+	// without sacrificing usability — the LLM sees the scoped path,
+	// passes it around, and access just works for the caller who wrote
+	// it. Default ScopeNone preserves today's behaviour.
+	Scope DirectoryScope
 }
 
 // DirectoryOpts is the option struct accepted by RegisterDirectory.
@@ -281,18 +292,41 @@ type DirectoryOpts struct {
 
 	// RetentionHours: see Directory.RetentionHours. Zero = no sweep.
 	RetentionHours int
+
+	// Scope: see Directory.Scope. Default ScopeNone (no scoping).
+	Scope DirectoryScope
 }
 
 // DirectoryDef is the wire format sent in SyncRequest.
 type DirectoryDef struct {
-	Path           string `json:"path"`
-	Read           Access `json:"read"`
-	Write          Access `json:"write"`
-	List           Access `json:"list"`
-	Description    string `json:"description"`
-	LLMHint        string `json:"llmHint,omitempty"`
-	RetentionHours int    `json:"retentionHours,omitempty"`
+	Path           string         `json:"path"`
+	Read           Access         `json:"read"`
+	Write          Access         `json:"write"`
+	List           Access         `json:"list"`
+	Description    string         `json:"description"`
+	LLMHint        string         `json:"llmHint,omitempty"`
+	RetentionHours int            `json:"retentionHours,omitempty"`
+	Scope          DirectoryScope `json:"scope,omitempty"`
 }
+
+// DirectoryScope opts a directory into per-context path scoping. See
+// Directory.Scope. Empty string ("" / ScopeNone) keeps the legacy
+// unscoped behaviour: base ACL is the only access gate.
+//
+// The three values map to the three identities a run is naturally
+// anchored against: the calling user, the current conversation, and
+// this single call. WriteFile picks the strongest available key from
+// the run when scoping a path (user → conv → run); CheckFileAccess
+// accepts any of the three on read, so a path written at user-scope
+// remains readable from any run serving the same user.
+type DirectoryScope string
+
+const (
+	ScopeNone DirectoryScope = ""
+	ScopeRun  DirectoryScope = "run"
+	ScopeConv DirectoryScope = "conv"
+	ScopeUser DirectoryScope = "user"
+)
 
 // FileOp tags an operation passed to CheckFileAccess. Delete folds into
 // OpWrite (write on the parent governs unlink); there is no separate
@@ -487,9 +521,16 @@ type MCPToolCallResponse struct {
 }
 
 // MCPContent is a single content block in an MCP tool response.
+// MCP defines five content types; we keep the fields we surface to JS
+// callers. URI is set for resource_link; Data + MimeType for
+// image/audio; Name for resource_link display.
 type MCPContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	URI      string `json:"uri,omitempty"`
+	Name     string `json:"name,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"`
 }
 
 // --- Sync / wire types (shared between agentsdk client and airlock server) ---

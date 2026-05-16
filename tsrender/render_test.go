@@ -68,13 +68,13 @@ func TestRenderToolDecls_OmitsEmptyLLMHint(t *testing.T) {
 }
 
 func TestRenderMCPNamespace_Empty(t *testing.T) {
-	if got := RenderMCPNamespace("github", nil); got != "" {
+	if got := RenderMCPNamespace("mcp_github", nil); got != "" {
 		t.Errorf("empty tools: want empty string, got %q", got)
 	}
 }
 
 func TestRenderMCPNamespace_Basic(t *testing.T) {
-	got := RenderMCPNamespace("github", []MCPToolRender{
+	got := RenderMCPNamespace("mcp_github", []MCPToolRender{
 		{
 			Name:        "search_repos",
 			Description: "Search GitHub repositories.",
@@ -97,9 +97,25 @@ func TestRenderMCPNamespace_Basic(t *testing.T) {
 	}
 }
 
+// RenderMCPNamespace must NOT prepend a prefix — the caller owns the
+// full identifier. A sibling namespace declares `agent_<slug>`, which
+// must match the JS binding installed by vm.go (regression: it used to
+// emit `mcp_agent_<slug>`, so the LLM called an undefined symbol).
+func TestRenderMCPNamespace_NoPrefixPrepended(t *testing.T) {
+	got := RenderMCPNamespace("agent_spotify", []MCPToolRender{
+		{Name: "get_current_status", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	})
+	if !strings.Contains(got, "declare const agent_spotify: {") {
+		t.Errorf("want `declare const agent_spotify: {`, got:\n%s", got)
+	}
+	if strings.Contains(got, "mcp_agent_spotify") {
+		t.Errorf("must not prepend mcp_ to a caller-supplied namespace:\n%s", got)
+	}
+}
+
 func TestRenderMCPNamespace_SortsTools(t *testing.T) {
 	// Input order is intentionally non-alphabetic.
-	got := RenderMCPNamespace("svc", []MCPToolRender{
+	got := RenderMCPNamespace("mcp_svc", []MCPToolRender{
 		{Name: "zeta", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		{Name: "mu", InputSchema: json.RawMessage(`{"type":"object"}`)},
@@ -116,7 +132,7 @@ func TestRenderMCPNamespace_SortsTools(t *testing.T) {
 }
 
 func TestRenderMCPNamespace_NoDescription(t *testing.T) {
-	got := RenderMCPNamespace("svc", []MCPToolRender{
+	got := RenderMCPNamespace("mcp_svc", []MCPToolRender{
 		{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
 	})
 	if strings.Contains(got, "/**") {

@@ -165,6 +165,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description:    d.Description,
 			LLMHint:        d.LLMHint,
 			RetentionHours: d.RetentionHours,
+			Scope:          d.Scope,
 		})
 	}
 

@@ -150,6 +150,43 @@ func New(cfg Config) *Agent {
 		Description:    "Ephemeral scratch (auto-managed by the framework — truncated tool output, generated media).",
 		RetentionHours: 72, // sweeper drops files older than 3 days
 	})
+	// A2A inbox: airlock copies file args from sibling callers into
+	// agents/{this}/__a2a/{callerRun}/... before forwarding the tool
+	// call. Tool bodies read it transparently — the path arrives in
+	// the arg, not via any direct readFile of "__a2a/...". Admin-only
+	// because nobody should be poking at it from JS.
+	// Inbox for files airlock places here on behalf of an external
+	// caller (A2A tool args, prompt-meta files, inline MCP uploads).
+	// Base ACL is locked admin/admin/admin — the scoped-directory
+	// overlay in CheckFileAccess grants read access only to the
+	// specific run / conversation / user that owns the sub-path. This
+	// keeps anonymous and cross-caller traffic isolated even when
+	// both arrive at a public-mcp agent. Scope=ScopeRun picks the
+	// strictest available key when writing (airlock controls writes,
+	// not WriteFile); the read overlay still accepts any of
+	// user-/conv-/run- prefixes the path actually carries.
+	a.directories = append(a.directories, &Directory{
+		Path:           reservedIncomingPath,
+		Read:           AccessAdmin,
+		Write:          AccessAdmin,
+		List:           AccessAdmin,
+		Description:    "Inbound file scratch (framework-managed; per-scope reads, ephemeral).",
+		RetentionHours: 24,
+		Scope:          ScopeRun,
+	})
+	// Outbox: airlock copies file results returned from sibling
+	// agents into agents/{this}/siblings/<sibling-slug>/<path>.
+	// Caller's run_js can readFile() these naturally; longer retention
+	// than the inbox because the caller may want to keep working with
+	// the file across follow-up turns.
+	a.directories = append(a.directories, &Directory{
+		Path:           reservedSiblingsPath,
+		Read:           AccessUser,
+		Write:          AccessUser,
+		List:           AccessUser,
+		Description:    "Files returned by sibling agents (framework-managed; cleaned after 3 days).",
+		RetentionHours: 72,
+	})
 	return a
 }
 
@@ -368,6 +405,7 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 			Read:        string(d.Read),
 			Write:       string(d.Write),
 			List:        string(d.List),
+			Scope:       string(d.Scope),
 		})
 	}
 

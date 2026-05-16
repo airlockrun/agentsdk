@@ -50,8 +50,16 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			panic("agentsdk: X-Run-ID header is required")
 		}
 		bridgeID := r.Header.Get("X-Bridge-ID")
+		// X-Parent-Run-ID / X-User-ID are set by airlock for A2A and
+		// external-MCP prompt calls. CheckFileAccess uses them to gate
+		// reads on scoped directories (run-<parent>/, user-<id>/, etc.)
+		// to the originating call context.
+		parentRunID := r.Header.Get("X-Parent-Run-ID")
+		userID := r.Header.Get("X-User-ID")
 
 		run := newRun(agent, runID, bridgeID, input.ConversationID, ctx)
+		run.parentRunID = parentRunID
+		run.userID = userID
 		// Stash the per-turn access level for vm.go's bind-time gating.
 		// Empty defaults to AccessUser (safest broad default for a /prompt).
 		if input.CallerAccess != "" {

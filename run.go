@@ -17,6 +17,8 @@ type run struct {
 	id                  string
 	bridgeID            string
 	conversationID      string
+	parentRunID         string      // for A2A/external MCP calls — the caller's run ID from X-Parent-Run-ID; gates __incoming/run-<id>/ reads
+	userID              string      // the originating user (anchor for scoped dirs); empty for cron/webhook/anon
 	supportedModalities []string
 	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
 	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with PromptData.Siblings at render time

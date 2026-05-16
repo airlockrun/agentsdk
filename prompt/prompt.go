@@ -168,6 +168,11 @@ type DirInfo struct {
 	Read        string
 	Write       string
 	List        string
+	// Scope, when non-empty, indicates the directory is per-context.
+	// Values: "user", "conv", "run". The template renders an extra
+	// note so the LLM understands paths it returns will include a
+	// scope key segment (e.g. `<dir>/user-<id>/...`).
+	Scope string
 }
 
 // MCPServerStatus carries the per-server status line + (when authorized)
@@ -219,7 +224,7 @@ func renderMCPNamespaceFunc(server MCPServerStatus) string {
 			InputSchema: t.InputSchema,
 		}
 	}
-	return tsrender.RenderMCPNamespace(server.Slug, tools)
+	return tsrender.RenderMCPNamespace("mcp_"+server.Slug, tools)
 }
 
 // renderSiblingNamespaceFunc produces the typed `declare const
