@@ -18,6 +18,13 @@ import (
 // Config holds configuration for creating an Agent.
 type Config struct {
 	Description string // required — shown to users in the Airlock UI
+	// Emoji is an optional decorative glyph shown next to the agent in
+	// the Airlock UI (agent list, sidebar, header). Purely cosmetic;
+	// empty means "no emoji". A short grapheme is expected (a single
+	// emoji incl. ZWJ / skin-tone / flag sequences) — it is NOT
+	// validated to one rune; over-long/garbage values are dropped
+	// server-side rather than failing the sync.
+	Emoji string
 }
 
 // Agent is a long-lived singleton, one per container.
@@ -27,6 +34,7 @@ type Agent struct {
 	apiURL      string
 	token       string
 	description string
+	emoji       string
 	httpClient  *http.Client
 	client      *airlockClient
 
@@ -119,6 +127,7 @@ func New(cfg Config) *Agent {
 		apiURL:       apiURL,
 		token:        token,
 		description:  cfg.Description,
+		emoji:        cfg.Emoji,
 		httpClient:   &http.Client{},
 		sensitiveSet: make(map[string]struct{}),
 		tools:        make(map[string]*registeredTool),

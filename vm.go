@@ -586,6 +586,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 					// raw: skip HTML→markdown conversion (default is to convert HTML).
 					req.Raw = v.ToBoolean()
 				}
+				if v := opts.Get("allHeaders"); v != nil && !goja.IsUndefined(v) {
+					// allHeaders: return every upstream header (default is a
+					// curated few — the rest is context-burning noise).
+					req.AllHeaders = v.ToBoolean()
+				}
 			}
 
 			resp, err := httpClient.Do(run.ctx, req)
@@ -603,6 +608,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				// the LLM can pass it directly to readFile/readBytes/
 				// attachToContext/etc.
 				result.Set("savedTo", resp.SavedTo)
+			}
+			if resp.BodyPreview != "" {
+				// Head of a saved body so the result is legible without an
+				// immediate readFile(savedTo).
+				result.Set("bodyPreview", resp.BodyPreview)
 			}
 			if resp.Note != "" {
 				result.Set("note", resp.Note)

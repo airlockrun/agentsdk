@@ -181,6 +181,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	syncBody := SyncRequest{
 		Version:      Version,
 		Description:  a.description,
+		Emoji:        a.emoji,
 		Tools:        tools,
 		Webhooks:     webhooks,
 		Crons:        crons,

@@ -127,6 +127,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			Model: proxy.Model("", proxy.Options{
 				BaseURL: run.agent.client.baseURL,
 				Token:   run.agent.client.token,
+				Headers: runIDHeader(runID),
 			}),
 			CompactionConfig: &session.CompactionConfig{
 				Auto:  true,

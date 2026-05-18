@@ -74,7 +74,7 @@ type Route struct {
 // agent.RegisterConnection — an outgoing service Airlock proxies for the agent
 // with credentials it manages.
 type Connection struct {
-	Slug              string         // unique per agent; binds as conn_{slug} in run_js
+	Slug              string // unique per agent; binds as conn_{slug} in run_js
 	Name              string
 	Description       string
 	BaseURL           string
@@ -153,8 +153,8 @@ type Action struct {
 // metadata so the LLM can refer to "Q1 Report.pdf" while the path uses a
 // uuid-prefixed safe filename.
 type FileInfo struct {
-	Path         string    `json:"path"`         // S3-style storage path, e.g. "uploads/foo.png"
-	Filename     string    `json:"filename"`     // original upload name; S3 metadata
+	Path         string    `json:"path"`     // S3-style storage path, e.g. "uploads/foo.png"
+	Filename     string    `json:"filename"` // original upload name; S3 metadata
 	ContentType  string    `json:"contentType"`
 	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
@@ -186,15 +186,15 @@ func IsAuthRequired(err error) (*AuthRequiredError, bool) {
 
 // PromptInput is the request body for POST /prompt.
 type PromptInput struct {
-	Messages        []message.Message `json:"messages"`
-	Message         string            `json:"message,omitempty"` // New user message text (used with SessionStore)
-	ConversationID  string            `json:"conversationId,omitempty"`
-	ProviderID      string            `json:"providerId,omitempty"`
-	ModelID         string            `json:"modelId,omitempty"`
-	Temperature     *float64          `json:"temperature,omitempty"`
-	MaxOutputTokens *int              `json:"maxOutputTokens,omitempty"`
-	ProviderOptions json.RawMessage   `json:"providerOptions,omitempty"`
-	Files           []FileInfo        `json:"files,omitempty"`
+	Messages            []message.Message `json:"messages"`
+	Message             string            `json:"message,omitempty"` // New user message text (used with SessionStore)
+	ConversationID      string            `json:"conversationId,omitempty"`
+	ProviderID          string            `json:"providerId,omitempty"`
+	ModelID             string            `json:"modelId,omitempty"`
+	Temperature         *float64          `json:"temperature,omitempty"`
+	MaxOutputTokens     *int              `json:"maxOutputTokens,omitempty"`
+	ProviderOptions     json.RawMessage   `json:"providerOptions,omitempty"`
+	Files               []FileInfo        `json:"files,omitempty"`
 	ResumeRunID         string            `json:"resumeRunId,omitempty"`
 	Approved            *bool             `json:"approved,omitempty"`
 	SupportedModalities []string          `json:"supportedModalities,omitempty"` // e.g. ["text", "image", "pdf", "audio", "video"]
@@ -364,15 +364,15 @@ type TopicDef struct {
 // DisplayPart is a single piece of rich content for user-facing output.
 // Used by both printToUser (VM) and TopicHandle.Publish (Go).
 type DisplayPart struct {
-	Type     string  `json:"type"`                    // "text", "image", "file", "audio", "video"
-	Text     string  `json:"text,omitempty"`           // body text, or caption for media types
-	Source   string  `json:"source,omitempty"`          // S3 key
-	URL      string  `json:"url,omitempty"`             // external URL
-	Data     []byte  `json:"data,omitempty"`            // raw bytes (base64 in JSON)
+	Type     string  `json:"type"`             // "text", "image", "file", "audio", "video"
+	Text     string  `json:"text,omitempty"`   // body text, or caption for media types
+	Source   string  `json:"source,omitempty"` // S3 key
+	URL      string  `json:"url,omitempty"`    // external URL
+	Data     []byte  `json:"data,omitempty"`   // raw bytes (base64 in JSON)
 	Filename string  `json:"filename,omitempty"`
 	MimeType string  `json:"mimeType,omitempty"`
-	Alt      string  `json:"alt,omitempty"`             // accessibility text for images
-	Duration float64 `json:"duration,omitempty"`        // seconds, audio/video
+	Alt      string  `json:"alt,omitempty"`      // accessibility text for images
+	Duration float64 `json:"duration,omitempty"` // seconds, audio/video
 }
 
 // PrintRequest is the body for POST /api/agent/print.
@@ -539,6 +539,7 @@ type MCPContent struct {
 type SyncRequest struct {
 	Version      string           `json:"version"`
 	Description  string           `json:"description,omitempty"`
+	Emoji        string           `json:"emoji,omitempty"`
 	Tools        []ToolDef        `json:"tools,omitempty"`
 	Webhooks     []WebhookDef     `json:"webhooks"`
 	Crons        []CronDef        `json:"crons"`
@@ -736,12 +737,16 @@ type CronDef struct {
 // HTTPRequest is the body for POST /api/agent/http.
 type HTTPRequest struct {
 	URL     string            `json:"url"`
-	Method  string            `json:"method,omitempty"`  // default: GET
+	Method  string            `json:"method,omitempty"` // default: GET
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body,omitempty"`
 	Timeout int               `json:"timeout,omitempty"` // seconds, default: 30, max: 120
 	SaveAs  string            `json:"saveAs,omitempty"`  // save response body to S3 at this key (binary-safe)
 	Raw     bool              `json:"raw,omitempty"`     // skip HTML→markdown conversion for HTML responses
+	// AllHeaders returns every upstream response header. Default (false)
+	// returns only the curated few an agent reasons about; the rest
+	// (CSP, Via, Alt-Svc, telemetry) are noise that burns context.
+	AllHeaders bool `json:"allHeaders,omitempty"`
 }
 
 // HTTPResponse is returned from POST /api/agent/http.
@@ -750,9 +755,17 @@ type HTTPResponse struct {
 	Headers     map[string]string `json:"headers"`
 	Body        string            `json:"body,omitempty"`
 	ContentType string            `json:"contentType"` // original upstream Content-Type
-	Size        int               `json:"size"`
-	SavedTo     string            `json:"savedTo,omitempty"` // S3 key if body was auto-saved
-	Note        string            `json:"note,omitempty"`    // human-readable note about transformations applied (e.g. HTML→markdown conversion)
+	// Size is the byte length of the content the agent can act on — the
+	// inline body, the converted markdown, or the object written to
+	// SavedTo. Always populated (never the upstream Content-Length,
+	// which is 0 for chunked/unknown).
+	Size int `json:"size"`
+	// BodyPreview is the head (~1 KB) of a saved text/markdown body so
+	// the result is legible without a second readFile. Empty for binary
+	// or inline (Body carries the whole thing) responses.
+	BodyPreview string `json:"bodyPreview,omitempty"`
+	SavedTo     string `json:"savedTo,omitempty"` // S3 key if body was auto-saved
+	Note        string `json:"note,omitempty"`    // human-readable note about transformations applied (e.g. HTML→markdown conversion)
 }
 
 // ProxyRequest is the body for POST /api/agent/proxy/{slug}.
@@ -784,12 +797,12 @@ type ShareFileResponse struct {
 type ModelCapability string
 
 const (
-	CapText          ModelCapability = "text"           // any chat/language model
-	CapVision        ModelCapability = "vision"          // chat model that accepts images
-	CapEmbedding     ModelCapability = "embedding"       // vector embeddings
-	CapImage         ModelCapability = "image"            // image generation
-	CapSpeech        ModelCapability = "speech"           // text-to-speech
-	CapTranscription ModelCapability = "transcription"    // speech-to-text
+	CapText          ModelCapability = "text"          // any chat/language model
+	CapVision        ModelCapability = "vision"        // chat model that accepts images
+	CapEmbedding     ModelCapability = "embedding"     // vector embeddings
+	CapImage         ModelCapability = "image"         // image generation
+	CapSpeech        ModelCapability = "speech"        // text-to-speech
+	CapTranscription ModelCapability = "transcription" // speech-to-text
 )
 
 // ModelOpts configures a model request. Used with agent.LLM(), agent.ImageModel(), etc.
@@ -877,4 +890,3 @@ type RunCompleteRequest struct {
 	Logs       []LogEntry      `json:"logs,omitempty"`
 	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 }
-
