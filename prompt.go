@@ -336,43 +336,39 @@ func resolvePendingToolCalls(
 	var resultMsgs []session.Message
 
 	for _, tc := range pending {
-		var output string
+		var toolOut goai.ToolResultOutput
 
 		if approved {
 			t, ok := tools[tc.Name]
 			if !ok {
-				output = "Error: unknown tool " + tc.Name
+				toolOut = goai.ErrorTextOutput{Value: "unknown tool " + tc.Name}
 			} else {
 				result, err := t.Execute(toolCtx, tc.Input, tool.CallOptions{ToolCallID: tc.ID})
 				if err != nil {
-					output = "Error: " + err.Error()
+					toolOut = tool.OutputForError(err)
 				} else {
-					output = result.Output
+					toolOut = tool.SuccessOutput(result)
 				}
 			}
 		} else {
-			output = "Execution was denied by the user."
+			toolOut = goai.ExecutionDeniedOutput{Reason: "Execution was denied by the user."}
 		}
+		output := goai.ToolOutputWire(toolOut)
 
-		// Emit tool result event so frontend/bridge sees it.
-		ew.WriteEvent(stream.Event{
-			Type: stream.EventToolResult,
-			Data: stream.ToolResultEvent{
-				ToolCallID: tc.ID,
-				ToolName:   tc.Name,
-				Output:     stream.ToolOutput{Output: output},
-			},
-		})
+		// Emit tool result event so frontend/bridge sees it (kind reflects
+		// the discriminated outcome).
+		ew.WriteEvent(stream.ToolOutcomeEvent(tc.ID, tc.Name, nil, toolOut))
 
 		resultMsgs = append(resultMsgs, session.Message{
 			Role: "tool",
 			Parts: []session.Part{{
 				Type: "tool",
 				Tool: &session.ToolPart{
-					CallID: tc.ID,
-					Name:   tc.Name,
-					Output: output,
-					Status: "completed",
+					CallID:  tc.ID,
+					Name:    tc.Name,
+					Output:  output,
+					Status:  "completed",
+					Outcome: goai.ToolOutcome(toolOut),
 				},
 			}},
 		})
@@ -400,6 +396,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 	_ = json.Unmarshal(rawData, &del)
 
 	var output string
+	var failed bool // structured (no text sniffing): a real delegation error
 	switch del.Transport {
 	case "a2a":
 		var ch struct {
@@ -411,6 +408,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 		aid, perr := uuid.Parse(ch.AgentID)
 		if perr != nil {
 			output = "Error: invalid delegated agent id: " + perr.Error()
+			failed = true
 			break
 		}
 		h := &SiblingHandle{slug: ch.Slug, agentID: aid, agent: agent}
@@ -426,6 +424,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 		switch {
 		case cerr != nil:
 			output = "Error: " + cerr.Error()
+			failed = true
 		default:
 			if b, mErr := json.Marshal(res); mErr == nil {
 				output = string(b)
@@ -437,6 +436,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 		output = resumeInProcessChild(ctx, agent, callerRunID, baseOpts, del.Child, approved, denyMsg, ew)
 	default:
 		output = "Error: unknown delegated transport: " + del.Transport
+		failed = true
 	}
 
 	toolName := "promptAgent"
@@ -446,24 +446,22 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 			break
 		}
 	}
-	ew.WriteEvent(stream.Event{
-		Type: stream.EventToolResult,
-		Data: stream.ToolResultEvent{
-			ToolCallID: del.ToolCallID,
-			ToolName:   toolName,
-			Output:     stream.ToolOutput{Output: output},
-		},
-	})
+	var toolOut goai.ToolResultOutput = goai.TextOutput{Value: output}
+	if failed {
+		toolOut = goai.ErrorTextOutput{Value: output}
+	}
+	ew.WriteEvent(stream.ToolOutcomeEvent(del.ToolCallID, toolName, nil, toolOut))
 	if store != nil {
 		_ = store.Append(ctx, []session.Message{{
 			Role: "tool",
 			Parts: []session.Part{{
 				Type: "tool",
 				Tool: &session.ToolPart{
-					CallID: del.ToolCallID,
-					Name:   toolName,
-					Output: output,
-					Status: "completed",
+					CallID:  del.ToolCallID,
+					Name:    toolName,
+					Output:  output,
+					Status:  "completed",
+					Outcome: goai.ToolOutcome(toolOut),
 				},
 			}},
 		}})

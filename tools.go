@@ -80,7 +80,7 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 					// PermissionDeniedError → tool returns denial to LLM
 					if _, ok := err.(*bus.PermissionDeniedError); ok {
 						run.recordAction("run_js_denied", map[string]string{"code": args.Code}, "denied", nil, 0)
-						return tool.Result{Output: "Code execution was denied by the user."}, nil
+						return tool.Result{}, tool.DeniedError{Reason: "Code execution was denied by the user."}
 					}
 					return tool.Result{}, err
 				}
@@ -91,25 +91,18 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			run.pendingLogs = nil
 			run.mu.Unlock()
 
-			// Cancel the VM if the run's ctx fires (handlePrompt's WithTimeout,
-			// or Airlock disconnecting). Without this, an infinite-loop or
-			// runaway algorithm in LLM-generated JS spins at 100% CPU forever
-			// — the goroutine outlives the request and bleeds into subsequent
-			// prompts. goja.Interrupt aborts the in-flight RunString with an
-			// *InterruptedError that propagates out as a regular error.
+			// Guard the JS execution: relays run.ctx cancellation
+			// (handlePrompt's WithTimeout / disconnect) AND enforces the L3
+			// ceilings — process heap growth and JS-attributable CPU time
+			// (wall minus time parked in Go calls, so a long legit download
+			// is never charged as a spin). goja.Interrupt aborts the
+			// in-flight run with an error that propagates out normally.
 			vm := run.vmRuntime()
-			done := make(chan struct{})
-			go func() {
-				select {
-				case <-run.ctx.Done():
-					vm.Interrupt(run.ctx.Err())
-				case <-done:
-				}
-			}()
+			stopGuard := startJSGuard(run.ctx, vm, run.gw)
 
 			start := time.Now()
 			result, err := executeJS(vm, args.Code)
-			close(done)
+			stopGuard()
 			duration := time.Since(start)
 
 			// Drain logs from this execution.

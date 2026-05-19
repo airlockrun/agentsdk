@@ -88,13 +88,6 @@ func marshalEventData(data stream.EventData) any {
 		return struct {
 			Error string `json:"error"`
 		}{d.Error.Error()}
-	case stream.ToolErrorEvent:
-		return struct {
-			ToolCallID string          `json:"toolCallId"`
-			ToolName   string          `json:"toolName"`
-			Input      json.RawMessage `json:"input,omitempty"`
-			Error      string          `json:"error"`
-		}{d.ToolCallID, d.ToolName, d.Input, d.Error.Error()}
 	default:
 		return data
 	}

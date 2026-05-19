@@ -322,6 +322,13 @@ func (a *Agent) OpenFile(ctx context.Context, path string) (io.ReadCloser, error
 // ReadFile reads a file fully into memory. For very large files prefer
 // OpenFile + io.Copy. Trusted: no access check.
 func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	// The body read (io.ReadAll) dominates for large files and happens after
+	// client.do returns headers, so credit the whole op to the go-call
+	// accumulator (nesting-safe with the inner client.do span).
+	if gw := goWallFrom(ctx); gw != nil {
+		gw.enter()
+		defer gw.exit()
+	}
 	rc, err := a.OpenFile(ctx, path)
 	if err != nil {
 		return nil, err

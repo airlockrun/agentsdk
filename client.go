@@ -45,6 +45,12 @@ func (c *airlockClient) do(ctx context.Context, method, path string, body io.Rea
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// Credit blocking backend time to the run's go-call accumulator so the
+	// L3 CPU guard doesn't mistake I/O wait for a JS spin. Nesting-safe.
+	if gw := goWallFrom(ctx); gw != nil {
+		gw.enter()
+		defer gw.exit()
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("agentsdk: %s %s: %w", method, path, err)

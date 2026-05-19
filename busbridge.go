@@ -30,7 +30,7 @@ func streamBusToNDJSON(b *bus.Bus, ew *EventWriter) func() {
 			}
 		case bus.StreamToolResult:
 			if tr, ok := e.Properties.(stream.ToolResultEvent); ok {
-				ew.WriteEvent(stream.Event{Type: stream.EventToolResult, Data: tr})
+				ew.WriteEvent(stream.ToolOutcomeEvent(tr.ToolCallID, tr.ToolName, tr.Input, tr.Output))
 			}
 		case bus.PermissionAsked:
 			if payload, ok := e.Properties.(bus.PermissionAskedPayload); ok {

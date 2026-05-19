@@ -3,11 +3,13 @@ package agentsdk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/airlockrun/goai/tool"
+	"github.com/dop251/goja"
 )
 
 type doubleIn struct {
@@ -268,6 +270,29 @@ func TestVM(t *testing.T) {
 		// server response, the test only verifies fields are surfaced.
 		if result != "tmp/test.txt:42" {
 			t.Fatalf("expected mock path:size, got %s", result)
+		}
+	})
+
+	t.Run("infinite recursion fails fast, not hang", func(t *testing.T) {
+		a, _ := testAgent(t)
+		run := newRun(a, "run-1", "", "", context.Background())
+		vm := run.vmRuntime()
+		done := make(chan error, 1)
+		go func() {
+			_, err := executeJS(vm, `function oops(x){return oops(x + 1)}oops(0)`)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("expected a stack overflow error, got nil")
+			}
+			var soe *goja.StackOverflowError
+			if !errors.As(err, &soe) {
+				t.Fatalf("expected *goja.StackOverflowError, got %T: %v", err, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("infinite recursion did not terminate — call stack is not capped")
 		}
 	})
 }

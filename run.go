@@ -17,29 +17,35 @@ type run struct {
 	id                  string
 	bridgeID            string
 	conversationID      string
-	parentRunID         string      // for A2A/external MCP calls — the caller's run ID from X-Parent-Run-ID; gates __incoming/run-<id>/ reads
-	userID              string      // the originating user (anchor for scoped dirs); empty for cron/webhook/anon
+	parentRunID         string // for A2A/external MCP calls — the caller's run ID from X-Parent-Run-ID; gates __incoming/run-<id>/ reads
+	userID              string // the originating user (anchor for scoped dirs); empty for cron/webhook/anon
 	supportedModalities []string
 	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
 	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with PromptData.Siblings at render time
 	ctx                 context.Context
+	gw                  *goWall // go-call time accumulator (L3 CPU guard)
 	actions             []Action
 	logs                []LogEntry
 	vm                  *goja.Runtime
 	vmOnce              sync.Once
-	mu                  sync.Mutex // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
+	mu                  sync.Mutex          // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
 	attachedKeys        map[string]struct{} // keys attached this run for idempotency
 	pendingLogs         []LogEntry          // logs from current executeJS call, drained after each execution
 	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {
+	// One go-call accumulator per run, carried in ctx so the central HTTP
+	// seam credits blocking time without wrapping every binding. It feeds
+	// the L3 CPU guard (JS time = wall − time parked in Go calls).
+	gw := &goWall{}
 	return &run{
 		agent:          agent,
 		id:             id,
 		bridgeID:       bridgeID,
 		conversationID: conversationID,
-		ctx:            ctx,
+		ctx:            withGoWall(ctx, gw),
+		gw:             gw,
 		// Default to admin — webhook/cron/route handlers and tests are
 		// trusted contexts. /prompt overrides this with the per-turn
 		// CallerAccess from PromptInput.

@@ -201,6 +201,9 @@ func readJSONRPCResponse(resp *http.Response) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read response: %w", err)
 		}
+		if len(raw) > maxJSValueBytes {
+			return nil, fmt.Errorf("A2A response too large for run_js: %d bytes exceeds the %d MiB in-memory cap", len(raw), maxJSValueBytes>>20)
+		}
 		return raw, nil
 	}
 
@@ -232,6 +235,9 @@ func readJSONRPCResponse(resp *http.Response) ([]byte, error) {
 	}
 	if last == nil {
 		return nil, fmt.Errorf("SSE stream ended with no JSON-RPC response")
+	}
+	if len(last) > maxJSValueBytes {
+		return nil, fmt.Errorf("A2A response too large for run_js: %d bytes exceeds the %d MiB in-memory cap", len(last), maxJSValueBytes>>20)
 	}
 	return last, nil
 }

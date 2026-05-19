@@ -63,8 +63,42 @@ func mediaResultToJS(vm *goja.Runtime, res *mediaResult) goja.Value {
 
 // newVM creates a fresh goja Runtime for a Run, binding all registered
 // Go functions and built-in bindings.
+// maxJSCallStackSize caps run_js recursion depth. goja's default is
+// math.MaxInt32 (effectively unbounded) and its call stack is heap-
+// allocated, so unbounded recursion (e.g. `function f(x){return f(x+1)}
+// f(0)`) doesn't hit a Go stack limit — it grows the heap until the run
+// times out. Capping it makes runaway recursion fail fast with a
+// *StackOverflowError that propagates out of RunString as a normal tool
+// error. 10000 is deep enough for legitimate recursive agent code while
+// catching infinite recursion in milliseconds.
+const maxJSCallStackSize = 10000
+
+// maxJSValueBytes caps how many bytes a single Go→JS boundary crossing may
+// pull into the goja heap (a tool return, readFile, readBytes, MCP/A2A
+// result). goja has no heap accounting, so a script that slurps a giant S3
+// object (`readFile(huge)`) or accumulates large tool results would grow the
+// Go heap unbounded with near-zero instruction cost — invisible to any
+// CPU/recursion guard. Capping each crossing makes a single oversized slurp
+// fail fast with a clear, actionable error, and bounds per-iteration growth
+// so the heap-sampling guard can do its job. Legit large payloads must be
+// processed via a storage path (ranged/streamed), not loaded whole.
+const maxJSValueBytes = 32 << 20 // 32 MiB
+
+// capJSBytes aborts the in-flight JS call (as a thrown error) when a value
+// crossing the Go→JS boundary exceeds maxJSValueBytes. what names the source
+// for the error message (e.g. "readFile", a tool name).
+func capJSBytes(vm *goja.Runtime, what string, n int) {
+	if n > maxJSValueBytes {
+		panic(vm.NewGoError(fmt.Errorf(
+			"%s: result too large for run_js: %d bytes exceeds the %d MiB in-memory cap — process it via a storage path (read in ranges / stream) instead of loading it whole",
+			what, n, maxJSValueBytes>>20)))
+	}
+}
+
 func newVM(run *run, agent *Agent) *goja.Runtime {
 	vm := goja.New()
+	vm.SetMaxCallStackSize(maxJSCallStackSize)
+	installAmplifierGuards(vm)
 
 	// Bind registered tools. Each RegisterTool(&Tool[In, Out]{...}) becomes
 	// a typed JS global: JS input → json.Marshal → decode into In → typed
@@ -85,10 +119,13 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("%s: marshal args: %w", t.Name, err)))
 			}
+			run.gw.enter()
 			outJSON, err := t.Execute(run.checkedCtx(), raw)
+			run.gw.exit()
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
+			capJSBytes(vm, t.Name, len(outJSON))
 			if outJSON == "" {
 				return goja.Undefined()
 			}
@@ -250,6 +287,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("readFile: %w", err)))
 			}
+			capJSBytes(vm, "readFile", len(b))
 			return vm.ToValue(string(b))
 		})
 
@@ -272,6 +310,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("readBytes: %w", err)))
 			}
+			capJSBytes(vm, "readBytes", len(b))
 			ab := vm.NewArrayBuffer(b)
 			// Uint8Array is a TypedArray constructor — must be invoked with
 			// `new`. AssertFunction calls without `new` and TypedArrays
@@ -1043,6 +1082,7 @@ func invokeMCPTool(vm *goja.Runtime, ctx context.Context, handle *MCPHandle, mcp
 		}
 	}
 	raw := out.String()
+	capJSBytes(vm, "mcp_"+mcpSlug+"."+toolName, len(raw))
 	var content any = raw
 	var parsed any
 	if jsonErr := json.Unmarshal([]byte(raw), &parsed); jsonErr == nil {
