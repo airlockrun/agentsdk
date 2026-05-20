@@ -412,14 +412,101 @@ func ResolveDisplayPart(p *DisplayPart) {
 		p.Type = "text"
 	}
 
-	// Generate filename for media parts without one.
+	// Generate filename for media parts without one. Priority:
+	//   1. Source path's basename — preserves the real filename the
+	//      caller picked ("red-square-16x16.png" stays a .png file
+	//      end-to-end, including in the presigned-URL tail clients
+	//      read to choose a Save-As name). Before this, the type+ext
+	//      generator would overwrite a Source-based part with
+	//      "image.png" / "image.bin", losing the original name.
+	//   2. URL's last path segment — same reasoning for external URLs.
+	//   3. Type + extension from MimeType — only when neither Source
+	//      nor URL gives us a real filename. mime.ExtensionsByType is
+	//      OS-dependent (reads /etc/mime.types), so we fall back to a
+	//      baked-in map (extForMimeOrType) so a missing mime DB doesn't
+	//      give every file ".bin".
 	if p.Filename == "" && p.Type != "" && p.Type != "text" {
-		ext := ".bin"
-		if exts, _ := mime.ExtensionsByType(p.MimeType); len(exts) > 0 {
-			ext = exts[0]
+		switch {
+		case p.Source != "":
+			p.Filename = filenameFromPath(p.Source)
+		case p.URL != "":
+			p.Filename = filenameFromPath(p.URL)
+		default:
+			p.Filename = p.Type + extForMimeOrType(p.MimeType, p.Type)
 		}
-		p.Filename = p.Type + ext
 	}
+}
+
+// filenameFromPath returns the last slash-segment of a path / URL,
+// stripped of any leading query string. Returns "" when the input has
+// no usable tail (caller falls through to a synthesized filename).
+func filenameFromPath(p string) string {
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	for strings.HasSuffix(p, "/") {
+		p = p[:len(p)-1]
+	}
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		p = p[i+1:]
+	}
+	return p
+}
+
+// extForMimeOrType returns a leading-dot extension for the given mime
+// type, falling back to the part type when mime is empty/unknown. The
+// baked-in map is small and covers what http.DetectContentType actually
+// emits — it doesn't try to be exhaustive.
+func extForMimeOrType(mimeType, partType string) string {
+	if exts, _ := mime.ExtensionsByType(mimeType); len(exts) > 0 {
+		return exts[0]
+	}
+	switch mimeType {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/svg+xml":
+		return ".svg"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/webm":
+		return ".weba"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "application/pdf":
+		return ".pdf"
+	case "application/json":
+		return ".json"
+	case "text/plain":
+		return ".txt"
+	case "text/csv":
+		return ".csv"
+	case "text/html":
+		return ".html"
+	}
+	// Type-only fallback when mime is empty: pick a sensible default
+	// for each media category. Better than .bin in the common case
+	// where the agent passed bytes with no mime hint.
+	switch partType {
+	case "image":
+		return ".png"
+	case "audio":
+		return ".mp3"
+	case "video":
+		return ".mp4"
+	}
+	return ".bin"
 }
 
 // --- Access levels ---

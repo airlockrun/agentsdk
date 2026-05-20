@@ -30,7 +30,7 @@ triggers (webhooks/crons/bridges), and the per-agent Postgres schema.
 ## Project layout
 
 ```
-agents/{id}/
+{agent-repo}/
 ├── main.go            # Entrypoint — registrations only, no business logic
 ├── go.mod             # Module file (usually leave as-is)
 ├── sqlc.yaml          # sqlc config (pre-configured)
@@ -49,7 +49,7 @@ agents/{id}/
 packages:
 
 ```
-agents/{id}/
+{agent-repo}/
 ├── main.go         # Registrations
 ├── deps/
 │   └── deps.go     # Deps struct — shared by all domain packages
