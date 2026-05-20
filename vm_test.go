@@ -329,12 +329,80 @@ func TestRunJSInterruptOnCtxCancel(t *testing.T) {
 	select {
 	case r := <-resCh:
 		// run_js swallows the executeJS error into the Output string
-		// ("Error: ..."). Either an error returned OR an error-prefixed
-		// output is acceptable — both prove the loop was interrupted.
-		if r.err == nil && !strings.Contains(r.res.Output, "Error:") {
+		// ("Error: ..." or "Error (native): ..." for a platform abort).
+		// Either an error returned OR an error-prefixed output is
+		// acceptable — both prove the loop was interrupted.
+		if r.err == nil && !strings.HasPrefix(r.res.Output, "Error") {
 			t.Fatalf("expected interruption error, got Output=%q err=%v", r.res.Output, r.err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("run_js did not return within 2s after ctx cancel — interrupt did not fire")
 	}
+}
+
+// TestJSErrorMessage locks in the structural native/JS split and that goja's
+// "GoError:" name and " at <gosymbol> (native)" stack never leak into the
+// rendered message.
+func TestJSErrorMessage(t *testing.T) {
+	t.Run("go native via NewGoError", func(t *testing.T) {
+		vm := goja.New()
+		vm.Set("boom", func(goja.FunctionCall) goja.Value {
+			panic(vm.NewGoError(errors.New("add_to_queue: proxy spotify: status 404")))
+		})
+		_, err := vm.RunString("boom()")
+		msg, native := jsErrorMessage(err)
+		if !native {
+			t.Fatalf("want native=true, got false (msg=%q)", msg)
+		}
+		if msg != "add_to_queue: proxy spotify: status 404" {
+			t.Fatalf("unexpected msg: %q", msg)
+		}
+		for _, leak := range []string{"GoError", "(native)", "github.com"} {
+			if strings.Contains(msg, leak) {
+				t.Fatalf("msg leaked %q: %s", leak, msg)
+			}
+		}
+	})
+
+	t.Run("plain JS throw is not native", func(t *testing.T) {
+		vm := goja.New()
+		_, err := vm.RunString(`throw new Error('boom')`)
+		msg, native := jsErrorMessage(err)
+		if native || msg != "Error: boom" {
+			t.Fatalf("got msg=%q native=%v, want \"Error: boom\" false", msg, native)
+		}
+	})
+
+	t.Run("TypeError is not native", func(t *testing.T) {
+		vm := goja.New()
+		_, err := vm.RunString(`null.x`)
+		msg, native := jsErrorMessage(err)
+		if native || !strings.HasPrefix(msg, "TypeError:") {
+			t.Fatalf("got msg=%q native=%v, want TypeError, false", msg, native)
+		}
+	})
+
+	t.Run("stack overflow is JS-origin", func(t *testing.T) {
+		vm := goja.New()
+		vm.SetMaxCallStackSize(2000)
+		_, err := vm.RunString(`function f(){return f()}f()`)
+		msg, native := jsErrorMessage(err)
+		if native || msg != "Maximum call stack size exceeded" {
+			t.Fatalf("got msg=%q native=%v", msg, native)
+		}
+	})
+
+	t.Run("interrupt carries reason and is native", func(t *testing.T) {
+		vm := goja.New()
+		sentinel := errors.New("run_js aborted: CPU time limit exceeded")
+		vm.Set("stop", func(goja.FunctionCall) goja.Value {
+			vm.Interrupt(sentinel)
+			return goja.Undefined()
+		})
+		_, err := vm.RunString(`stop(); while(true){}`)
+		msg, native := jsErrorMessage(err)
+		if !native || msg != sentinel.Error() {
+			t.Fatalf("got msg=%q native=%v, want %q true", msg, native, sentinel.Error())
+		}
+	})
 }

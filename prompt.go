@@ -196,9 +196,15 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 
 		// If resuming a suspended run, execute pending tool calls then continue.
 		if input.ResumeRunID != "" {
-			// Load checkpoint to get pending tool calls.
+			// Load checkpoint to get pending tool calls. Messages /
+			// compactionState are captured raw so a re-suspension (a
+			// multi-step delegated confirmation) can re-persist the
+			// parent's history verbatim with only the suspension
+			// context swapped.
 			var checkpoint struct {
+				Messages          json.RawMessage        `json:"messages"`
 				SuspensionContext *sol.SuspensionContext `json:"suspensionContext"`
+				CompactionState   json.RawMessage        `json:"compactionState"`
 			}
 			_ = agent.client.doJSON(ctx, "GET", "/api/agent/run/"+input.ResumeRunID+"/checkpoint", nil, &checkpoint)
 
@@ -210,7 +216,22 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			if checkpoint.SuspensionContext != nil {
 				approved := input.Approved != nil && *input.Approved
 				if checkpoint.SuspensionContext.Reason == "delegated" {
-					resolveDelegatedSuspension(ctx, agent, run.id, opts, checkpoint.SuspensionContext, approved, input.Message, opts.SessionStore, ew)
+					if reSusp := resolveDelegatedSuspension(ctx, agent, run.id, opts, checkpoint.SuspensionContext, approved, input.Message, opts.SessionStore, ew); reSusp != nil {
+						// The child consumed this decision and hit its
+						// next gate. Re-suspend the parent with the new
+						// delegated context (same as gate 1) so the
+						// conversation keeps a resumable suspension and
+						// the next approval chains — instead of running
+						// to success with the gate only narrated.
+						emitSuspensionEvent(ew, reSusp)
+						ckpt, _ := json.Marshal(map[string]any{
+							"messages":          checkpoint.Messages,
+							"suspensionContext": reSusp,
+							"compactionState":   checkpoint.CompactionState,
+						})
+						run.completeWithCheckpoint(ctx, "suspended", "", "", "", ckpt)
+						return
+					}
 				} else if len(checkpoint.SuspensionContext.PendingToolCalls) > 0 {
 					resolvePendingToolCalls(ctx, solAgent.Tools, opts.SessionStore, checkpoint.SuspensionContext.PendingToolCalls, approved, ew)
 				}
@@ -386,7 +407,14 @@ func resolvePendingToolCalls(
 // persist the suspended parent tool call's result so the resumed run
 // continues. The up-cascade half is bus.ErrDelegatedSuspend →
 // runner.handleSuspension.
-func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID string, baseOpts sol.RunnerOptions, sc *sol.SuspensionContext, approved bool, denyMsg string, store session.SessionStore, ew *EventWriter) {
+// resolveDelegatedSuspension returns a non-nil *sol.SuspensionContext when
+// the delegated child re-suspended (a multi-step confirmation: it consumed
+// this decision and immediately hit its next gate). The caller must
+// re-suspend the parent run with that context instead of continuing —
+// otherwise the run ends success with no resumable suspension and the
+// next approval re-delegates from scratch. nil means the child reached a
+// terminal state and its result was appended normally.
+func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID string, baseOpts sol.RunnerOptions, sc *sol.SuspensionContext, approved bool, denyMsg string, store session.SessionStore, ew *EventWriter) *sol.SuspensionContext {
 	rawData, _ := json.Marshal(sc.Data)
 	var del struct {
 		ToolCallID string          `json:"toolCallID"`
@@ -426,6 +454,31 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 			output = "Error: " + cerr.Error()
 			failed = true
 		default:
+			// The child consumed this decision and immediately hit its
+			// NEXT gate (multi-step confirmation). Re-raise a delegated
+			// suspension so the parent re-suspends for the next approval
+			// — mirrors buildPromptAgentTool's first-gate handling. Not
+			// doing this flattens it to a completed result, the parent
+			// ends success with no resumable suspension, and the next
+			// approval re-delegates the sibling from scratch.
+			if m, ok := res.(map[string]any); ok {
+				if st, _ := m["state"].(string); st == "input-required" {
+					nextChild := map[string]any{
+						"agentId": ch.AgentID,
+						"slug":    ch.Slug,
+						"taskId":  m["taskId"],
+					}
+					if c, ok := m["confirmation"]; ok && c != nil {
+						nextChild["confirmation"] = c
+					}
+					return &sol.SuspensionContext{
+						Reason:           "delegated",
+						Data:             &bus.ErrDelegatedSuspend{ToolCallID: del.ToolCallID, Transport: "a2a", Child: nextChild},
+						PendingToolCalls: sc.PendingToolCalls,
+						CompletedResults: sc.CompletedResults,
+					}
+				}
+			}
 			if b, mErr := json.Marshal(res); mErr == nil {
 				output = string(b)
 			} else {
@@ -433,7 +486,21 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 			}
 		}
 	case "inprocess":
-		output = resumeInProcessChild(ctx, agent, callerRunID, baseOpts, del.Child, approved, denyMsg, ew)
+		text, reSusp := resumeInProcessChild(ctx, agent, callerRunID, baseOpts, del.Child, approved, denyMsg, ew)
+		if reSusp != nil {
+			// Associate with the parent's pending tool call (the
+			// runner stamps ToolCallID on the up-cascade; on the
+			// resume path we set it explicitly, like the a2a branch)
+			// and re-suspend the parent — same shape as gate 1.
+			reSusp.ToolCallID = del.ToolCallID
+			return &sol.SuspensionContext{
+				Reason:           "delegated",
+				Data:             reSusp,
+				PendingToolCalls: sc.PendingToolCalls,
+				CompletedResults: sc.CompletedResults,
+			}
+		}
+		output = text
 	default:
 		output = "Error: unknown delegated transport: " + del.Transport
 		failed = true
@@ -466,6 +533,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 			}},
 		}})
 	}
+	return nil
 }
 
 // resumeInProcessChild reconstructs a suspended Sol subagent from the
@@ -473,7 +541,13 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 // decision (recursing if it too delegated), runs it to terminal, and
 // returns its final text. Model/provider config is inherited from the
 // parent's resumed runner options, mirroring Runner.SpawnSubagent.
-func resumeInProcessChild(ctx context.Context, agent *Agent, callerRunID string, baseOpts sol.RunnerOptions, childRaw json.RawMessage, approved bool, denyMsg string, ew *EventWriter) string {
+// resumeInProcessChild returns the subagent's terminal text, OR a non-nil
+// *bus.ErrDelegatedSuspend when the subagent re-suspended (a multi-step
+// gate). The envelope is byte-shape-identical to Runner.SpawnSubagent's
+// up-cascade so the parent re-suspends and emitSuspensionEvent / resume
+// handle it exactly like the first gate. ToolCallID is left unset here
+// (no runner step on the resume path) — the caller stamps it.
+func resumeInProcessChild(ctx context.Context, agent *Agent, callerRunID string, baseOpts sol.RunnerOptions, childRaw json.RawMessage, approved bool, denyMsg string, ew *EventWriter) (string, *bus.ErrDelegatedSuspend) {
 	var child struct {
 		AgentName         string                 `json:"agentName"`
 		Messages          []goai.Message         `json:"messages"`
@@ -481,11 +555,11 @@ func resumeInProcessChild(ctx context.Context, agent *Agent, callerRunID string,
 		CompactionState   *sol.CompactionState   `json:"compactionState"`
 	}
 	if err := json.Unmarshal(childRaw, &child); err != nil {
-		return "Error: decode in-process child: " + err.Error()
+		return "Error: decode in-process child: " + err.Error(), nil
 	}
 	factory, ok := solagent.GetFactory(child.AgentName)
 	if !ok {
-		return "Error: subagent type not found on resume: " + child.AgentName
+		return "Error: subagent type not found on resume: " + child.AgentName, nil
 	}
 	sub := factory("")
 	subOpts := baseOpts // inherit model / apiKey / baseURL / bus
@@ -496,7 +570,22 @@ func resumeInProcessChild(ctx context.Context, agent *Agent, callerRunID string,
 
 	if child.SuspensionContext != nil {
 		if child.SuspensionContext.Reason == "delegated" {
-			resolveDelegatedSuspension(ctx, agent, callerRunID, baseOpts, child.SuspensionContext, approved, denyMsg, nil, ew)
+			// The subagent itself delegated onward. If THAT child
+			// re-suspended (deeper multi-step), the subagent stays
+			// gated — re-package it (messages unchanged; new nested
+			// context) so the parent re-suspends. Don't run the
+			// subagent: it can't proceed until its delegate resolves.
+			if rs := resolveDelegatedSuspension(ctx, agent, callerRunID, baseOpts, child.SuspensionContext, approved, denyMsg, nil, ew); rs != nil {
+				return "", &bus.ErrDelegatedSuspend{
+					Transport: "inprocess",
+					Child: sol.InProcessChild{
+						AgentName:         child.AgentName,
+						Messages:          child.Messages,
+						SuspensionContext: rs,
+						CompactionState:   child.CompactionState,
+					},
+				}
+			}
 		} else if len(child.SuspensionContext.PendingToolCalls) > 0 {
 			resolvePendingToolCalls(ctx, sub.Tools, nil, child.SuspensionContext.PendingToolCalls, approved, ew)
 		}
@@ -507,10 +596,24 @@ func resumeInProcessChild(ctx context.Context, agent *Agent, callerRunID string,
 	}
 	res, err := subRunner.Run(ctx, resumePrompt)
 	if err != nil {
-		return "Error: subagent resume: " + err.Error()
+		return "Error: subagent resume: " + err.Error(), nil
 	}
-	if res != nil {
-		return res.TotalText
+	if res == nil {
+		return "", nil
 	}
-	return ""
+	if res.Status == sol.RunSuspended {
+		// The subagent hit its NEXT gate. Mirror SpawnSubagent's
+		// up-cascade so the parent re-suspends and the decision
+		// cascades back in on the next approval.
+		return "", &bus.ErrDelegatedSuspend{
+			Transport: "inprocess",
+			Child: sol.InProcessChild{
+				AgentName:         child.AgentName,
+				Messages:          res.Messages,
+				SuspensionContext: res.SuspensionContext,
+				CompactionState:   res.CompactionState,
+			},
+		}
+	}
+	return res.TotalText, nil
 }

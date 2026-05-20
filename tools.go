@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -53,7 +54,7 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
 			var args runJSInput
 			if err := json.Unmarshal(input, &args); err != nil {
-				return tool.Result{Output: "Error: invalid input: " + err.Error()}, nil
+				return tool.Result{}, fmt.Errorf("invalid run_js input: %w", err)
 			}
 
 			// If confirmation requested, ask the permission manager.
@@ -111,11 +112,23 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			run.pendingLogs = nil
 			run.mu.Unlock()
 
+			if err != nil {
+				msg, native := jsErrorMessage(err)
+				if native {
+					msg = "(native) " + msg
+				}
+				err = &jsRunError{msg: msg, cause: err}
+			}
+
 			// Record action.
 			run.recordAction("run_js", map[string]string{"code": args.Code}, result, err, duration)
 
 			if err != nil {
-				return tool.Result{Output: "Error: " + err.Error()}, nil
+				// Return the error so the executor classifies the outcome
+				// as a tool error (red), not a successful text result that
+				// merely starts with "Error:". The executor feeds it back
+				// to the model (non-fatal) and prepends its own "Error: ".
+				return tool.Result{}, err
 			}
 
 			// Combine console output + return value.
@@ -138,7 +151,7 @@ type promptAgentInput struct {
 	Message   string     `json:"message" jsonschema:"description=The task / message to send. When resuming an input-required task, put the answer here."`
 	ContextID string     `json:"contextId,omitempty" jsonschema:"description=Opaque thread handle, minted by the target agent. OMIT on the first call to an agent. Only ever pass a contextId you got back from THIS agent's own prior promptAgent result — never your own run/conversation id, never a fabricated value."`
 	TaskID    string     `json:"taskId,omitempty" jsonschema:"description=Opaque task handle. Only set when resuming a task that returned state=input-required: pass that result's taskId verbatim and put the answer in message. Never invent one."`
-	Files     []FileInfo `json:"files,omitempty" jsonschema:"description=Files to send; paths in YOUR storage, copied into the target agent's storage."`
+	Files     []FilePath `json:"files,omitempty" jsonschema:"description=Paths in YOUR storage to attach. Each is copied into the target agent's storage and surfaced to it as an attached file (with content-type/size/filename derived from S3 — you only supply the path)."`
 }
 
 // buildPromptAgentTool builds the single top-level `promptAgent` tool —
@@ -185,14 +198,14 @@ func buildPromptAgentTool(agent *Agent, run *run) (tool.Tool, bool) {
 		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
 			var in promptAgentInput
 			if err := json.Unmarshal(input, &in); err != nil {
-				return tool.Result{Output: "Error: invalid input: " + err.Error()}, nil
+				return tool.Result{}, fmt.Errorf("invalid promptAgent input: %w", err)
 			}
 			if in.Agent == "" || in.Message == "" {
-				return tool.Result{Output: "Error: `agent` and `message` are required"}, nil
+				return tool.Result{}, errors.New("`agent` and `message` are required")
 			}
 			target, ok := bySlug[in.Agent]
 			if !ok {
-				return tool.Result{Output: "Error: unknown or unavailable agent: " + in.Agent}, nil
+				return tool.Result{}, fmt.Errorf("unknown or unavailable agent: %s", in.Agent)
 			}
 
 			handle := &SiblingHandle{slug: target.slug, agentID: target.id, agent: agent}
@@ -204,14 +217,26 @@ func buildPromptAgentTool(agent *Agent, run *run) (tool.Tool, bool) {
 				childArgs["taskId"] = in.TaskID
 			}
 			if len(in.Files) > 0 {
-				childArgs["files"] = in.Files
+				// Wire shape for A2A: [{path: "..."}]. Other FileInfo fields
+				// (filename, contentType, size) get filled callee-side by
+				// HeadObject during the cross-bucket copy — no point making
+				// the caller LLM transcribe them.
+				files := make([]map[string]string, len(in.Files))
+				for i, p := range in.Files {
+					files[i] = map[string]string{"path": string(p)}
+				}
+				childArgs["files"] = files
 			}
 
 			res, err := handle.CallTool(ctx, run.id, "prompt", childArgs)
 			if err != nil {
 				// failed / canceled surface as a normal tool error the
 				// LLM can react to (matches the A2A error-channel design).
-				return tool.Result{Output: "Error: " + err.Error()}, nil
+				// Returning the error (rather than burying it in a
+				// success Output) is what the executor classifies as a
+				// tool-error outcome — it still feeds the message back to
+				// the model non-fatally.
+				return tool.Result{}, err
 			}
 
 			// res is the structured {text,taskId,contextId,state,artifacts}.

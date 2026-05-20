@@ -57,10 +57,11 @@ func (a *Agent) SyncDown(ctx context.Context, prefix, localDir string) error {
 
 	stripPrefix := prefix + "/"
 	for _, fi := range files {
-		rel := fi.Path
+		remotePath := string(fi.Path)
+		rel := remotePath
 		if prefix != "" {
-			rel = strings.TrimPrefix(fi.Path, stripPrefix)
-			if rel == "" || rel == fi.Path {
+			rel = strings.TrimPrefix(remotePath, stripPrefix)
+			if rel == "" || rel == remotePath {
 				continue
 			}
 		}
@@ -77,9 +78,9 @@ func (a *Agent) SyncDown(ctx context.Context, prefix, localDir string) error {
 			return fmt.Errorf("agentsdk: SyncDown: mkdir %s: %w", filepath.Dir(localPath), err)
 		}
 
-		rc, err := a.OpenFile(ctx, fi.Path)
+		rc, err := a.OpenFile(ctx, remotePath)
 		if err != nil {
-			return fmt.Errorf("agentsdk: SyncDown: open %s: %w", fi.Path, err)
+			return fmt.Errorf("agentsdk: SyncDown: open %s: %w", remotePath, err)
 		}
 		// Atomic-ish write: copy to a sibling temp, then rename. Avoids
 		// half-written binaries being execve'd by something that happened

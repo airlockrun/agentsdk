@@ -263,7 +263,7 @@ Your routes are served at: {{ .AgentRouteURL }}
 
 External MCP servers configured for this agent. Authorized servers expose typed tools as methods on a per-server `mcp_{slug}` namespace object — call them inside `run_js` like `mcp_github.search_repos({ query: "..." })`. Unauthorized servers are listed below with the URL the user must visit to connect them.
 {{ range .MCPServers }}
-- `{{ .Slug }}` ({{ .Name }}) — {{ .Status }}
+- `{{ .Slug }}` ({{ .Name }}) — {{ .Status }}{{ if .Description }} — {{ .Description }}{{ end }}
 {{- $ns := renderMCPNamespace . -}}
 {{ if $ns }}
 

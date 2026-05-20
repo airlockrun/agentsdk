@@ -51,11 +51,18 @@ packages:
 ```
 agents/{id}/
 ├── main.go         # Registrations
+├── deps/
+│   └── deps.go     # Deps struct — shared by all domain packages
 ├── spotify/
-│   ├── deps.go     # Deps struct
 │   ├── service.go  # Pure Go (handles + plain types)
 │   └── tools.go    # Tool Execute funcs
 ```
+
+`Deps` is a single struct shared by every domain package, so it lives in
+its own `deps` package — not inside a feature package. A feature package
+(`spotify`) can't be imported by a sibling (`weather`) without coupling
+them, and `main` can't be imported at all. Keeping `Deps` in `deps/`
+lets `main.go` and every domain package import the same type.
 
 Each domain package has two layers:
 
@@ -130,6 +137,7 @@ assistant in this domain?" and register those tools.
 package main
 
 import (
+    "agent/deps"
     "agent/spotify"
     "github.com/airlockrun/agentsdk"
 )
@@ -153,7 +161,7 @@ func main() {
         Access:        agentsdk.AccessUser,
     })
 
-    agent.Deps = &spotify.Deps{Spotify: spotifyConn}
+    agent.Deps = &deps.Deps{Spotify: spotifyConn}
 
     agent.RegisterTool(&agentsdk.Tool[spotify.SearchIn, spotify.SearchOut]{
         Name: "search_tracks", Description: "Search Spotify tracks.",
@@ -169,8 +177,8 @@ func main() {
 ```
 
 ```go
-// spotify/deps.go
-package spotify
+// deps/deps.go
+package deps
 
 import "github.com/airlockrun/agentsdk"
 
@@ -189,6 +197,7 @@ import (
     "fmt"
     "net/url"
 
+    "agent/deps"
     "github.com/airlockrun/agentsdk"
 )
 
@@ -205,7 +214,7 @@ type SearchOut struct {
 }
 
 func SearchTracks(ctx context.Context, in SearchIn) (SearchOut, error) {
-    d := agentsdk.GetDeps[*Deps](ctx)
+    d := agentsdk.GetDeps[*deps.Deps](ctx)
     if in.Limit <= 0 {
         in.Limit = 10
     }
@@ -229,7 +238,7 @@ type PlayIn  struct { TrackURI string `json:"trackURI,omitempty"` }
 type PlayOut struct { OK bool `json:"ok"` }
 
 func Play(ctx context.Context, in PlayIn) (PlayOut, error) {
-    d := agentsdk.GetDeps[*Deps](ctx)
+    d := agentsdk.GetDeps[*deps.Deps](ctx)
     var body any
     if in.TrackURI != "" {
         body = map[string]any{"uris": []string{in.TrackURI}}
@@ -243,7 +252,7 @@ func Play(ctx context.Context, in PlayIn) (PlayOut, error) {
 
 **Key patterns:**
 - `RegisterConnection` returns `*ConnectionHandle`; use it for all API calls
-- `agent.Deps` stores handles; tool funcs retrieve via `agentsdk.GetDeps[*Deps](ctx)`
+- `agent.Deps` stores handles; tool funcs retrieve via `agentsdk.GetDeps[*deps.Deps](ctx)`
 - `handle.Request(ctx, method, path, body)` returns raw bytes. Body
   auto-encodes (struct → JSON, `[]byte`/`string` as-is, `nil` → no body).
   Airlock injects credentials.
@@ -258,28 +267,46 @@ func Play(ctx context.Context, in PlayIn) (PlayOut, error) {
 ```go
 agent := agentsdk.New(agentsdk.Config{
     Description: "What this agent does — shown to users in the UI", // required, panics if empty
+    Emoji:       "🎧",                                              // optional decorative glyph next to the agent in the UI; "" = none
 })
 agent.Serve() // starts HTTP server, blocks until shutdown
 ```
 
+**Choosing `Emoji`:** every product on this platform is an agent, so the
+emoji must distinguish *this* agent from all the others — pick one that
+evokes its specific domain, never the generic "agent/AI" concept. Do
+**not** use 🤖 ⚙️ 🧠 🦾 💬 or similar "it's a bot" glyphs; they're
+noise when every entry in the list is a bot. A Spotify agent is 🎧, a
+weather agent 🌦️, an invoicing agent 🧾, a calendar agent 📅. Think
+"what is this agent *about*?", not "what is this agent?".
+
 ## Agent.Deps — dependency injection
 
+`Deps` lives in its own `deps` package so `main.go` and every domain
+package can import the same type (see Project layout).
+
 ```go
+// deps/deps.go
+package deps
+
 type Deps struct {
     Gmail   *agentsdk.ConnectionHandle
     GitHub  *agentsdk.MCPHandle
     Reports *agentsdk.TopicHandle
 }
+```
 
-agent.Deps = &Deps{
+```go
+// main.go
+agent.Deps = &deps.Deps{
     Gmail:   agent.RegisterConnection(&agentsdk.Connection{Slug: "gmail", /* ... */}),
     GitHub:  agent.RegisterMCP(&agentsdk.MCP{Slug: "github", /* ... */}),
     Reports: agent.RegisterTopic(&agentsdk.Topic{Slug: "reports", Description: "Weekly reports"}),
 }
 
-// In any handler:
+// In any handler (any domain package):
 func DoSomething(ctx context.Context, in SomeIn) (SomeOut, error) {
-    d := agentsdk.GetDeps[*Deps](ctx) // panics if type mismatch
+    d := agentsdk.GetDeps[*deps.Deps](ctx) // panics if type mismatch
     // use d.Gmail, d.GitHub, d.Reports
 }
 ```
@@ -330,8 +357,25 @@ the LLM tells platform primitives from agent-declared tools.
   accepts RFC3339 for `time.Time` and that surprises the LLM.
 - No recursive types (the schema generator can't detect cycles); use
   `json:"-"` on cycle-closing fields.
-- Binary data goes through `FileInfo` (write to storage, return the
-  `FileInfo`), never base64 strings.
+- **Path fields use `agentsdk.FilePath` (or `[]agentsdk.FilePath`), not
+  plain `string`.** FilePath carries a schema marker airlock uses to
+  auto-copy files across A2A and external MCP boundaries — a sibling
+  that calls your tool with `In.File: FilePath` gets your file copied
+  into its own bucket, and `Out.Result: FilePath` lands in the caller's
+  `siblings/{your-slug}/...`. Plain `string` paths are forwarded verbatim
+  and resolve in the callee's own namespace — almost always a 404.
+- **Directory fields use `agentsdk.DirPath`.** Auto-copy is intentionally
+  unimplemented for directories (unbounded); for cross-agent directory
+  semantics return `[]FilePath` so the caller picks exact files. Still
+  preferred over `string` for the schema marker.
+- Inside the tool body, convert when calling the trusted file API —
+  `agent.OpenFile(ctx, string(in.Image))`. `FilePath`/`DirPath` are
+  defined string types, not aliases, so the conversion is explicit.
+- Binary data: write to storage with `agent.WriteFile`, return the path
+  as `FilePath` (auto-copies). `FileInfo` is also fine when the LLM needs
+  filename/size/contentType metadata, but its `Path` field is plain
+  `string` and won't trigger A2A copy — pair it with a `FilePath` field
+  if both matter. Never base64 strings.
 
 **Error handling:** return `error` from `Execute` — converted to a JS `throw`
 inside `run_js`. Don't panic.
@@ -722,15 +766,16 @@ an S3 key. Paths are slashless: `uploads/x.csv`, `reports/q1.pdf`,
 code share one canonical form).
 
 **Hard rule for tool authors: tool inputs and outputs are *storage* paths,
-never container paths.** A `Source string` field on a tool's `In` struct is a
-storage path the LLM passed in; pass it through `CheckFileAccess` and read it
-with `agent.OpenFile`. A `Result FileInfo` you return is a storage path the LLM
-(or chat) will follow back through the same storage namespace. Returning
-`os.CreateTemp` paths or `localOut.Name()` to the LLM gives it a path it cannot
-read — the framework will 404. When you need a real on-disk file (CLI tools
-like `ffmpeg`, `pdftotext`), use `os.CreateTemp` purely as scratch inside the
-tool body, then upload the result with `agent.WriteFile` and return the
-resulting `FileInfo`.
+never container paths.** A `Source agentsdk.FilePath` field on a tool's `In`
+struct is a storage path the LLM (or a sibling agent over A2A) passed in;
+convert with `string(in.Source)` and pass it through `CheckFileAccess` /
+`agent.OpenFile`. A `Result agentsdk.FilePath` you return is a storage path
+the LLM, chat, or calling sibling will follow back through the same storage
+namespace. Returning `os.CreateTemp` paths or `localOut.Name()` to the LLM
+gives it a path it cannot read — the framework will 404. When you need a real
+on-disk file (CLI tools like `ffmpeg`, `pdftotext`), use `os.CreateTemp`
+purely as scratch inside the tool body, then upload the result with
+`agent.WriteFile` and return the resulting path as `agentsdk.FilePath`.
 
 ```go
 agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
@@ -843,11 +888,11 @@ even before passing it to an external API.
 
 ```go
 type CropIn struct {
-    Image   string `json:"image"`
+    Image   agentsdk.FilePath `json:"image"`
     X, Y, W, H int
 }
 type CropOut struct {
-    Result agentsdk.FileInfo `json:"result"`
+    Result agentsdk.FilePath `json:"result"`
 }
 
 agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
@@ -855,21 +900,22 @@ agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
     Description: "Crop a stored image and save the result.",
     Access:      agentsdk.AccessUser,
     Execute: func(ctx context.Context, in CropIn) (CropOut, error) {
-        if err := agent.CheckFileAccess(ctx, in.Image, agentsdk.OpRead); err != nil {
+        src := string(in.Image) // FilePath → string for the file API
+        if err := agent.CheckFileAccess(ctx, src, agentsdk.OpRead); err != nil {
             return CropOut{}, err
         }
-        src, err := agent.OpenFile(ctx, in.Image)
+        r, err := agent.OpenFile(ctx, src)
         if err != nil {
             return CropOut{}, err
         }
-        defer src.Close()
-        cropped := crop(src, in.X, in.Y, in.W, in.H)
+        defer r.Close()
+        cropped := crop(r, in.X, in.Y, in.W, in.H)
         info, err := agent.WriteFile(ctx, "tmp/crop-"+randHex(4)+".png",
             bytes.NewReader(cropped), "image/png")
         if err != nil {
             return CropOut{}, err
         }
-        return CropOut{Result: info}, nil
+        return CropOut{Result: agentsdk.FilePath(info.Path)}, nil
     },
 })
 ```
@@ -887,18 +933,26 @@ up. Temp files are scratch internal to the tool — they never appear in inputs
 or outputs.
 
 ```go
+type TranscodeIn struct {
+    Source agentsdk.FilePath `json:"source"`
+}
+type TranscodeOut struct {
+    Result agentsdk.FilePath `json:"result"`
+}
+
 Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
-    if err := agent.CheckFileAccess(ctx, in.Source, agentsdk.OpRead); err != nil {
+    srcPath := string(in.Source) // FilePath → string for the file API
+    if err := agent.CheckFileAccess(ctx, srcPath, agentsdk.OpRead); err != nil {
         return TranscodeOut{}, err
     }
 
     // Download the storage object into a scratch temp file.
-    src, err := agent.OpenFile(ctx, in.Source)
+    src, err := agent.OpenFile(ctx, srcPath)
     if err != nil {
         return TranscodeOut{}, err
     }
     defer src.Close()
-    inFile, err := os.CreateTemp("", "in-*"+filepath.Ext(in.Source))
+    inFile, err := os.CreateTemp("", "in-*"+filepath.Ext(srcPath))
     if err != nil {
         return TranscodeOut{}, err
     }
@@ -919,7 +973,8 @@ Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
         return TranscodeOut{}, fmt.Errorf("ffmpeg: %w: %s", err, out)
     }
 
-    // Upload the result back into storage and return the FileInfo.
+    // Upload the result back into storage and return the path as FilePath
+    // so airlock auto-copies it to the caller across A2A boundaries.
     result, err := os.Open(outFile.Name())
     if err != nil {
         return TranscodeOut{}, err
@@ -930,7 +985,7 @@ Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
     if err != nil {
         return TranscodeOut{}, err
     }
-    return TranscodeOut{Result: info}, nil
+    return TranscodeOut{Result: agentsdk.FilePath(info.Path)}, nil
 },
 ```
 
@@ -941,7 +996,8 @@ result invisible to the rest of the agent:
   container's scratch disk fills up over time.
 - Never return `outFile.Name()` (or any `os.CreateTemp` path) to the LLM. That
   path doesn't exist in the agent's storage; `agent.StatFile` would 404. Always
-  upload with `agent.WriteFile` and return the `FileInfo`.
+  upload with `agent.WriteFile` and return the resulting path as
+  `agentsdk.FilePath`.
 - For tools whose output filename you don't control, point the CLI at a temp
   *directory* (`os.MkdirTemp`), `defer os.RemoveAll` it, then walk and upload.
 

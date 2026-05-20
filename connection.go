@@ -56,7 +56,7 @@ func (h *ConnectionHandle) Request(ctx context.Context, method, path string, bod
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("agentsdk: proxy %s: status %d: %s", h.slug, resp.StatusCode, string(b))
+		return nil, fmt.Errorf("proxy %s: status %d: %s", h.slug, resp.StatusCode, string(b))
 	}
 	return io.ReadAll(resp.Body)
 }

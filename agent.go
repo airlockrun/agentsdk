@@ -439,11 +439,12 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 			}
 		}
 		mcpServers = append(mcpServers, prompt.MCPServerStatus{
-			Slug:   m.Slug,
-			Name:   m.Name,
-			Status: status,
-			Access: string(m.Access),
-			Tools:  tools,
+			Slug:        m.Slug,
+			Name:        m.Name,
+			Status:      status,
+			Access:      string(m.Access),
+			Description: authBySlug[m.Slug].Instructions,
+			Tools:       tools,
 		})
 	}
 

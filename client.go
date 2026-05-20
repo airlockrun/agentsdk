@@ -86,7 +86,7 @@ func (c *airlockClient) doJSON(ctx context.Context, method, path string, reqBody
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: %s %s: status %d: %s", method, path, resp.StatusCode, string(b))
+		return fmt.Errorf("%s %s: status %d: %s", method, path, resp.StatusCode, string(b))
 	}
 
 	if result != nil && resp.ContentLength != 0 {

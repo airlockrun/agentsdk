@@ -372,7 +372,7 @@ func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, cont
 		return FileInfo{}, err
 	}
 	return FileInfo{
-		Path:         canon,
+		Path:         FilePath(canon),
 		Filename:     pathBase(canon),
 		ContentType:  contentType,
 		Size:         n,
@@ -540,7 +540,7 @@ func (a *Agent) statFileRaw(ctx context.Context, path string) (FileInfo, error) 
 		return FileInfo{}, err
 	}
 	if info.Path == "" {
-		info.Path = path
+		info.Path = FilePath(path)
 	}
 	return info, nil
 }

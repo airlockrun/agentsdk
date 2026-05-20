@@ -153,7 +153,7 @@ type Action struct {
 // metadata so the LLM can refer to "Q1 Report.pdf" while the path uses a
 // uuid-prefixed safe filename.
 type FileInfo struct {
-	Path         string    `json:"path"`     // S3-style storage path, e.g. "uploads/foo.png"
+	Path         FilePath  `json:"path"`     // S3-style storage path, e.g. "uploads/foo.png"
 	Filename     string    `json:"filename"` // original upload name; S3 metadata
 	ContentType  string    `json:"contentType"`
 	Size         int64     `json:"size"`
@@ -506,6 +506,11 @@ type MCPAuthStatus struct {
 	AuthMode   MCPAuth `json:"authMode"`
 	Authorized bool    `json:"authorized"`
 	AuthURL    string  `json:"authUrl,omitempty"`
+	// Instructions is the server-level description the remote MCP server
+	// advertised in its initialize result (the spec's `instructions`
+	// field). Empty when the server set none. Rendered next to
+	// mcp_<slug> in the prompt so the model knows what the server is for.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 // MCPToolCallRequest is the body for POST /api/agent/mcp/{slug}/tools/call.

@@ -183,7 +183,10 @@ type MCPServerStatus struct {
 	Name   string
 	Status string // "connected, 5 tools" or "requires authentication"
 	Access string
-	Tools  []ToolInfo
+	// Description is the server-level usage hint the remote MCP server
+	// advertised via initialize `instructions`. Empty when unset.
+	Description string
+	Tools       []ToolInfo
 }
 
 // SiblingInfo carries one sibling agent record for prompt rendering.

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/airlockrun/goai/message"
+	sol "github.com/airlockrun/sol"
 )
 
 type greetIn struct {
@@ -60,4 +61,39 @@ func TestPromptHandler(t *testing.T) {
 	if len(completeReqs) != 1 {
 		t.Fatalf("expected 1 complete request, got %d", len(completeReqs))
 	}
+}
+
+// TestResumeInProcessChild_EarlyReturns locks the (string,
+// *bus.ErrDelegatedSuspend) contract on the non-suspending paths: a
+// failure must NOT yield a re-suspension envelope (a non-nil there would
+// wrongly re-suspend the parent). The re-suspension propagation itself
+// (subagent re-suspends, or its nested delegate re-suspends) is verified
+// end-to-end — it needs an LLM-driven Sol run or a programmable MCP
+// endpoint, the same reason the analogous A2A fix has no unit test.
+func TestResumeInProcessChild_EarlyReturns(t *testing.T) {
+	a, _ := testAgent(t)
+	ew := newEventWriter(httptest.NewRecorder())
+
+	t.Run("decode error", func(t *testing.T) {
+		text, susp := resumeInProcessChild(context.Background(), a, "run-1",
+			sol.RunnerOptions{}, json.RawMessage("not json"), true, "", ew)
+		if susp != nil {
+			t.Fatalf("decode error must not re-suspend, got %+v", susp)
+		}
+		if !strings.HasPrefix(text, "Error: decode in-process child:") {
+			t.Fatalf("unexpected text: %q", text)
+		}
+	})
+
+	t.Run("unknown subagent factory", func(t *testing.T) {
+		raw, _ := json.Marshal(map[string]any{"agentName": "no-such-subagent-xyz", "messages": []any{}})
+		text, susp := resumeInProcessChild(context.Background(), a, "run-1",
+			sol.RunnerOptions{}, raw, true, "", ew)
+		if susp != nil {
+			t.Fatalf("missing factory must not re-suspend, got %+v", susp)
+		}
+		if !strings.HasPrefix(text, "Error: subagent type not found on resume:") {
+			t.Fatalf("unexpected text: %q", text)
+		}
+	})
 }

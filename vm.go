@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -79,10 +80,10 @@ const maxJSCallStackSize = 10000
 // object (`readFile(huge)`) or accumulates large tool results would grow the
 // Go heap unbounded with near-zero instruction cost — invisible to any
 // CPU/recursion guard. Capping each crossing makes a single oversized slurp
-// fail fast with a clear, actionable error, and bounds per-iteration growth
-// so the heap-sampling guard can do its job. Legit large payloads must be
-// processed via a storage path (ranged/streamed), not loaded whole.
-const maxJSValueBytes = 32 << 20 // 32 MiB
+// fail fast with a clear, actionable error, and bounds per-iteration heap
+// growth. Legit large payloads must be processed via a storage path
+// (ranged/streamed), not loaded whole.
+const maxJSValueBytes = 64 << 20 // 64 MiB
 
 // capJSBytes aborts the in-flight JS call (as a thrown error) when a value
 // crossing the Go→JS boundary exceeds maxJSValueBytes. what names the source
@@ -1242,4 +1243,53 @@ func formatJSValue(vm *goja.Runtime, v goja.Value) string {
 		}
 	}
 	return v.String()
+}
+
+// jsRunError carries the agent/UI-facing message for a run_js failure while
+// keeping the original goja error reachable via Unwrap, so errors.Is checks
+// (context.Canceled, errJSCPU) still work downstream.
+type jsRunError struct {
+	msg   string
+	cause error
+}
+
+func (e *jsRunError) Error() string { return e.msg }
+func (e *jsRunError) Unwrap() error { return e.cause }
+
+// jsErrorMessage renders a run_js failure without goja's internal Go stack
+// frames (" at github.com/airlockrun/... (native)") or the "GoError:" wrapper
+// name, and reports whether the failure originated in Go-native code (a tool,
+// proxy, readFile, or a platform interrupt) versus the agent's own JS.
+//
+// The native/JS split is structural, not a string heuristic: goja's
+// *Exception.Unwrap() returns a non-nil Go error exactly when the thrown
+// value is a GoError minted by vm.NewGoError, and *InterruptedError is always
+// a platform-side abort. A plain JS throw, a stack overflow, or a syntax
+// error carries no Go cause and is the script's own fault.
+//
+// goja appends its Go call stack to *Exception.Error() and
+// *InterruptedError.Error() unconditionally, so going through the typed
+// value is the only way to drop it.
+func jsErrorMessage(err error) (msg string, native bool) {
+	var ie *goja.InterruptedError
+	if errors.As(err, &ie) {
+		if u := ie.Unwrap(); u != nil { // CPU limit / ctx cancel reason
+			return u.Error(), true
+		}
+		return "run_js interrupted", true
+	}
+	var soe *goja.StackOverflowError
+	if errors.As(err, &soe) {
+		return "Maximum call stack size exceeded", false
+	}
+	var ex *goja.Exception
+	if errors.As(err, &ex) {
+		if u := ex.Unwrap(); u != nil { // GoError wrapping a Go error
+			return u.Error(), true
+		}
+		if v := ex.Value(); v != nil { // plain JS throw
+			return v.String(), false
+		}
+	}
+	return err.Error(), false // compiler/syntax error and the like
 }
