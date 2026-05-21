@@ -199,9 +199,10 @@ func New(cfg Config) *Agent {
 // When ctx carries a run, the returned logger is tagged with
 // run_id/agent_id and tees every line two ways: structured JSON to
 // container stdout (what an enterprise log pipeline scrapes) and a
-// bounded per-run buffer that Airlock keeps as the failure snapshot for
-// the Fix-this-error builder. Outside a run (init, migrations, detached
-// goroutines) it returns the plain stdout logger — no run to attach to.
+// bounded per-run buffer that Airlock keeps as the run's log record
+// (a failed run's copy also feeds the Fix-this-error builder). Outside
+// a run (init, migrations, detached goroutines) it returns the plain
+// stdout logger — no run to attach to.
 //
 // It is a real *zap.Logger: use zap.String/zap.Int/zap.Error/... for
 // structured fields, and the level-named methods (Info/Warn/Error/Debug)

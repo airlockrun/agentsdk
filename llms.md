@@ -1037,9 +1037,9 @@ agent.EmbeddingModel(ctx, slug, agentsdk.ModelOpts{})
 
 // Logging — agent.Logger(ctx) returns a *zap.Logger. Bind it once at
 // handler entry; the ctx is consumed there to resolve the run. Lines go
-// to container stdout as structured JSON (run_id/agent_id tagged) and,
-// for failed runs, are kept by Airlock as the diagnostics snapshot the
-// "Fix this error" builder reads. Use zap field constructors for
+// to container stdout as structured JSON (run_id/agent_id tagged) and
+// are kept by Airlock as the run's log record (a failed run's logs also
+// feed the "Fix this error" builder). Use zap field constructors for
 // structured context.
 log := agent.Logger(ctx)
 log.Info("imported rows", zap.Int("count", 42))

@@ -82,17 +82,17 @@ func (r *run) vmRuntime() *goja.Runtime {
 	return r.vm
 }
 
-// maxRunLogBytes caps the in-memory run log buffer. The buffer is a
-// failure snapshot, not a log store — once over the cap, oldest entries
-// are dropped. ~64 KiB comfortably holds a handler's worth of lines;
-// anything chattier should be read from container stdout / the
-// operator's log pipeline, where nothing is dropped.
+// maxRunLogBytes caps the in-memory run log buffer. Airlock keeps the
+// flushed buffer as the run's log record, so it must stay bounded —
+// once over the cap, oldest entries are dropped. ~64 KiB comfortably
+// holds a handler's worth of lines; anything chattier should be read
+// from container stdout / the operator's log pipeline, where nothing
+// is dropped.
 const maxRunLogBytes = 64 * 1024
 
 // logAppend records a run-scoped log line into the bounded buffer.
-// Flushed to Airlock on Complete; persisted there only for failed runs.
-// Reached from Agent.Logger's capture core and from the JS log()/console
-// bindings.
+// Flushed to Airlock on Complete as the run's log record. Reached from
+// Agent.Logger's capture core and from the JS log()/console bindings.
 func (r *run) logAppend(level LogLevel, msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

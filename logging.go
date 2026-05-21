@@ -22,10 +22,10 @@ import (
 // Handler code gets a per-run logger via Agent.Logger(ctx): the same
 // stdout core, tagged with run_id/agent_id, teed into a per-run capture
 // core (runLogCore) that accumulates entries in the run's bounded
-// buffer. That buffer is posted to airlock on completion and persisted
-// only for failed runs — the failure snapshot the Fix-this-error
-// builder reads. Successful runs leave nothing in airlock; their logs
-// live in stdout / the operator's pipeline.
+// buffer. That buffer is posted to airlock on completion and stored as
+// the run's log record (rendered in the run-detail UI; a failed run's
+// copy also feeds the Fix-this-error builder). airlock ages it out
+// with the run's other verbose fields at compaction.
 
 var (
 	baseLoggerOnce sync.Once
