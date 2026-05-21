@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
@@ -56,10 +57,14 @@ func (a *Agent) autoMigrate() {
 		return
 	}
 	if !hasMigrationFiles(migrationsPath) {
-		// In validate mode we always exit — the agent shouldn't continue
-		// to Serve() during build-time validation.
+		// In validate or down-to mode we always exit — the agent shouldn't
+		// continue to Serve() during these one-shot orchestrator invocations.
 		if IsValidatingMigrations() {
 			log.Println("agentsdk: no migrations to validate")
+			os.Exit(0)
+		}
+		if os.Getenv("AGENT_MIGRATE_DOWN_TO") != "" {
+			log.Println("agentsdk: no migrations to down-to")
 			os.Exit(0)
 		}
 		return
@@ -88,6 +93,24 @@ func (a *Agent) autoMigrate() {
 			panic("agentsdk: validate re-up: " + err.Error())
 		}
 		log.Println("agentsdk: migrations validated successfully")
+		os.Exit(0)
+	}
+
+	// One-shot down-to mode used by rollback. Airlock runs the agent's
+	// current image with this env var set, against either a schema clone
+	// (pre-flight check) or the live agent schema (the destructive step).
+	// Exits 0 on success so the orchestrator can observe completion via
+	// container exit code — same envelope as AGENT_VALIDATE_MIGRATIONS=1.
+	if downStr := os.Getenv("AGENT_MIGRATE_DOWN_TO"); downStr != "" {
+		v, err := strconv.ParseInt(downStr, 10, 64)
+		if err != nil {
+			panic("agentsdk: invalid AGENT_MIGRATE_DOWN_TO: " + err.Error())
+		}
+		log.Printf("agentsdk: migrating down to version %d", v)
+		if err := goose.DownToContext(ctx, db, migrationsPath, v); err != nil {
+			panic("agentsdk: down-to: " + err.Error())
+		}
+		log.Printf("agentsdk: migrated down to version %d", v)
 		os.Exit(0)
 	}
 
