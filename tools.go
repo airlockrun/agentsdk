@@ -61,7 +61,12 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			// This triggers Sol's suspension mechanism (ErrPermissionNeeded)
 			// if no rule allows it. The run suspends, the user is asked
 			// to confirm, and on resume the permission rule is added.
-			if args.RequestConfirmation {
+			//
+			// autoConfirm runs have no interactive second turn in which to
+			// answer a confirmation (public one-shot bridge sessions), so the
+			// gate is skipped and the code executes — the LLM's
+			// request_confirmation intent is honored as "just run it".
+			if args.RequestConfirmation && !run.autoConfirm {
 				pm := bus.PermissionManagerFromContext(ctx)
 				err := pm.Ask(ctx, bus.PermissionRequest{
 					Permission: "run_js",

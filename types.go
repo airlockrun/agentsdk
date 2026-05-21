@@ -228,6 +228,14 @@ type PromptInput struct {
 	// persists the summary via the SessionStore's Compact method, and emits
 	// a short text-delta describing the outcome.
 	ForceCompact bool `json:"forceCompact,omitempty"`
+
+	// AutoConfirm makes run_js skip the request_confirmation gate and
+	// execute directly. Airlock sets it for runs that have no interactive
+	// second turn in which to answer a confirmation — currently public
+	// one-shot bridge sessions. It governs only this run's own run_js; a
+	// suspension that still reaches the triggering surface by another path
+	// (e.g. an A2A-delegated confirmation) is auto-denied there instead.
+	AutoConfirm bool `json:"autoConfirm,omitempty"`
 }
 
 // --- Directories ---

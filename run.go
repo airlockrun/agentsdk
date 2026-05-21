@@ -23,6 +23,7 @@ type run struct {
 	userID              string // the originating user (anchor for scoped dirs); empty for cron/webhook/anon
 	supportedModalities []string
 	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
+	autoConfirm         bool        // run_js skips the request_confirmation gate (set for non-interactive runs, e.g. public one-shot bridge sessions)
 	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with PromptData.Siblings at render time
 	ctx                 context.Context
 	gw                  *goWall // go-call time accumulator (L3 CPU guard)

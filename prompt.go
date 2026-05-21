@@ -69,6 +69,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		} else {
 			run.callerAccess = AccessUser
 		}
+		run.autoConfirm = input.AutoConfirm
 		run.visibleSiblings = input.VisibleSiblings
 		ctx = contextWithRun(ctx, run)
 

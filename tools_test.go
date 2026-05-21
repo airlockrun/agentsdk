@@ -2,10 +2,35 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/goai/tool"
 )
+
+// TestRunJSAutoConfirmSkipsGate verifies that an autoConfirm run executes
+// run_js code that asked for request_confirmation without ever consulting
+// the permission manager. No PermissionManager is placed in ctx — if the
+// confirmation gate were reached, pm.Ask would panic or suspend, so a
+// clean result here proves the gate was skipped.
+func TestRunJSAutoConfirmSkipsGate(t *testing.T) {
+	a, _ := testAgent(t)
+	run := newRun(a, "run-ac", "", "", context.Background())
+	run.autoConfirm = true
+
+	rjt := buildRunJSTool(a, run)
+	res, err := rjt.Execute(context.Background(),
+		json.RawMessage(`{"code":"6*7","request_confirmation":true}`),
+		tool.CallOptions{ToolCallID: "tc-1"})
+	if err != nil {
+		t.Fatalf("autoConfirm run_js should execute, got error: %v", err)
+	}
+	if !strings.Contains(res.Output, "42") {
+		t.Fatalf("expected result 42 in output, got %q", res.Output)
+	}
+}
 
 // buildToolDescription now covers run_js usage + built-in bindings only.
 // Registered tools are rendered by Airlock into the system prompt (via
