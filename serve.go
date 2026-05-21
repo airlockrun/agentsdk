@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +12,8 @@ import (
 	"sort"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Serve starts the agent HTTP server. Blocks until SIGINT/SIGTERM.
@@ -68,7 +69,7 @@ func (a *Agent) Serve() {
 		a.stopBackgroundFlusher()
 	}()
 
-	log.Printf("agentsdk: version=%s serving on %s", Version, addr)
+	agentLogger().Info("serving", zap.String("version", Version), zap.String("addr", addr))
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		panic("agentsdk: server error: " + err.Error())
 	}
@@ -236,7 +237,7 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 
 	defer func() {
 		if rec := recover(); rec != nil {
-			log.Printf("agentsdk: /__air/tool/%s panic: %v\n%s", name, rec, debug.Stack())
+			agentLogger().Error("tool panic", zap.String("tool", name), zap.Any("recover", rec), zap.ByteString("stack", debug.Stack()))
 			http.Error(w, `{"error":"tool panicked"}`, http.StatusInternalServerError)
 		}
 		// If the tool materialized a real run (made an LLM call,
@@ -278,7 +279,7 @@ func routeLogging(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("agentsdk: route panic: %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+				agentLogger().Error("route panic", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Any("recover", rec), zap.ByteString("stack", debug.Stack()))
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()
@@ -287,7 +288,7 @@ func routeLogging(next http.HandlerFunc) http.HandlerFunc {
 		next.ServeHTTP(sw, r)
 
 		if sw.status >= 500 {
-			log.Printf("agentsdk: route error: %s %s → %d", r.Method, r.URL.Path, sw.status)
+			agentLogger().Warn("route error", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", sw.status))
 		}
 	}
 }
@@ -320,7 +321,7 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 // callers (Airlock dispatcher) know the agent is in the new state on 200.
 func (a *Agent) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err := a.syncWithAirlock(r.Context()); err != nil {
-		log.Printf("agentsdk: /refresh sync failed: %v", err)
+		agentLogger().Error("/refresh sync failed", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -54,8 +54,8 @@ type Agent struct {
 	topics      map[string]*Topic
 	directories []*Directory // registration order; longest-prefix wins at lookup
 
-	extraPrompts []*ExtraPrompt   // access-scoped system prompt fragments; see AddExtraPrompt
-	modelSlots   []*ModelSlot     // named model slots; see RegisterModel
+	extraPrompts []*ExtraPrompt // access-scoped system prompt fragments; see AddExtraPrompt
+	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
 
 	// Airlock-owned state: discovered server-side at sync time and pushed
 	// back via SyncResponse. /refresh re-runs sync to pick up changes
@@ -74,9 +74,6 @@ type Agent struct {
 	// bg holds the rolling "background" run used for model calls made with
 	// no dispatcher-bound ctx. See background.go.
 	bg backgroundState
-
-	// logger is used by Agent.Log when no run is bound to ctx.
-	logger *zap.Logger
 }
 
 // GetDeps retrieves the typed Deps struct from the Agent bound to ctx.
@@ -142,11 +139,6 @@ func New(cfg Config) *Agent {
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
 	a.autoMigrate()
-	logger, _ := zap.NewProduction()
-	if logger == nil {
-		logger = zap.NewNop()
-	}
-	a.logger = logger
 	// Framework-owned scratch directory — used by run_js output truncation
 	// and generated media. Builders may RegisterDirectory("tmp", ...); the
 	// register helper preserves the framework's caps (the description may
@@ -199,34 +191,26 @@ func New(cfg Config) *Agent {
 	return a
 }
 
-// Log records a message scoped to the current handler invocation at the
-// given level. Visible in the Runs UI alongside the actions the handler
-// performed; level controls how the UI surfaces it (color/filter).
+// Logger returns the zap logger for the current handler invocation.
+// Bind it once at handler entry — `log := a.Logger(ctx)` — and use it
+// throughout; the ctx is consumed here to resolve the run, so callers
+// don't thread it per line.
 //
-// Use LogLevelInfo for normal progress, LogLevelWarn for recoverable
-// concerns, and LogLevelError for failures the handler chose not to
-// raise. The argument shape is uniform — pick a level rather than reaching
-// for severity-named methods.
-func (a *Agent) Log(ctx context.Context, level LogLevel, msg string) {
+// When ctx carries a run, the returned logger is tagged with
+// run_id/agent_id and tees every line two ways: structured JSON to
+// container stdout (what an enterprise log pipeline scrapes) and a
+// bounded per-run buffer that Airlock keeps as the failure snapshot for
+// the Fix-this-error builder. Outside a run (init, migrations, detached
+// goroutines) it returns the plain stdout logger — no run to attach to.
+//
+// It is a real *zap.Logger: use zap.String/zap.Int/zap.Error/... for
+// structured fields, and the level-named methods (Info/Warn/Error/Debug)
+// for severity.
+func (a *Agent) Logger(ctx context.Context) *zap.Logger {
 	if r := a.runForCall(ctx); r != nil {
-		r.logAppend(level, msg)
-		return
+		return r.runLogger()
 	}
-	switch level {
-	case LogLevelError:
-		a.logger.Error(msg)
-	case LogLevelWarn:
-		a.logger.Warn(msg)
-	default:
-		a.logger.Info(msg)
-	}
-}
-
-// Logf is the printf-style sibling of Log — formats with fmt.Sprintf and
-// records the result. Use Log for plain strings, Logf when you'd otherwise
-// reach for fmt.Sprintf.
-func (a *Agent) Logf(ctx context.Context, level LogLevel, format string, args ...any) {
-	a.Log(ctx, level, fmt.Sprintf(format, args...))
+	return agentLogger()
 }
 
 // DB returns a lazily-initialized *AgentDB from AIRLOCK_DB_URL. Returns

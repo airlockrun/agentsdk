@@ -7,6 +7,8 @@ import (
 	"github.com/airlockrun/goai/tool"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // run is an unexported per-request bookkeeping struct. Accumulates actions
@@ -26,6 +28,9 @@ type run struct {
 	gw                  *goWall // go-call time accumulator (L3 CPU guard)
 	actions             []Action
 	logs                []LogEntry
+	logsBytes           int // running size of logs[].Message; drives the cap in logAppend
+	logger              *zap.Logger
+	loggerOnce          sync.Once
 	vm                  *goja.Runtime
 	vmOnce              sync.Once
 	mu                  sync.Mutex          // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
@@ -77,11 +82,43 @@ func (r *run) vmRuntime() *goja.Runtime {
 	return r.vm
 }
 
-// logAppend records a run-scoped log line. Flushed to Airlock on Complete.
+// maxRunLogBytes caps the in-memory run log buffer. The buffer is a
+// failure snapshot, not a log store — once over the cap, oldest entries
+// are dropped. ~64 KiB comfortably holds a handler's worth of lines;
+// anything chattier should be read from container stdout / the
+// operator's log pipeline, where nothing is dropped.
+const maxRunLogBytes = 64 * 1024
+
+// logAppend records a run-scoped log line into the bounded buffer.
+// Flushed to Airlock on Complete; persisted there only for failed runs.
+// Reached from Agent.Logger's capture core and from the JS log()/console
+// bindings.
 func (r *run) logAppend(level LogLevel, msg string) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.logs = append(r.logs, LogEntry{Level: level, Message: msg})
-	r.mu.Unlock()
+	r.logsBytes += len(msg)
+	for r.logsBytes > maxRunLogBytes && len(r.logs) > 1 {
+		r.logsBytes -= len(r.logs[0].Message)
+		r.logs = r.logs[1:]
+	}
+}
+
+// runLogger lazily builds the per-run *zap.Logger: the shared stdout
+// core tagged with run_id/agent_id, teed into a runLogCore that
+// captures entries into r.logs. Built once per run; safe for
+// concurrent handler goroutines.
+func (r *run) runLogger() *zap.Logger {
+	r.loggerOnce.Do(func() {
+		base := agentLogger().Core()
+		tagged := base.With([]zapcore.Field{
+			zap.String("run_id", r.id),
+			zap.String("agent_id", r.agent.agentID),
+		})
+		capture := &runLogCore{LevelEnabler: base, run: r}
+		r.logger = zap.New(zapcore.NewTee(tagged, capture))
+	})
+	return r.logger
 }
 
 // --- VM-only Airlock calls (only reachable from run_js JS bindings) ---

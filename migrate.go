@@ -3,13 +3,13 @@ package agentsdk
 import (
 	"context"
 	"database/sql"
-	"log"
 	"os"
 	"regexp"
 	"strconv"
 
 	_ "github.com/lib/pq"
 	"github.com/pressly/goose/v3"
+	"go.uber.org/zap"
 )
 
 const migrationsPath = "/migrations"
@@ -60,11 +60,11 @@ func (a *Agent) autoMigrate() {
 		// In validate or down-to mode we always exit — the agent shouldn't
 		// continue to Serve() during these one-shot orchestrator invocations.
 		if IsValidatingMigrations() {
-			log.Println("agentsdk: no migrations to validate")
+			agentLogger().Info("no migrations to validate")
 			os.Exit(0)
 		}
 		if os.Getenv("AGENT_MIGRATE_DOWN_TO") != "" {
-			log.Println("agentsdk: no migrations to down-to")
+			agentLogger().Info("no migrations to down-to")
 			os.Exit(0)
 		}
 		return
@@ -82,7 +82,7 @@ func (a *Agent) autoMigrate() {
 
 	ctx := context.WithValue(context.Background(), agentCtxKey{}, a)
 	if IsValidatingMigrations() {
-		log.Println("agentsdk: validating migrations (up → down → up)")
+		agentLogger().Info("validating migrations (up → down → up)")
 		if err := goose.UpContext(ctx, db, migrationsPath); err != nil {
 			panic("agentsdk: validate up: " + err.Error())
 		}
@@ -92,7 +92,7 @@ func (a *Agent) autoMigrate() {
 		if err := goose.UpContext(ctx, db, migrationsPath); err != nil {
 			panic("agentsdk: validate re-up: " + err.Error())
 		}
-		log.Println("agentsdk: migrations validated successfully")
+		agentLogger().Info("migrations validated successfully")
 		os.Exit(0)
 	}
 
@@ -106,18 +106,18 @@ func (a *Agent) autoMigrate() {
 		if err != nil {
 			panic("agentsdk: invalid AGENT_MIGRATE_DOWN_TO: " + err.Error())
 		}
-		log.Printf("agentsdk: migrating down to version %d", v)
+		agentLogger().Info("migrating down", zap.Int64("to_version", v))
 		if err := goose.DownToContext(ctx, db, migrationsPath, v); err != nil {
 			panic("agentsdk: down-to: " + err.Error())
 		}
-		log.Printf("agentsdk: migrated down to version %d", v)
+		agentLogger().Info("migrated down", zap.Int64("to_version", v))
 		os.Exit(0)
 	}
 
 	if err := goose.UpContext(ctx, db, migrationsPath); err != nil {
 		panic("agentsdk: run migrations: " + err.Error())
 	}
-	log.Println("agentsdk: migrations applied")
+	agentLogger().Info("migrations applied")
 }
 
 // migrationFilePattern matches goose migration files: numeric prefix + name + .sql/.go.

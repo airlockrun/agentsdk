@@ -1024,7 +1024,7 @@ directory's `Read` cap at fetch time:
 ## Agent methods (ctx-first)
 
 Every handler — Tool, Webhook, Cron, Route — receives `context.Context` first.
-Pass it through. Model calls and `agent.Log` are tracked in the Runs UI for the
+Pass it through. Model calls and logging are tracked in the Runs UI for the
 invoking handler; you never construct a Run yourself.
 
 ```go
@@ -1035,10 +1035,16 @@ agent.SpeechModel(ctx, slug, agentsdk.ModelOpts{})         // TTS
 agent.TranscriptionModel(ctx, slug, agentsdk.ModelOpts{})  // STT
 agent.EmbeddingModel(ctx, slug, agentsdk.ModelOpts{})
 
-// Logging — appended to the current run, falls through to process log if no run.
-agent.Log(ctx, agentsdk.LogLevelInfo, "imported 42 rows")
-agent.Logf(ctx, agentsdk.LogLevelWarn, "skipping row %d", i)
-// Levels: LogLevelInfo, LogLevelWarn, LogLevelError
+// Logging — agent.Logger(ctx) returns a *zap.Logger. Bind it once at
+// handler entry; the ctx is consumed there to resolve the run. Lines go
+// to container stdout as structured JSON (run_id/agent_id tagged) and,
+// for failed runs, are kept by Airlock as the diagnostics snapshot the
+// "Fix this error" builder reads. Use zap field constructors for
+// structured context.
+log := agent.Logger(ctx)
+log.Info("imported rows", zap.Int("count", 42))
+log.Warn("skipping row", zap.Int("row", i), zap.Error(err))
+// Levels: Debug, Info, Warn, Error. import "go.uber.org/zap"
 
 // Storage — see RegisterDirectory section. Trusted; no CheckFileAccess.
 agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir / DeleteFile / CopyFile

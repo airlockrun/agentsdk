@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/airlockrun/sol/bus"
 	"github.com/airlockrun/sol/session"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 const maxToolSteps = 50
@@ -96,7 +96,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			if rec := recover(); rec != nil {
 				trace := string(debug.Stack())
 				errMsg := fmt.Sprintf("%v", rec)
-				log.Printf("agentsdk: prompt panic: %s\n%s", errMsg, trace)
+				agentLogger().Error("prompt panic", zap.String("error", errMsg), zap.String("stack", trace))
 				ew.WriteError(fmt.Errorf("%s", errMsg))
 				run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
 				return
