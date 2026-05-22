@@ -9,6 +9,7 @@ import (
 	"time"
 
 	goai "github.com/airlockrun/goai"
+	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/provider/proxy"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
@@ -224,6 +225,20 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 						// conversation keeps a resumable suspension and
 						// the next approval chains — instead of running
 						// to success with the gate only narrated.
+						//
+						// This path never runs the Sol runner, so nothing
+						// else records the human's resume message. Persist
+						// it here (skipping the synthetic "Rejected by
+						// user." nudge, which arrives as source="control")
+						// — otherwise the resume run stores zero messages
+						// and the user's reply is silently dropped from the
+						// conversation thread.
+						if prompt != "" && input.Source != "control" {
+							ew.writeLine(ndjsonLine{
+								Type: "messages",
+								Data: []message.Message{message.NewUserMessage(prompt)},
+							})
+						}
 						emitSuspensionEvent(ew, reSusp)
 						ckpt, _ := json.Marshal(map[string]any{
 							"messages":          checkpoint.Messages,
