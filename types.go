@@ -74,14 +74,19 @@ type Route struct {
 // agent.RegisterConnection — an outgoing service Airlock proxies for the agent
 // with credentials it manages.
 type Connection struct {
-	Slug              string // unique per agent; binds as conn_{slug} in run_js
-	Name              string
-	Description       string
-	BaseURL           string
-	AuthMode          ConnectionAuth
-	AuthURL           string
-	TokenURL          string
-	Scopes            []string
+	Slug        string // unique per agent; binds as conn_{slug} in run_js
+	Name        string
+	Description string
+	BaseURL     string
+	AuthMode    ConnectionAuth
+	AuthURL     string
+	TokenURL    string
+	Scopes      []string
+	// AuthParams are extra query parameters added to the OAuth
+	// authorization request, overriding the platform defaults per key.
+	// Optional escape hatch for providers whose refresh-token handshake
+	// differs from the default.
+	AuthParams        map[string]string
 	AuthInjection     AuthInjection
 	SetupInstructions string
 	LLMHint           string // appended to the connection block in the system prompt
@@ -91,17 +96,18 @@ type Connection struct {
 // ConnectionDef is the wire format used by PUT /api/agent/connections/{slug}.
 // Slug is sent in the URL, not the body.
 type ConnectionDef struct {
-	Name              string         `json:"name"`
-	Description       string         `json:"description"`
-	BaseURL           string         `json:"baseUrl,omitempty"`
-	AuthMode          ConnectionAuth `json:"authMode"`
-	AuthURL           string         `json:"authUrl,omitempty"`
-	TokenURL          string         `json:"tokenUrl,omitempty"`
-	Scopes            []string       `json:"scopes,omitempty"`
-	AuthInjection     AuthInjection  `json:"authInjection"`
-	SetupInstructions string         `json:"setupInstructions,omitempty"`
-	LLMHint           string         `json:"llmHint,omitempty"`
-	Access            Access         `json:"access,omitempty"`
+	Name              string            `json:"name"`
+	Description       string            `json:"description"`
+	BaseURL           string            `json:"baseUrl,omitempty"`
+	AuthMode          ConnectionAuth    `json:"authMode"`
+	AuthURL           string            `json:"authUrl,omitempty"`
+	TokenURL          string            `json:"tokenUrl,omitempty"`
+	Scopes            []string          `json:"scopes,omitempty"`
+	AuthParams        map[string]string `json:"authParams,omitempty"`
+	AuthInjection     AuthInjection     `json:"authInjection"`
+	SetupInstructions string            `json:"setupInstructions,omitempty"`
+	LLMHint           string            `json:"llmHint,omitempty"`
+	Access            Access            `json:"access,omitempty"`
 }
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
