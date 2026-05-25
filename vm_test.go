@@ -232,10 +232,10 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("printToUser calls backend", func(t *testing.T) {
+	t.Run("output calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
 		run := newRun(a, "run-1", "", "conv-1", context.Background())
-		_, err := executeJS(run.vmRuntime(), `printToUser({type: "text", text: "hello"})`)
+		_, err := executeJS(run.vmRuntime(), `output({type: "image", source: "img.png"})`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -245,16 +245,31 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("printToUser accepts array", func(t *testing.T) {
+	t.Run("output accepts array of media", func(t *testing.T) {
 		a, mock := testAgent(t)
 		run := newRun(a, "run-1", "", "conv-1", context.Background())
-		_, err := executeJS(run.vmRuntime(), `printToUser([{type: "text", text: "hi"}, {type: "image", source: "img.png"}])`)
+		_, err := executeJS(run.vmRuntime(), `output([{type: "file", source: "a.pdf"}, {type: "image", source: "img.png"}])`)
 		if err != nil {
 			t.Fatal(err)
 		}
 		reqs := mock.RequestsByPath("/api/agent/print")
 		if len(reqs) != 1 {
 			t.Fatalf("expected 1 print request, got %d", len(reqs))
+		}
+	})
+
+	t.Run("output rejects text", func(t *testing.T) {
+		a, mock := testAgent(t)
+		run := newRun(a, "run-1", "", "conv-1", context.Background())
+		_, err := executeJS(run.vmRuntime(), `output({type: "text", text: "hello"})`)
+		if err == nil {
+			t.Fatal("expected error for type=text, got nil")
+		}
+		if !strings.Contains(err.Error(), "media-only") {
+			t.Fatalf("error %q should mention media-only", err.Error())
+		}
+		if reqs := mock.RequestsByPath("/api/agent/print"); len(reqs) != 0 {
+			t.Fatalf("expected no print requests for rejected text, got %d", len(reqs))
 		}
 	})
 

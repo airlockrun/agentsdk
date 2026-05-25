@@ -16,7 +16,7 @@ import (
 
 // mediaResult is the JS-facing return value for generateImage / speak.
 // Path is the absolute storage path the LLM uses for downstream
-// printToUser / attachToContext / readBytes calls.
+// output / attachToContext / readBytes calls.
 type mediaResult struct {
 	Path     string `json:"path"`
 	MimeType string `json:"mimeType"`
@@ -101,7 +101,7 @@ func (r *run) analyzeImage(ctx context.Context, path, question string) (string, 
 
 // generateImage runs the prompt through the system-default image model and
 // writes the first generated image to agent storage at `saveAs` (auto-named
-// when empty). Returns the path + metadata for downstream printToUser /
+// when empty). Returns the path + metadata for downstream output /
 // attachToContext calls.
 func (r *run) generateImage(ctx context.Context, prompt, saveAs string, opts model.ImageCallOptions) (*mediaResult, error) {
 	m := r.agent.ImageModel(ctx, "", ModelOpts{Capability: CapImage})

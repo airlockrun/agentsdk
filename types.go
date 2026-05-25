@@ -87,6 +87,12 @@ type Connection struct {
 	// Optional escape hatch for providers whose refresh-token handshake
 	// differs from the default.
 	AuthParams        map[string]string
+	// Headers are static request headers Airlock sets on every proxied
+	// call for this connection (User-Agent, Accept, X-Foo, …). Merged
+	// per-key on top of the platform baseline (a real-browser UA); the
+	// caller's per-call ProxyRequest.Headers merge on top in turn. Set a
+	// value to the empty string to drop a baseline key entirely.
+	Headers           map[string]string
 	AuthInjection     AuthInjection
 	SetupInstructions string
 	LLMHint           string // appended to the connection block in the system prompt
@@ -104,6 +110,7 @@ type ConnectionDef struct {
 	TokenURL          string            `json:"tokenUrl,omitempty"`
 	Scopes            []string          `json:"scopes,omitempty"`
 	AuthParams        map[string]string `json:"authParams,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
 	AuthInjection     AuthInjection     `json:"authInjection"`
 	SetupInstructions string            `json:"setupInstructions,omitempty"`
 	LLMHint           string            `json:"llmHint,omitempty"`
@@ -373,10 +380,12 @@ type TopicDef struct {
 	Access      Access `json:"access"`
 }
 
-// --- Display parts (printToUser / topic publish) ---
+// --- Display parts (output / topic publish) ---
 
 // DisplayPart is a single piece of rich content for user-facing output.
-// Used by both printToUser (VM) and TopicHandle.Publish (Go).
+// The `output` JS binding accepts media-only parts
+// (image/file/audio/video); TopicHandle.Publish accepts text too,
+// since Go builder code has no separate prose channel to use instead.
 type DisplayPart struct {
 	Type     string  `json:"type"`             // "text", "image", "file", "audio", "video"
 	Text     string  `json:"text,omitempty"`   // body text, or caption for media types
@@ -875,10 +884,17 @@ type HTTPResponse struct {
 }
 
 // ProxyRequest is the body for POST /api/agent/proxy/{slug}.
+//
+// Headers are per-call request headers, merged per-key on top of the
+// connection's declared Headers (which themselves sit on top of the
+// platform baseline). Set a value to the empty string to suppress a key
+// set by a lower layer. omitempty: a call that doesn't need custom
+// headers can simply omit the field.
 type ProxyRequest struct {
-	Method string `json:"method"`
-	Path   string `json:"path"`
-	Body   string `json:"body,omitempty"`
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
+	Body    string            `json:"body,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // ShareFileRequest is the body for POST /api/agent/storage/share.

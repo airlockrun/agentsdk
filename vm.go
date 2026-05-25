@@ -49,7 +49,7 @@ func fileInfoToJS(vm *goja.Runtime, info FileInfo) goja.Value {
 
 // mediaResultToJS shapes a *mediaResult as the JS-facing
 // { file: FileInfo, mimeType, size } structure. The path inside the file
-// object is what the LLM passes to readBytes / printToUser / attachToContext.
+// object is what the LLM passes to readBytes / output / attachToContext.
 func mediaResultToJS(vm *goja.Runtime, res *mediaResult) goja.Value {
 	file := vm.NewObject()
 	file.Set("path", res.Path)
@@ -156,16 +156,10 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) {
 				body = call.Arguments[2].String()
 			}
-			result, err := handle.Request(run.ctx, method, path, body)
+			headers := headersFromJSArg(call.Argument(3))
+			result, err := handle.RequestWithHeaders(run.ctx, method, path, body, headers)
 			if err != nil {
-				if ae, ok := IsAuthRequired(err); ok {
-					errObj := vm.NewObject()
-					errObj.Set("authRequired", true)
-					errObj.Set("slug", ae.Slug)
-					errObj.Set("connName", ae.ConnName)
-					panic(vm.ToValue(errObj))
-				}
-				panic(vm.NewGoError(err))
+				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
 			return vm.ToValue(string(result))
 		})
@@ -177,27 +171,31 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) {
 				body = call.Arguments[2].Export()
 			}
-			raw, err := handle.Request(run.ctx, method, path, body)
+			headers := headersFromJSArg(call.Argument(3))
+			raw, err := handle.RequestWithHeaders(run.ctx, method, path, body, headers)
 			if err != nil {
-				if ae, ok := IsAuthRequired(err); ok {
-					errObj := vm.NewObject()
-					errObj.Set("authRequired", true)
-					errObj.Set("slug", ae.Slug)
-					errObj.Set("connName", ae.ConnName)
-					panic(vm.ToValue(errObj))
-				}
-				panic(vm.NewGoError(err))
+				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			var result any
-			if len(raw) > 0 {
-				if err := json.Unmarshal(raw, &result); err != nil {
-					panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
-				}
+			if len(raw) == 0 {
+				return goja.Null()
 			}
-			return vm.ToValue(result)
+			// Round-trip through the runtime's own JSON.parse so the
+			// resulting value is a native JS object (not a Go-reflected
+			// map). Native objects stringify cleanly via JSON.stringify
+			// and behave like real objects under Object.keys / spread /
+			// in checks; Go-reflected wrappers don't, and toString them
+			// as "[object Object]".
+			parseFn, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+			if !ok {
+				panic(vm.NewGoError(fmt.Errorf("requestJSON: JSON.parse not available")))
+			}
+			val, err := parseFn(goja.Undefined(), vm.ToValue(string(raw)))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
+			}
+			return val
 		})
 
-		_ = connSlug // used for future error messages if needed
 		vm.Set("conn_"+slug, obj)
 	}
 
@@ -459,7 +457,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		// stored file. opts: { expiresInMinutes? } — server defaults to 1h
 		// and caps at 24h. For embedding files in markdown links or sharing
 		// outside the agent's auth boundary. To show a file in chat, prefer
-		// printToUser({type:"file", source:path}) instead.
+		// output({type:"file", source:path}) instead.
 		vm.Set("shareFileURL", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
@@ -487,11 +485,21 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 	}
 
-	// printToUser(parts) — send rich content to the user's conversation.
-	// Accepts a single DisplayPart object or an array of DisplayPart objects.
-	vm.Set("printToUser", func(call goja.FunctionCall) goja.Value {
+	// output(parts) — share media with the user / channel / calling
+	// sibling. Accepts a single DisplayPart object or an array. Type
+	// must be image/file/audio/video; prose goes in the LLM's normal
+	// reply. Captions live on the media part's `text` field.
+	vm.Set("output", func(call goja.FunctionCall) goja.Value {
 		parts := parseDisplayParts(vm, call.Argument(0))
-		if err := run.printToUser(run.ctx, parts, ""); err != nil {
+		for i, p := range parts {
+			if p.Type == "text" {
+				panic(vm.NewGoError(fmt.Errorf("output: part %d is type=\"text\"; output is media-only — put prose in your normal reply, or set the `text` field on an image/file/audio/video part to use it as a caption", i)))
+			}
+			if p.Type != "image" && p.Type != "file" && p.Type != "audio" && p.Type != "video" {
+				panic(vm.NewGoError(fmt.Errorf("output: part %d has unsupported type %q; expected image, file, audio, or video", i, p.Type)))
+			}
+		}
+		if err := run.output(run.ctx, parts, ""); err != nil {
 			panic(vm.NewGoError(err))
 		}
 		return goja.Undefined()
@@ -1245,6 +1253,48 @@ func formatJSValue(vm *goja.Runtime, v goja.Value) string {
 	return v.String()
 }
 
+// headersFromJSArg coerces an optional `headers` argument from a JS-side
+// conn.request*/ call into the map[string]string the proxy expects. An
+// undefined / null / missing arg returns nil — the SDK and proxy both
+// treat that as "no per-call overrides". Non-string values are
+// stringified via goja's default coercion so the caller doesn't have to
+// remember to quote everything.
+func headersFromJSArg(v goja.Value) map[string]string {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return nil
+	}
+	raw, ok := v.Export().(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, val := range raw {
+		if val == nil {
+			out[k] = ""
+			continue
+		}
+		out[k] = fmt.Sprint(val)
+	}
+	return out
+}
+
+// connectionErrorForJS rewrites a ConnectionHandle.Request error into the
+// shape we want surfaced as a JS throw. AuthRequiredError gets a stable,
+// LLM-actionable message (no OAuth URL — that belongs in the UI, not the
+// LLM's reply); everything else passes through. Going through NewGoError at
+// the call site means goja's *Exception.Unwrap returns this error directly,
+// so jsErrorMessage renders its message instead of `[object Object]`.
+func connectionErrorForJS(slug string, err error) error {
+	if ae, ok := IsAuthRequired(err); ok {
+		name := ae.ConnName
+		if name == "" {
+			name = slug
+		}
+		return fmt.Errorf("connection %q needs authorization — ask the user to open the agent's Connections tab and set it up", name)
+	}
+	return err
+}
+
 // jsRunError carries the agent/UI-facing message for a run_js failure while
 // keeping the original goja error reachable via Unwrap, so errors.Is checks
 // (context.Canceled, errJSCPU) still work downstream.
@@ -1288,8 +1338,57 @@ func jsErrorMessage(err error) (msg string, native bool) {
 			return u.Error(), true
 		}
 		if v := ex.Value(); v != nil { // plain JS throw
-			return v.String(), false
+			return renderJSThrownValue(nil, v), false
 		}
 	}
 	return err.Error(), false // compiler/syntax error and the like
+}
+
+// renderJSThrownValue turns a JS-thrown value into a string useful to the
+// LLM. The hazard is plain `throw {something}` — the default `.String()` on
+// a JS object is "[object Object]", which is worse than useless. We prefer
+// (in order): an Error's stringification, a `.message` property, a
+// JSON.stringify of the object, and only as a last resort `.String()`.
+// vm may be nil — JSON.stringify fallback is skipped in that case (an
+// *Exception doesn't carry its runtime, so callers off the hot path pass
+// nil; the binding-site panics that we control all go through NewGoError
+// and never reach this branch).
+func renderJSThrownValue(vm *goja.Runtime, v goja.Value) string {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return "undefined"
+	}
+	obj, ok := v.(*goja.Object)
+	if !ok {
+		return v.String()
+	}
+	// Errors and any other value whose ClassName is "Error" stringify
+	// cleanly via the default toString (e.g. "TypeError: ...").
+	if obj.ClassName() == "Error" {
+		return v.String()
+	}
+	// Honour a .message property if it's a non-empty string — that's the
+	// convention for "throw {message, ...}" style.
+	if msg := obj.Get("message"); msg != nil && !goja.IsUndefined(msg) && !goja.IsNull(msg) {
+		if s := msg.String(); s != "" && s != "[object Object]" {
+			return s
+		}
+	}
+	// Otherwise dump the whole object as JSON so the LLM can read the
+	// fields. This is also what `console.log({...})` would have shown.
+	if vm != nil {
+		if stringify, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("stringify")); ok {
+			if result, err := stringify(goja.Undefined(), obj); err == nil && result != nil && !goja.IsUndefined(result) && !goja.IsNull(result) {
+				if s := result.String(); s != "" && s != "undefined" {
+					return s
+				}
+			}
+		}
+	}
+	// Final fallback. Defensive: never leak "[object Object]" — at least
+	// say what the value's class was.
+	s := v.String()
+	if s == "[object Object]" {
+		return "<unserializable " + obj.ClassName() + " thrown>"
+	}
+	return s
 }

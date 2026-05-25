@@ -24,6 +24,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			TokenURL:          c.TokenURL,
 			Scopes:            c.Scopes,
 			AuthParams:        c.AuthParams,
+			Headers:           c.Headers,
 			AuthInjection:     c.AuthInjection,
 			SetupInstructions: c.SetupInstructions,
 			LLMHint:           c.LLMHint,

@@ -76,7 +76,7 @@ func NewMockAirlock() (*MockAirlock, string) {
 		})
 	})
 
-	// Print endpoint (printToUser / topic publish).
+	// Print endpoint (output / topic publish).
 	mux.HandleFunc("POST /api/agent/print", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.WriteHeader(http.StatusNoContent)

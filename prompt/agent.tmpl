@@ -127,13 +127,13 @@ var csv = readFile("uploads/orders.csv")
 writeFile("tmp/q1.csv", csvData, "text/csv")
 listDir("uploads/")           // [{path, filename, contentType, size, lastModified}]
 {{ end }}
-// Send rich content to the user (text, images, files, audio, video).
-// `source` is a storage path string.
-printToUser({ type: "text", text: "Task completed" })
-printToUser({ type: "image", source: "tmp/charts/revenue.png", text: "Q1 revenue" })
-printToUser([
-  { type: "text", text: "Here's your report:" },
-  { type: "file", source: "tmp/q1.pdf", filename: "Q1 Report.pdf" },
+// Share media with the user / channel / calling sibling. MEDIA ONLY —
+// types are `image`, `file`, `audio`, `video`. Prose goes in your normal
+// reply (which already reaches every channel). The `text` field on a
+// media part is its caption. `source` is a storage path string.
+output({ type: "image", source: "tmp/charts/revenue.png", text: "Q1 revenue" })
+output([
+  { type: "file", source: "tmp/q1.pdf", filename: "Q1 Report.pdf", text: "Q1 report" },
   { type: "image", data: pngBytes, mimeType: "image/png", text: "Generated chart" }
 ])
 ```
@@ -167,7 +167,7 @@ analyzeImage("tmp/a1b2c3d4-screenshot.png", "What error is shown?")
 
 Storage paths are not URLs and the user has no direct access to them — telling the user "the file is at reports/q1.pdf" is meaningless. To actually deliver a file, pick one of:
 
-1. **`printToUser({type:"file", source:"path"})`** — embeds the file inline in the chat as a downloadable attachment. Default choice for "here's the result, take a look." Works for any file type; `type:"image"` renders inline previews.
+1. **`output({type:"file", source:"path"})`** — embeds the file inline in the chat as a downloadable attachment. Default choice for "here's the result, take a look." Works for any file type; `type:"image"` renders inline previews.
 {{- if not .CallerAccess.IsPublic }}
 2. **The agent's authenticated storage URL** — every directory with non-internal Read access is reachable at `{{ .AgentRouteURL }}/__air/storage/{path}` (e.g. `reports/q1.pdf` → `{{ .AgentRouteURL }}/__air/storage/reports/q1.pdf`). Requires the user to be a member (browser redirects through login if no session cookie). Use this when you want to give the user a clickable link they can bookmark or share within the team — it stays valid as long as the file exists.
 
@@ -175,15 +175,15 @@ Storage paths are not URLs and the user has no direct access to them — telling
 {{- end }}
 ```javascript
 // Pick option 1 for "here it is" in chat
-printToUser({ type: "file", source: "reports/q1.pdf", filename: "Q1 Report.pdf" })
+output({ type: "file", source: "reports/q1.pdf", filename: "Q1 Report.pdf" })
 {{- if not .CallerAccess.IsPublic }}
 
-// Pick option 2 for a stable, member-only link
-printToUser({ type: "text", text: "View: {{ .AgentRouteURL }}/__air/storage/reports/q1.pdf" })
+// Pick option 2 for a stable, member-only link — paste it into your normal reply text
+"View: {{ .AgentRouteURL }}/__air/storage/reports/q1.pdf"
 
-// Pick option 3 for an external one-off share
+// Pick option 3 for an external one-off share — embed the URL in your normal reply
 var link = shareFileURL("reports/q1.pdf", { expiresInMinutes: 60 })
-printToUser({ type: "text", text: "Download (expires in 1h): " + link.url })
+"Download (expires in 1h): " + link.url
 {{- end }}
 ```
 
@@ -196,9 +196,19 @@ printToUser({ type: "text", text: "Download (expires in 1h): " + link.url })
 - **The `run_js` tool description (sent each turn) is the authoritative list of available bindings.** If a binding isn't in the description, it isn't available — calling it will error. Don't speculate about hidden capabilities.
 {{- if .Tools }}
 
-## Registered tools
+## Custom JavaScript functions (call these inside `run_js`)
 
-The agent developer has registered these typed tools. Call them inside `run_js` by name, with a single object argument matching the declared input type. Return values are native JavaScript objects matching the declared output type.
+The agent developer has added the functions below to your `run_js` environment. **They are JavaScript globals available only inside `run_js` code** — they are NOT separate tools you can invoke via the tool-call protocol. Trying to call `{{ (index .Tools 0).Name }}` as a top-level tool will fail with `tool not found: {{ (index .Tools 0).Name }}`; the only top-level tool you have is `run_js`{{ if .Siblings }} (and `promptAgent` for sibling delegation){{ end }}.
+
+Call them by name inside `run_js` with a single object argument matching the declared input type. Return values are native JavaScript objects matching the declared output type.
+
+```javascript
+// Correct: invoke inside run_js
+var result = {{ (index .Tools 0).Name }}({ /* args matching the InputSchema */ });
+result
+```
+
+The `declare function` blocks below are TypeScript declarations describing the available globals — read them as type info, not as a separate tool-call surface.
 
 ```typescript
 // FilePath / DirPath are string aliases for storage paths owned by this
@@ -229,8 +239,8 @@ If a connection call throws `{authRequired: true, slug, connName}`, the user has
 Use `topic_{slug}.subscribe()` to subscribe the current conversation to a topic, and `topic_{slug}.unsubscribe()` to unsubscribe:
 {{ range .Topics }}- `topic_{{ .Slug }}` — {{ .Description }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{ end }}
-Use `printToUser(parts)` to send rich content directly to the current conversation.
-Parts format: single object or array of `{type, text, source, url, data, filename, mimeType, alt, duration}`.
+Use `output(parts)` to share media (image/file/audio/video) directly with the current conversation; prose goes in your normal reply.
+Parts format: single object or array of `{type, text, source, url, data, filename, mimeType, alt, duration}`. `text` on a media part is the caption.
 {{- end }}
 {{- if .Webhooks }}
 

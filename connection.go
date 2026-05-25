@@ -30,13 +30,25 @@ type ConnectionHandle struct {
 // to json.Unmarshal must guard `len(raw) > 0` first — otherwise stdlib
 // returns "unexpected end of JSON input". Use the generic
 // RequestJSON helper to skip that boilerplate.
+//
+// For per-call request headers (User-Agent override, conditional
+// fetches, etc.) use RequestWithHeaders.
 func (h *ConnectionHandle) Request(ctx context.Context, method, path string, body any) ([]byte, error) {
+	return h.RequestWithHeaders(ctx, method, path, body, nil)
+}
+
+// RequestWithHeaders is Request plus per-call request headers. Headers
+// merge per-key on top of (a) the platform baseline (real-browser
+// User-Agent) and (b) the connection's declared Headers; set a value
+// to the empty string to suppress a key set by a lower layer. A nil
+// or empty map behaves exactly like Request.
+func (h *ConnectionHandle) RequestWithHeaders(ctx context.Context, method, path string, body any, headers map[string]string) ([]byte, error) {
 	bodyBytes, err := encodeProxyBody(body)
 	if err != nil {
 		return nil, fmt.Errorf("agentsdk: encode proxy body: %w", err)
 	}
 
-	reqBody := ProxyRequest{Method: method, Path: path, Body: string(bodyBytes)}
+	reqBody := ProxyRequest{Method: method, Path: path, Body: string(bodyBytes), Headers: headers}
 	b, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err
@@ -79,8 +91,14 @@ func (h *ConnectionHandle) Request(ctx context.Context, method, path string, bod
 //	var state PlaybackState
 //	state, err := agentsdk.RequestJSON[PlaybackState](ctx, conn, "GET", "/v1/me/player", nil)
 func RequestJSON[T any](ctx context.Context, h *ConnectionHandle, method, path string, body any) (T, error) {
+	return RequestJSONWithHeaders[T](ctx, h, method, path, body, nil)
+}
+
+// RequestJSONWithHeaders is RequestJSON with the same per-call header
+// merge semantics as ConnectionHandle.RequestWithHeaders.
+func RequestJSONWithHeaders[T any](ctx context.Context, h *ConnectionHandle, method, path string, body any, headers map[string]string) (T, error) {
 	var zero T
-	raw, err := h.Request(ctx, method, path, body)
+	raw, err := h.RequestWithHeaders(ctx, method, path, body, headers)
 	if err != nil {
 		return zero, err
 	}

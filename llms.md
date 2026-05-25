@@ -373,9 +373,9 @@ the LLM tells platform primitives from agent-declared tools.
   defined string types, not aliases, so the conversion is explicit.
 - Binary data: write to storage with `agent.WriteFile`, return the path
   as `FilePath` (auto-copies). `FileInfo` is also fine when the LLM needs
-  filename/size/contentType metadata, but its `Path` field is plain
-  `string` and won't trigger A2A copy — pair it with a `FilePath` field
-  if both matter. Never base64 strings.
+  filename/size/contentType metadata — its `Path` field is already
+  `FilePath`, so returning it (or embedding it in an output struct)
+  triggers the same A2A auto-copy. Never base64 strings.
 
 **Error handling:** return `error` from `Execute` — converted to a JS `throw`
 inside `run_js`. Don't panic.
@@ -667,7 +667,7 @@ Subprocess CLI example — an `s3_list` tool that wraps `aws s3 ls`:
 ```go
 agent.RegisterTool(&agentsdk.Tool[S3ListIn, S3ListOut]{
     Name: "s3_list",
-    Run: func(ctx context.Context, in S3ListIn) (S3ListOut, error) {
+    Execute: func(ctx context.Context, in S3ListIn) (S3ListOut, error) {
         // Pattern is declared on every credential here, so Get's error
         // doubles as the "not configured" check — no separate empty-string
         // guard needed. Surface the slug so the operator knows what to set.
@@ -915,7 +915,7 @@ agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
         if err != nil {
             return CropOut{}, err
         }
-        return CropOut{Result: agentsdk.FilePath(info.Path)}, nil
+        return CropOut{Result: info.Path}, nil
     },
 })
 ```
@@ -985,7 +985,7 @@ Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
     if err != nil {
         return TranscodeOut{}, err
     }
-    return TranscodeOut{Result: agentsdk.FilePath(info.Path)}, nil
+    return TranscodeOut{Result: info.Path}, nil
 },
 ```
 
@@ -1374,7 +1374,7 @@ func main() {
     agent.RegisterCron(&agentsdk.Cron{
         Name:     "bun-refresh",
         Schedule: "0 3 * * 0",
-        Handler: func(ctx context.Context) error {
+        Handler: func(ctx context.Context, _ *agentsdk.EventWriter) error {
             if err := exec.CommandContext(ctx, "/var/agent/bin/bun", "upgrade").Run(); err != nil {
                 return err
             }
@@ -1482,16 +1482,17 @@ func Up00002(ctx context.Context, db *sql.DB) error {
         return nil
     }
     agent := agentsdk.AgentFromMigrationContext(ctx)
-    files, err := agent.ListDir(ctx, "/old/", agentsdk.ListOpts{Recursive: true})
+    files, err := agent.ListDir(ctx, "old/", agentsdk.ListOpts{Recursive: true})
     if err != nil {
         return err
     }
     for _, f := range files {
-        dst := "/media/" + path.Base(f.Path)
-        if err := agent.CopyFile(ctx, f.Path, dst); err != nil {
+        src := string(f.Path)
+        dst := "media/" + path.Base(src)
+        if err := agent.CopyFile(ctx, src, dst); err != nil {
             return err
         }
-        if err := agent.DeleteFile(ctx, f.Path); err != nil {
+        if err := agent.DeleteFile(ctx, src); err != nil {
             return err
         }
     }

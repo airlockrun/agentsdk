@@ -445,7 +445,7 @@ func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
 // Use cases: embedding in markdown ([file](url)), sharing externally,
 // cases where the agent's authenticated /__air/storage subdomain route
 // isn't reachable for the recipient. For showing files in chat, prefer
-// printToUser({type:"file", source:path}).
+// output({type:"file", source:path}).
 func (a *Agent) ShareFileURL(ctx context.Context, path string, ttl time.Duration) (*ShareFileResponse, error) {
 	canon, err := normalizePath(path)
 	if err != nil {

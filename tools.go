@@ -407,8 +407,8 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 
 	// Built-in bindings.
 	b.WriteString("\nBuilt-in bindings:\n")
-	b.WriteString("- conn_{slug}.request(method, path, body?) → string — raw HTTP via connection\n")
-	b.WriteString("- conn_{slug}.requestJSON(method, path, body?) → object — JSON HTTP via connection\n")
+	b.WriteString("- conn_{slug}.request(method, path, body?, headers?) → string — raw HTTP via connection. `headers` is an optional {Name:value} object merged on top of the connection's declared headers; set a value to \"\" to suppress one.\n")
+	b.WriteString("- conn_{slug}.requestJSON(method, path, body?, headers?) → object — JSON HTTP via connection. Same `headers` semantics as request().\n")
 	b.WriteString("- mcp_{slug}.<tool_name>(args?) — call MCP tool. The per-tool typed methods are declared in the run-env prompt; one method per tool the server advertised at sync time.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {
 		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — read-only SQL against the agent's Postgres schema.\n")
@@ -421,15 +421,15 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 	b.WriteString("- statFile(path) → FileInfo — metadata for a single file.\n")
 	b.WriteString("- fileExists(path) → boolean — sugar around statFile.\n")
 	b.WriteString("- deleteFile(path) — remove a file. Idempotent.\n")
-	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}. `source` accepts a storage path.\n")
+	b.WriteString("- output(parts) — share media with the user (web), the channel (bridge), or the calling sibling (A2A). `parts` is a single object or an array. Each part's `type` is one of `image` / `file` / `audio` / `video`. Prose goes in your normal reply, not here. Per-part fields: {type, text, source, url, data, filename, mimeType, alt, duration}. `text` on a media part is its caption. `source` accepts a storage path.\n")
 	b.WriteString("- log(message) — emit a log line visible in the run timeline.\n")
 	b.WriteString("- webSearch(query, count?) → {results: [{title, url, snippet}], synthesis?, provider}\n")
 	b.WriteString("- httpRequest(url, opts?) → {status, headers, contentType, size, body?, savedTo?, bodyPreview?, note?} — HTML is converted to markdown by default; binary and large/over-8KB responses are auto-saved to storage. `size` is always the byte length of the content (inline body, converted markdown, or the saved object) — never 0 when there is content. When a response is saved, `body` is absent: `savedTo` is the storage path (pass to readFile(...) / attachToContext(...)) and `bodyPreview` holds the first ~1KB so you can tell what it is without re-reading. `headers` is a curated subset by default (content-type, length, disposition, location, retry-after, etag, last-modified, link, rate-limit); pass {allHeaders:true} for the full set. Opts: {method, headers, body, timeout, saveAs, raw, allHeaders}; `saveAs` is a storage path with no leading slash.\n")
 	b.WriteString("- attachToContext(path) → string — load a stored file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files use readFile(path) instead.\n")
 	b.WriteString("- analyzeImage(path, question?) → string — sends a stored image to the platform's vision model and returns its reply. `question` defaults to \"Describe this image.\" Use this when the current chat model lacks vision; it routes to the configured vision_model regardless of which exec model is running.\n")
 	b.WriteString("- transcribeAudio(path, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. opts: {language?, prompt?, mimeType?}.\n")
-	b.WriteString("- generateImage(prompt, opts?) → {file: FileInfo, mimeType, size} — text-to-image; result auto-saved. Pass `file.path` to printToUser({source: file.path, ...}) or readBytes(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
-	b.WriteString("- speak(text, opts?) → {file: FileInfo, mimeType, size} — text-to-speech; result auto-saved. Pass `file.path` to printToUser({source: file.path, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
+	b.WriteString("- generateImage(prompt, opts?) → {file: FileInfo, mimeType, size} — text-to-image; result auto-saved. Pass `file.path` to output({source: file.path, ...}) or readBytes(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
+	b.WriteString("- speak(text, opts?) → {file: FileInfo, mimeType, size} — text-to-speech; result auto-saved. Pass `file.path` to output({source: file.path, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
 	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {
 		b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities. The current agent keeps running until the new build finishes; the description should specify what to add or change. The builder writes the agent's Go code to expose new tools, add routes, crons, webhooks etc. It is constrained by agent's SDK and platform limitations: it has access to DB, file system, and network, and can add container dependencies (e.g. a CLI utility), but cannot start new services (e.g. redis), or create React apps, or install DB extensions.\n")

@@ -124,10 +124,11 @@ func (r *run) runLogger() *zap.Logger {
 
 // --- VM-only Airlock calls (only reachable from run_js JS bindings) ---
 
-// printToUser sends display parts to the run's bound conversation. If topic
+// output sends display parts to the run's bound conversation. If topic
 // is empty, delivers to the conversation directly; if set, Airlock routes
-// to all subscribed conversations (topic publish).
-func (r *run) printToUser(ctx context.Context, parts []DisplayPart, topic string) error {
+// to all subscribed conversations (topic publish). Backs the `output()`
+// JS binding (media-only) and TopicHandle.Publish (Go, may include text).
+func (r *run) output(ctx context.Context, parts []DisplayPart, topic string) error {
 	for i := range parts {
 		ResolveDisplayPart(&parts[i])
 	}
