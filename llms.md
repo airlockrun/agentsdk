@@ -591,6 +591,14 @@ request:
 **`LLMHint`** is appended to the runtime system prompt. Set when the API has
 non-obvious conventions (path prefixes, special headers).
 
+**JS bindings.** Each registered connection appears in the JS VM as
+`conn_{slug}.request(method, path, body?, headers?)` and
+`conn_{slug}.requestJSON(...)`. Both return an envelope: small responses
+(≤ 8 KiB) come back inline (`body` / `data`); larger ones auto-spill to
+`tmp/conn-{slug}-{callID}.bin` with `bodyPreview` + `bodySavedTo` set
+(no `body`/`data`). See **Reading overflowed responses** under
+`RegisterExecEndpoint`.
+
 ## RegisterMCP
 
 ```go
@@ -702,8 +710,20 @@ narrower verb than "run an arbitrary command":
 ```javascript
 // JS-side (run_js); only available on admin runs by default
 exec_ci.run("kick-build", ["--branch", "main"])
-// → { stdout, stderr, exitCode, durationMs }
+// inline (both streams ≤ 8 KiB):
+//   { exitCode, durationMs, stdout: "…", stderr: "…" }
+// spilled (stdout exceeded 8 KiB):
+//   { exitCode, durationMs,
+//     stdoutPreview: "…1 KiB head…",
+//     stdoutSavedTo: "tmp/exec-ci-a3f9c2b1-stdout.bin",
+//     stdoutSize: 50000,
+//     stderr: "…",
+//     note: "stdout (50000 bytes) exceeded inline threshold; saved to … Use readFile(stdoutSavedTo) to read." }
 ```
+
+When `stdoutSavedTo` or `stderrSavedTo` is set, the corresponding
+`stdout`/`stderr` field is absent — read the full payload with
+`readFile(savedTo)`. See **Reading overflowed responses** below.
 
 **Shell features (pipes, redirection, env expansion) work** because SSH
 hands the full command line to the remote shell. Put pipes in
@@ -758,13 +778,40 @@ return nil
 ```
 
 `RunStream` is **Go-only** — there is no JS binding for it. The
-LLM-facing `exec_{slug}.run` always buffers with the 20 MiB cap. If a
-JS-driven call hits that, the LLM gets a clean error pointing at the
-typed-tool escape hatch.
+JS-facing `exec_{slug}.run` streams under the hood and auto-spills
+stdout/stderr above 8 KiB to `tmp/exec-{slug}-{callID}-stdout.bin` /
+`-stderr.bin` (both halves of a call share `callID` so they correlate).
 
 **Rule of thumb:** if the downstream code is going to call `JSON.parse`
 on the result, use `Run`. If it's going to call `agent.WriteFile`, use
 `RunStream` and skip the round-trip through agent RAM.
+
+### Reading overflowed responses
+
+`conn_{slug}.request`, `conn_{slug}.requestJSON`, `exec_{slug}.run`, and
+`httpRequest` all share the same overflow shape: any payload above 8 KiB
+is saved to a `tmp/...` storage path, with `*Preview` holding the first
+~1 KiB and `*SavedTo` holding the path. Inline and spilled keys are
+mutually exclusive — check the saved-to field and branch:
+
+```javascript
+// Connection
+const r = conn_x.request("GET", "/big")
+const body = r.bodySavedTo ? readFile(r.bodySavedTo) : r.body
+
+// Connection (JSON)
+const r = conn_x.requestJSON("GET", "/big.json")
+const data = r.bodySavedTo ? JSON.parse(readFile(r.bodySavedTo)) : r.data
+
+// Exec
+const r = exec_x.run("dump-state")
+const stdout = r.stdoutSavedTo ? readFile(r.stdoutSavedTo) : r.stdout
+```
+
+Don't re-read an older `savedTo` after a fresh call to the same binding
+— each call gets a unique `callID` so paths don't collide within a run,
+but holding onto a stale path across multiple LLM steps is a bug source
+the `note` field warns about.
 
 ## RegisterEnvVar — operator-configured environment variables
 

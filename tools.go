@@ -407,8 +407,8 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 
 	// Built-in bindings.
 	b.WriteString("\nBuilt-in bindings:\n")
-	b.WriteString("- conn_{slug}.request(method, path, body?, headers?) → string — raw HTTP via connection. `headers` is an optional {Name:value} object merged on top of the connection's declared headers; set a value to \"\" to suppress one.\n")
-	b.WriteString("- conn_{slug}.requestJSON(method, path, body?, headers?) → object — JSON HTTP via connection. Same `headers` semantics as request().\n")
+	b.WriteString("- conn_{slug}.request(method, path, body?, headers?) → {status, contentType, size, body?, bodyPreview?, bodySavedTo?, note?} — HTTP via connection. Responses ≤8KB return inline as `body`; larger ones are auto-saved to `bodySavedTo` (a storage path) with `bodyPreview` holding the first ~1KB. When `bodySavedTo` is set, `body` is absent — read the full payload with readFile(bodySavedTo). `headers` is an optional {Name:value} object merged on top of the connection's declared headers; set a value to \"\" to suppress one.\n")
+	b.WriteString("- conn_{slug}.requestJSON(method, path, body?, headers?) → {status, contentType, size, data?, bodyPreview?, bodySavedTo?, note?} — JSON HTTP via connection. Same headers semantics as request(). Responses ≤8KB are JSON.parse'd into `data`; larger ones spill to `bodySavedTo` (read back with JSON.parse(readFile(bodySavedTo))).\n")
 	b.WriteString("- mcp_{slug}.<tool_name>(args?) — call MCP tool. The per-tool typed methods are declared in the run-env prompt; one method per tool the server advertised at sync time.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {
 		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — read-only SQL against the agent's Postgres schema.\n")

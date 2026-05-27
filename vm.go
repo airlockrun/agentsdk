@@ -157,13 +157,33 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				body = call.Arguments[2].String()
 			}
 			headers := headersFromJSArg(call.Argument(3))
-			result, err := handle.Request(run.ctx, RequestOpts{
+			resp, err := handle.RequestStream(run.ctx, RequestOpts{
 				Method: method, Path: path, Body: body, Headers: headers,
 			})
 			if err != nil {
 				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			return vm.ToValue(string(result))
+			defer resp.Body.Close()
+
+			contentType := resp.Headers.Get("Content-Type")
+			dst := fmt.Sprintf("tmp/conn-%s-%s.bin", connSlug, newCallID())
+			inline, savedTo, size, err := peekAndSpill(run.ctx, run.agent, resp.Body, dst, contentType)
+			if err != nil {
+				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
+			}
+
+			out := vm.NewObject()
+			out.Set("status", resp.StatusCode)
+			out.Set("contentType", contentType)
+			out.Set("size", size)
+			if savedTo == "" {
+				out.Set("body", string(inline))
+			} else {
+				out.Set("bodyPreview", string(inline))
+				out.Set("bodySavedTo", savedTo)
+				out.Set("note", fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Use readFile(bodySavedTo) to read the full body.", size, savedTo))
+			}
+			return out
 		})
 
 		obj.Set("requestJSON", func(call goja.FunctionCall) goja.Value {
@@ -174,30 +194,51 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				body = call.Arguments[2].Export()
 			}
 			headers := headersFromJSArg(call.Argument(3))
-			raw, err := handle.Request(run.ctx, RequestOpts{
+			resp, err := handle.RequestStream(run.ctx, RequestOpts{
 				Method: method, Path: path, Body: body, Headers: headers,
 			})
 			if err != nil {
 				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			if len(raw) == 0 {
-				return goja.Null()
-			}
-			// Round-trip through the runtime's own JSON.parse so the
-			// resulting value is a native JS object (not a Go-reflected
-			// map). Native objects stringify cleanly via JSON.stringify
-			// and behave like real objects under Object.keys / spread /
-			// in checks; Go-reflected wrappers don't, and toString them
-			// as "[object Object]".
-			parseFn, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
-			if !ok {
-				panic(vm.NewGoError(fmt.Errorf("requestJSON: JSON.parse not available")))
-			}
-			val, err := parseFn(goja.Undefined(), vm.ToValue(string(raw)))
+			defer resp.Body.Close()
+
+			contentType := resp.Headers.Get("Content-Type")
+			dst := fmt.Sprintf("tmp/conn-%s-%s.bin", connSlug, newCallID())
+			inline, savedTo, size, err := peekAndSpill(run.ctx, run.agent, resp.Body, dst, contentType)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
+				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			return val
+
+			out := vm.NewObject()
+			out.Set("status", resp.StatusCode)
+			out.Set("contentType", contentType)
+			out.Set("size", size)
+			if savedTo == "" {
+				if len(inline) == 0 {
+					out.Set("data", goja.Null())
+					return out
+				}
+				// Round-trip through the runtime's own JSON.parse so the
+				// resulting value is a native JS object (not a Go-reflected
+				// map). Native objects stringify cleanly via JSON.stringify
+				// and behave like real objects under Object.keys / spread /
+				// in checks; Go-reflected wrappers don't, and toString them
+				// as "[object Object]".
+				parseFn, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+				if !ok {
+					panic(vm.NewGoError(fmt.Errorf("requestJSON: JSON.parse not available")))
+				}
+				val, err := parseFn(goja.Undefined(), vm.ToValue(string(inline)))
+				if err != nil {
+					panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
+				}
+				out.Set("data", val)
+				return out
+			}
+			out.Set("bodyPreview", string(inline))
+			out.Set("bodySavedTo", savedTo)
+			out.Set("note", fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Read with: JSON.parse(readFile(bodySavedTo)).", size, savedTo))
+			return out
 		})
 
 		vm.Set("conn_"+slug, obj)
@@ -205,10 +246,9 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 
 	// Register exec_{slug}.run for each registered exec endpoint. Bind-time
 	// gated by Access so non-admin runs never see admin-only exec endpoints
-	// (AccessPublic is already demoted to AccessUser at registration). Only
-	// the buffered Run is exposed — streaming requires the io.ReadCloser
-	// shape which doesn't compose with goja. Authors who need RunStream
-	// wrap it in a typed Go tool.
+	// (AccessPublic is already demoted to AccessUser at registration).
+	// JS bindings use RunStream so stdout/stderr above spillInlineThreshold
+	// spill to tmp/ storage rather than blowing the tool-output cap.
 	for slug, ep := range run.agent.execEndpoints {
 		if !accessSatisfies(run.callerAccess, ep.Access) {
 			continue
@@ -249,15 +289,48 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 					}
 				}
 			}
-			res, err := handle.Run(run.ctx, cmd)
+
+			stream, err := handle.RunStream(run.ctx, cmd)
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
+			defer stream.Stdout.Close()
+			defer stream.Stderr.Close()
+
+			// Both pipes must drain in parallel — sequential reads deadlock
+			// because back-pressure on the unread pipe stalls airlock's
+			// session-output goroutine.
+			callID := newCallID()
+			prefix := fmt.Sprintf("tmp/exec-%s-%s", epSlug, callID)
+			outCh := make(chan spillFields, 1)
+			errCh := make(chan spillFields, 1)
+			go func() {
+				outCh <- spillFor(run.ctx, run.agent, stream.Stdout, prefix+"-stdout.bin")
+			}()
+			go func() {
+				errCh <- spillFor(run.ctx, run.agent, stream.Stderr, prefix+"-stderr.bin")
+			}()
+			outR := <-outCh
+			errR := <-errCh
+			exit, waitErr := stream.Wait()
+
+			switch {
+			case outR.err != nil:
+				panic(vm.NewGoError(outR.err))
+			case errR.err != nil:
+				panic(vm.NewGoError(errR.err))
+			case waitErr != nil:
+				panic(vm.NewGoError(waitErr))
+			}
+
 			out := vm.NewObject()
-			out.Set("stdout", string(res.Stdout))
-			out.Set("stderr", string(res.Stderr))
-			out.Set("exitCode", res.ExitCode)
-			out.Set("durationMs", res.DurationMs)
+			out.Set("exitCode", exit.ExitCode)
+			out.Set("durationMs", exit.DurationMs)
+			setStreamFields(out, "stdout", outR)
+			setStreamFields(out, "stderr", errR)
+			if outR.savedTo != "" || errR.savedTo != "" {
+				out.Set("note", execOverflowNote(outR, errR))
+			}
 			return out
 		})
 
