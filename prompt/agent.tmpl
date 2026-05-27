@@ -267,6 +267,28 @@ Your routes are served at: {{ .AgentRouteURL }}
 {{ range .Routes }}- `{{ .Method }} {{ .Path }}`{{ if .Description }} — {{ .Description }}{{ end }} ({{ .Access }})
 {{ end }}
 {{- end }}
+{{- if .ExecEndpoints }}
+
+## Remote command endpoints
+
+Each endpoint runs a command on a remote target via SSH. Call as
+`exec_{slug}.run(command, args?, opts?)` inside `run_js`. Returns
+`{stdout, stderr, exitCode, durationMs}` (strings + numbers). Non-zero
+exit codes are not errors — inspect `exitCode` and `stderr`. Buffered
+to 20 MiB per stream; if you need more, ask the agent author to expose
+a typed Go tool that wraps the streaming primitive.
+
+Put shell features (pipes, redirection) in `command`; use `args` for
+safe multi-arg invocation (args are quoted before being sent to the
+remote shell):
+
+```javascript
+exec_ci.run("kick-build", ["--branch", "main"])
+exec_vps.run("kubectl get pods -o json | jq '.items[] | .metadata.name'")
+```
+{{ range .ExecEndpoints }}- `exec_{{ .Slug }}` — {{ .Description }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
+{{ end }}
+{{- end }}
 {{- if .MCPServers }}
 
 ## MCP servers

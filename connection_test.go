@@ -26,7 +26,7 @@ func TestRequestJSON_EmptyBodyReturnsZero(t *testing.T) {
 	type Playback struct {
 		Track string `json:"track"`
 	}
-	got, err := RequestJSON[Playback](context.Background(), h, "GET", "/whatever", nil)
+	got, err := RequestJSON[Playback](context.Background(), h, RequestOpts{Path: "/whatever"})
 	if err != nil {
 		t.Fatalf("RequestJSON returned %v, want nil on empty body", err)
 	}
@@ -50,7 +50,7 @@ func TestRequestJSON_DecodesBody(t *testing.T) {
 	type Playback struct {
 		Track string `json:"track"`
 	}
-	got, err := RequestJSON[Playback](context.Background(), h, "GET", "/whatever", nil)
+	got, err := RequestJSON[Playback](context.Background(), h, RequestOpts{Path: "/whatever"})
 	if err != nil {
 		t.Fatalf("RequestJSON returned %v", err)
 	}

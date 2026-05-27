@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -99,6 +100,57 @@ type Connection struct {
 	Access            Access // who may invoke conn_{slug}; default AccessUser
 }
 
+// ConnectionResponse is the streaming primitive returned by
+// ConnectionHandle.RequestStream. Body is the upstream response body,
+// streamed through airlock's proxy with no airlock-side buffering. Caller
+// owns the lifetime — defer Body.Close() once you've finished reading.
+//
+// StatusCode and Headers carry the upstream values verbatim; airlock
+// removes only its own auth-injection headers. A 2xx from upstream comes
+// through as a 2xx here; auth-required surfaces as *AuthRequiredError on
+// the parent Request* call (not via this struct).
+type ConnectionResponse struct {
+	StatusCode int
+	Headers    http.Header
+	Body       io.ReadCloser
+}
+
+// RequestOpts is the call shape for ConnectionHandle.Request /
+// RequestStream / RequestJSON. Mirrors the options-dict pattern of
+// axios / fetch / python-requests so call sites read declaratively
+// instead of positionally — most calls only need Path, and adding
+// Body or Headers later is a structural edit instead of a shift of
+// every argument.
+//
+//	// Simple GET (Method defaults to "GET"):
+//	body, _ := conn.Request(ctx, agentsdk.RequestOpts{Path: "/v1/me"})
+//
+//	// POST with body:
+//	conn.Request(ctx, agentsdk.RequestOpts{
+//	    Method: "POST", Path: "/v1/playlists", Body: playlist,
+//	})
+//
+//	// With per-call headers:
+//	conn.Request(ctx, agentsdk.RequestOpts{
+//	    Path:    "/v1/me/player",
+//	    Headers: map[string]string{"If-None-Match": etag},
+//	})
+type RequestOpts struct {
+	// Method is the HTTP verb. Empty defaults to "GET" (the majority
+	// of calls).
+	Method string
+	// Path is appended to the connection's BaseURL. Required.
+	Path string
+	// Body is encoded by type when non-nil: []byte / string sent as-is,
+	// io.Reader fully read, anything else JSON-marshalled.
+	Body any
+	// Headers merge per-key on top of the platform baseline (real-browser
+	// User-Agent) and the connection's declared Headers. Set a value to
+	// the empty string to suppress a key set by a lower layer. Nil/empty
+	// map means no overrides.
+	Headers map[string]string
+}
+
 // ConnectionDef is the wire format used by PUT /api/agent/connections/{slug}.
 // Slug is sent in the URL, not the body.
 type ConnectionDef struct {
@@ -145,6 +197,97 @@ const (
 	// that auth via URL query strings.
 	AuthInjectQueryParam AuthInjectionType = "query_param"
 )
+
+// --- Exec endpoints ---
+
+// ExecEndpoint is the self-contained declaration registered via
+// agent.RegisterExecEndpoint — a remote target airlock executes commands
+// against on the agent's behalf. The transport (ssh today; telnet,
+// endpoint-binary later) and credentials are operator-configured via the
+// Airlock UI; the agent's main() only declares slug + description + access.
+type ExecEndpoint struct {
+	Slug        string // unique per agent; binds as exec_{slug} in run_js
+	Description string
+	LLMHint     string // appended to the endpoint block in the system prompt
+	Access      Access // who may invoke; default AccessAdmin; AccessPublic is silently demoted to AccessUser
+}
+
+// ExecEndpointDef is the wire format used by PUT /api/agent/exec-endpoints/{slug}.
+// Slug travels in the URL. Operator-configured fields stay airlock-side and
+// are not present here — the agent only declares its intent to use the slug.
+type ExecEndpointDef struct {
+	Description string `json:"description"`
+	LLMHint     string `json:"llmHint,omitempty"`
+	Access      Access `json:"access,omitempty"`
+}
+
+// ExecCommand is the input to ExecHandle.Run / ExecHandle.RunStream.
+//
+// Command is handed to the remote shell as a single command line: pipes,
+// redirection, and shell substitution in Command just work because the
+// remote sshd execs the user's login shell with it. Args are
+// POSIX-shell-quoted and space-joined onto Command before send, so
+// Run("ls", []string{"-la", "my dir"}) sends `ls -la 'my dir'` safely.
+//
+// Use Args for safe multi-arg commands; put any shell features (pipes,
+// redirection) in Command and leave Args empty.
+type ExecCommand struct {
+	Command   string        `json:"command"`
+	Args      []string      `json:"args,omitempty"`
+	Stdin     []byte        `json:"-"` // marshalled separately as base64
+	Timeout   time.Duration `json:"-"` // 0 = server default (60s); marshalled as timeoutMs
+}
+
+// ExecResult is what Run returns when the call fits in the 20 MiB buffer
+// cap. Overflow returns ErrOutputTooLarge with no partial result — use
+// RunStream for outputs that may exceed the cap.
+type ExecResult struct {
+	Stdout     []byte
+	Stderr     []byte
+	ExitCode   int
+	DurationMs int64
+}
+
+// ExecExit is the terminal status of a streaming exec call. Returned by
+// ExecStream.Wait once the remote has closed both stdout and stderr.
+type ExecExit struct {
+	ExitCode   int
+	DurationMs int64
+}
+
+// ExecStream is the streaming primitive returned by ExecHandle.RunStream.
+// Mirrors os/exec.Cmd's StdoutPipe / StderrPipe / Wait shape so Go users
+// get a familiar mental model:
+//
+//	s, _ := vps.RunStream(ctx, ExecCommand{Command: "tar -czf - /var/log"})
+//	defer s.Stdout.Close()
+//	defer s.Stderr.Close()
+//	info, _ := agent.WriteFile(ctx, "tmp/logs.tar.gz", s.Stdout, "application/gzip")
+//	exit, _ := s.Wait()
+//
+// Stdout and Stderr stay open until the remote closes its side; Wait
+// blocks until the exit envelope arrives. Always close both pipes — even
+// when you only care about one — to release the demux goroutines.
+type ExecStream struct {
+	Stdout io.ReadCloser
+	Stderr io.ReadCloser
+	Wait   func() (ExecExit, error)
+}
+
+// ExecError distinguishes transport-class problems (the command never
+// ran) from runtime failures (the command ran and reported a non-zero
+// exit code, which is just an ExecResult with a non-zero ExitCode).
+type ExecError struct {
+	Kind    string // "transport" | "timeout" | "config" | "denied"
+	Message string
+}
+
+func (e *ExecError) Error() string { return "exec " + e.Kind + ": " + e.Message }
+
+// ErrOutputTooLarge is returned by Run / Request when the response exceeds
+// the 20 MiB buffered cap. The error message points the caller at the
+// streaming variant as the resolution.
+var ErrOutputTooLarge = errors.New("agentsdk: response exceeded 20 MiB buffer cap; Run/Request are for structured small responses (JSON, HTML, CLI summaries) — use RunStream/RequestStream for any data download")
 
 // --- Run recording ---
 

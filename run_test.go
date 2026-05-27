@@ -14,7 +14,7 @@ func TestConnectionHandleProxy(t *testing.T) {
 
 	gmail := &ConnectionHandle{slug: "gmail", agent: a}
 	_ = run // run not needed for handle methods
-	result, err := gmail.Request(context.Background(), "GET", "/messages", nil)
+	result, err := gmail.Request(context.Background(), RequestOpts{Path: "/messages"})
 	if err != nil {
 		t.Fatal(err)
 	}

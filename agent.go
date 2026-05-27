@@ -44,15 +44,16 @@ type Agent struct {
 	sensitiveSet map[string]struct{}
 	sensitiveM   sync.RWMutex
 
-	tools       map[string]*registeredTool
-	webhooks    map[string]*Webhook
-	crons       map[string]*Cron
-	routes      map[string]*Route
-	auths       map[string]*Connection
-	mcps        map[string]*MCP
-	envVars     map[string]*EnvVar
-	topics      map[string]*Topic
-	directories []*Directory // registration order; longest-prefix wins at lookup
+	tools         map[string]*registeredTool
+	webhooks      map[string]*Webhook
+	crons         map[string]*Cron
+	routes        map[string]*Route
+	auths         map[string]*Connection
+	mcps          map[string]*MCP
+	envVars       map[string]*EnvVar
+	topics        map[string]*Topic
+	execEndpoints map[string]*ExecEndpoint
+	directories   []*Directory // registration order; longest-prefix wins at lookup
 
 	extraPrompts []*ExtraPrompt // access-scoped system prompt fragments; see AddExtraPrompt
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
@@ -120,21 +121,22 @@ func New(cfg Config) *Agent {
 	token := requireEnv("AIRLOCK_AGENT_TOKEN")
 
 	a := &Agent{
-		agentID:      agentID,
-		apiURL:       apiURL,
-		token:        token,
-		description:  cfg.Description,
-		emoji:        cfg.Emoji,
-		httpClient:   &http.Client{},
-		sensitiveSet: make(map[string]struct{}),
-		tools:        make(map[string]*registeredTool),
-		webhooks:     make(map[string]*Webhook),
-		crons:        make(map[string]*Cron),
-		routes:       make(map[string]*Route),
-		auths:        make(map[string]*Connection),
-		mcps:         make(map[string]*MCP),
-		envVars:      make(map[string]*EnvVar),
-		topics:       make(map[string]*Topic),
+		agentID:       agentID,
+		apiURL:        apiURL,
+		token:         token,
+		description:   cfg.Description,
+		emoji:         cfg.Emoji,
+		httpClient:    &http.Client{},
+		sensitiveSet:  make(map[string]struct{}),
+		tools:         make(map[string]*registeredTool),
+		webhooks:      make(map[string]*Webhook),
+		crons:         make(map[string]*Cron),
+		routes:        make(map[string]*Route),
+		auths:         make(map[string]*Connection),
+		mcps:          make(map[string]*MCP),
+		envVars:       make(map[string]*EnvVar),
+		topics:        make(map[string]*Topic),
+		execEndpoints: make(map[string]*ExecEndpoint),
 	}
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
@@ -353,6 +355,16 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 		})
 	}
 
+	execEndpoints := make([]prompt.ExecEndpointInfo, 0, len(a.execEndpoints))
+	for _, e := range a.execEndpoints {
+		execEndpoints = append(execEndpoints, prompt.ExecEndpointInfo{
+			Slug:        e.Slug,
+			Description: e.Description,
+			LLMHint:     e.LLMHint,
+			Access:      string(e.Access),
+		})
+	}
+
 	topics := make([]prompt.TopicInfo, 0, len(a.topics))
 	for _, t := range a.topics {
 		topics = append(topics, prompt.TopicInfo{
@@ -495,6 +507,7 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 		MCPServers:          mcpServers,
 		Siblings:            siblings,
 		Directories:         dirs,
+		ExecEndpoints:       execEndpoints,
 	}
 }
 

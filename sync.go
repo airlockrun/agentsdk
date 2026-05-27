@@ -52,6 +52,20 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		}
 	}
 
+	// Register each exec endpoint declaration. Operators set transport,
+	// host, user, and credentials via the admin UI; we only declare the
+	// slug+description+access here.
+	for slug, e := range a.execEndpoints {
+		def := ExecEndpointDef{
+			Description: e.Description,
+			LLMHint:     e.LLMHint,
+			Access:      e.Access,
+		}
+		if err := a.client.doJSON(ctx, "PUT", "/api/agent/exec-endpoints/"+slug, def, nil); err != nil {
+			return fmt.Errorf("register exec endpoint %s: %w", slug, err)
+		}
+	}
+
 	// Register each env var slot. Operators set values separately via the
 	// admin UI; we only declare the slot here.
 	for slug, e := range a.envVars {

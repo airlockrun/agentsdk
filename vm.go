@@ -157,7 +157,9 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				body = call.Arguments[2].String()
 			}
 			headers := headersFromJSArg(call.Argument(3))
-			result, err := handle.RequestWithHeaders(run.ctx, method, path, body, headers)
+			result, err := handle.Request(run.ctx, RequestOpts{
+				Method: method, Path: path, Body: body, Headers: headers,
+			})
 			if err != nil {
 				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
@@ -172,7 +174,9 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				body = call.Arguments[2].Export()
 			}
 			headers := headersFromJSArg(call.Argument(3))
-			raw, err := handle.RequestWithHeaders(run.ctx, method, path, body, headers)
+			raw, err := handle.Request(run.ctx, RequestOpts{
+				Method: method, Path: path, Body: body, Headers: headers,
+			})
 			if err != nil {
 				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
@@ -197,6 +201,67 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 
 		vm.Set("conn_"+slug, obj)
+	}
+
+	// Register exec_{slug}.run for each registered exec endpoint. Bind-time
+	// gated by Access so non-admin runs never see admin-only exec endpoints
+	// (AccessPublic is already demoted to AccessUser at registration). Only
+	// the buffered Run is exposed — streaming requires the io.ReadCloser
+	// shape which doesn't compose with goja. Authors who need RunStream
+	// wrap it in a typed Go tool.
+	for slug, ep := range run.agent.execEndpoints {
+		if !accessSatisfies(run.callerAccess, ep.Access) {
+			continue
+		}
+		handle := &ExecHandle{slug: slug, agent: run.agent}
+		obj := vm.NewObject()
+		epSlug := slug // capture for closures
+
+		obj.Set("run", func(call goja.FunctionCall) goja.Value {
+			cmd := ExecCommand{}
+			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
+				cmd.Command = call.Argument(0).String()
+			}
+			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+				if exported, ok := call.Arguments[1].Export().([]any); ok {
+					cmd.Args = make([]string, 0, len(exported))
+					for _, a := range exported {
+						cmd.Args = append(cmd.Args, fmt.Sprintf("%v", a))
+					}
+				} else {
+					panic(vm.NewGoError(fmt.Errorf("exec_%s.run: args must be an array of strings", epSlug)))
+				}
+			}
+			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) && !goja.IsNull(call.Arguments[2]) {
+				opts, ok := call.Arguments[2].Export().(map[string]any)
+				if !ok {
+					panic(vm.NewGoError(fmt.Errorf("exec_%s.run: opts must be an object", epSlug)))
+				}
+				if v, ok := opts["stdin"]; ok && v != nil {
+					cmd.Stdin = []byte(fmt.Sprintf("%v", v))
+				}
+				if v, ok := opts["timeoutMs"]; ok && v != nil {
+					switch t := v.(type) {
+					case int64:
+						cmd.Timeout = time.Duration(t) * time.Millisecond
+					case float64:
+						cmd.Timeout = time.Duration(int64(t)) * time.Millisecond
+					}
+				}
+			}
+			res, err := handle.Run(run.ctx, cmd)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			out := vm.NewObject()
+			out.Set("stdout", string(res.Stdout))
+			out.Set("stderr", string(res.Stderr))
+			out.Set("exitCode", res.ExitCode)
+			out.Set("durationMs", res.DurationMs)
+			return out
+		})
+
+		vm.Set("exec_"+slug, obj)
 	}
 
 	// queryDB / execDB are admin-only. AccessUser / AccessPublic callers

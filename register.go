@@ -3,6 +3,8 @@ package agentsdk
 import (
 	"fmt"
 	"regexp"
+
+	"go.uber.org/zap"
 )
 
 // RegisterTool registers a typed, schema-bearing capability the LLM can
@@ -127,7 +129,7 @@ func (a *Agent) RegisterTopic(t *Topic) *TopicHandle {
 //	gmail := agent.RegisterConnection(&agentsdk.Connection{
 //	    Slug: "gmail", Name: "Gmail", BaseURL: "https://gmail.googleapis.com", ...,
 //	})
-//	body, err := gmail.Request(ctx, "GET", "/messages", nil)
+//	body, err := gmail.Request(ctx, agentsdk.RequestOpts{Path: "/messages"})
 func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
 	if c == nil {
 		panic("agentsdk: RegisterConnection: nil *Connection")
@@ -256,6 +258,49 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 		RetentionHours: opts.RetentionHours,
 		Scope:          opts.Scope,
 	})
+}
+
+// RegisterExecEndpoint declares a remote command target the agent can
+// reach (e.g. a VPS via SSH, a CI runner). Airlock owns the transport
+// and credentials — the agent's main() only declares slug/description/
+// access. Returns an *ExecHandle for compile-time-bound calls:
+//
+//	ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
+//	    Slug:        "ci-runner",
+//	    Description: "Self-hosted GitHub Actions runner",
+//	    Access:      agentsdk.AccessAdmin,
+//	})
+//	res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build"})
+//
+// Default access is AccessAdmin (exec hands arbitrary commands to a real
+// machine — admin-only by default). AccessPublic is silently demoted to
+// AccessUser with a startup warning: exec endpoints are never reachable
+// by unauthenticated callers, period. The demotion is friendly because
+// copy-pasting from RegisterRoute (where Public is meaningful) is a
+// believable mistake.
+func (a *Agent) RegisterExecEndpoint(e *ExecEndpoint) *ExecHandle {
+	if e == nil {
+		panic("agentsdk: RegisterExecEndpoint: nil *ExecEndpoint")
+	}
+	if e.Slug == "" {
+		panic("agentsdk: RegisterExecEndpoint: Slug is required")
+	}
+	if e.Description == "" {
+		panic("agentsdk: RegisterExecEndpoint(" + e.Slug + "): Description is required")
+	}
+	if e.Access == "" {
+		e.Access = AccessAdmin
+	}
+	if e.Access == AccessPublic {
+		agentLogger().Warn("RegisterExecEndpoint: AccessPublic is not allowed for exec endpoints — demoting to AccessUser",
+			zap.String("slug", e.Slug))
+		e.Access = AccessUser
+	}
+	if _, exists := a.execEndpoints[e.Slug]; exists {
+		panic("agentsdk: duplicate RegisterExecEndpoint: " + e.Slug)
+	}
+	a.execEndpoints[e.Slug] = e
+	return &ExecHandle{slug: e.Slug, agent: a}
 }
 
 // RegisterMCP registers a remote MCP server dependency and returns a handle
