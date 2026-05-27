@@ -6,5 +6,6 @@
 package agentsdk
 
 // Version is the agentsdk API version. Reported to Airlock during sync.
-// Bump on breaking changes — see CLAUDE.md for versioning rules.
-const Version = "0.3.0" // pre-release; bump when shipping breaking protocol changes
+// Bump on breaking changes — see CLAUDE.md for versioning rules. Pre-commit
+// gate enforces Version >= latest git tag in this repo.
+const Version = "0.3.0-rc.1"

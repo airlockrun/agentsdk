@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Version-invariant gate for agentsdk. Enforces:
+#   const Version (in *.go) >= latest git tag
+# Catches "rolled the const back below a published tag." The tag-time
+# check (tag-being-created == const) lives in release-agentsdk-rc.sh.
+#
+# Enable for this clone (one-time):
+#   git config core.hooksPath .githooks
+# Skip a single commit: git commit --no-verify
+
+set -e
+
+cd "$(git rev-parse --show-toplevel)"
+
+# semver_ge A B → exit 0 if A >= B per semver, including the pre-release
+# rule that sort -V gets wrong (sort -V puts v0.2.5 BEFORE v0.2.5-rc.1;
+# semver says rc < final). Strips a leading v.
+semver_ge() {
+	local a="${1#v}" b="${2#v}"
+	local a_base="${a%%-*}" b_base="${b%%-*}"
+	local a_pre="" b_pre=""
+	[ "$a_base" != "$a" ] && a_pre="${a#*-}"
+	[ "$b_base" != "$b" ] && b_pre="${b#*-}"
+	if [ "$a_base" != "$b_base" ]; then
+		[ "$(printf '%s\n%s\n' "$a_base" "$b_base" | sort -V | head -1)" = "$b_base" ]
+		return
+	fi
+	[ -z "$a_pre" ] && [ -z "$b_pre" ] && return 0
+	[ -z "$a_pre" ] && [ -n "$b_pre" ] && return 0
+	[ -n "$a_pre" ] && [ -z "$b_pre" ] && return 1
+	[ "$(printf '%s\n%s\n' "$a_pre" "$b_pre" | sort -V | tail -1)" = "$a_pre" ]
+}
+
+const=$(awk -F'"' '/^const Version =/ {print $2; exit}' ./*.go 2>/dev/null)
+if [ -z "$const" ]; then
+	echo "ERROR: no 'const Version = \"X.Y.Z\"' found in package root *.go" >&2
+	exit 1
+fi
+
+latest=$(git tag --sort=-v:refname | head -1)
+if [ -n "$latest" ] && ! semver_ge "$const" "$latest"; then
+	echo "ERROR: const Version=$const is below latest tag $latest" >&2
+	echo "Bump the Version const before committing." >&2
+	exit 1
+fi
+
+echo "agentsdk version invariants: OK"
