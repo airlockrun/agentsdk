@@ -38,9 +38,9 @@ if [ -z "$const" ]; then
 fi
 
 latest=$(git tag --sort=-v:refname | head -1)
-if [ -n "$latest" ] && ! semver_ge "$const" "$latest"; then
-	echo "ERROR: const Version=$const is below latest tag $latest" >&2
-	echo "Bump the Version const before committing." >&2
+if [ -n "$latest" ] && { [ "${const#v}" = "${latest#v}" ] || ! semver_ge "$const" "$latest"; }; then
+	echo "ERROR: const Version=$const must be strictly greater than latest tag $latest" >&2
+	echo "Bump the Version const to open a new in-progress version before committing." >&2
 	exit 1
 fi
 
