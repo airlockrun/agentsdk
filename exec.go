@@ -37,14 +37,6 @@ const MaxBufferedResponseBytes = 20 << 20 // 20 MiB
 // only the recorded preview is truncated.
 const execRecordPreviewBytes = 8 * 1024 // 8 KiB
 
-// execRequestWire is the JSON body POSTed to /api/agent/exec/{slug}.
-type execRequestWire struct {
-	Command   string   `json:"command"`
-	Args      []string `json:"args,omitempty"`
-	StdinB64  string   `json:"stdinB64,omitempty"`
-	TimeoutMs int64    `json:"timeoutMs,omitempty"`
-}
-
 // execEnvelope is one line of the NDJSON streaming response.
 //
 // type=stdout|stderr → Data is base64-encoded bytes
@@ -101,7 +93,7 @@ func (h *ExecHandle) RunStream(ctx context.Context, cmd ExecCommand) (*ExecStrea
 		return nil, &ExecError{Kind: "config", Message: "Command is required"}
 	}
 
-	reqBody := execRequestWire{
+	reqBody := ExecRequest{
 		Command:   cmd.Command,
 		Args:      cmd.Args,
 		TimeoutMs: cmd.Timeout.Milliseconds(),

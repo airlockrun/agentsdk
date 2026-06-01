@@ -18,11 +18,9 @@ import (
 // stripped from LLM input.
 func (a *Agent) Seal(ctx context.Context, plaintext string) (string, error) {
 	a.maybeAddSensitive(plaintext)
-	var resp struct {
-		Sealed string `json:"sealed"`
-	}
+	var resp SealResponse
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/seal",
-		map[string]string{"plaintext": plaintext}, &resp); err != nil {
+		SealRequest{Plaintext: plaintext}, &resp); err != nil {
 		return "", fmt.Errorf("agentsdk: seal: %w", err)
 	}
 	return resp.Sealed, nil
@@ -32,11 +30,9 @@ func (a *Agent) Seal(ctx context.Context, plaintext string) (string, error) {
 // sealed value was produced for a different agent or is corrupt. The recovered
 // plaintext is registered for redaction.
 func (a *Agent) Unseal(ctx context.Context, sealed string) (string, error) {
-	var resp struct {
-		Plaintext string `json:"plaintext"`
-	}
+	var resp UnsealResponse
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/unseal",
-		map[string]string{"sealed": sealed}, &resp); err != nil {
+		UnsealRequest{Sealed: sealed}, &resp); err != nil {
 		return "", fmt.Errorf("agentsdk: unseal: %w", err)
 	}
 	a.maybeAddSensitive(resp.Plaintext)

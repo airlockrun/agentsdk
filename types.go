@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/goai/message"
+	"github.com/airlockrun/sol/session"
 	"github.com/google/uuid"
 )
 
@@ -819,6 +820,55 @@ type EnvVarDef struct {
 	Secret      bool   `json:"secret"`
 	Default     string `json:"default,omitempty"`
 	Pattern     string `json:"pattern,omitempty"`
+}
+
+// EnvVarValueResponse is the wire body of GET /api/agent/env-vars/{slug}
+// — the operator-supplied value for one declared env var (or 404 if no
+// value is configured).
+type EnvVarValueResponse struct {
+	Value string `json:"value"`
+}
+
+// ExecRequest is the wire body of POST /api/agent/exec/{slug}. Stdin
+// arrives base64-encoded because it can be raw bytes and JSON can't
+// carry those directly. TimeoutMs of 0 means "use the server default".
+type ExecRequest struct {
+	Command   string   `json:"command"`
+	Args      []string `json:"args,omitempty"`
+	StdinB64  string   `json:"stdinB64,omitempty"`
+	TimeoutMs int64    `json:"timeoutMs,omitempty"`
+}
+
+// SealRequest / SealResponse are the wire bodies of POST /api/agent/seal:
+// the agent posts plaintext it generated at runtime, airlock returns
+// an opaque sealed blob bound to this agent's ID.
+type SealRequest struct {
+	Plaintext string `json:"plaintext"`
+}
+
+type SealResponse struct {
+	Sealed string `json:"sealed"`
+}
+
+// UnsealRequest / UnsealResponse are the wire bodies of POST /api/agent/unseal:
+// the agent posts a previously-sealed blob, airlock returns the
+// plaintext (only if the blob was sealed for this same agent).
+type UnsealRequest struct {
+	Sealed string `json:"sealed"`
+}
+
+type UnsealResponse struct {
+	Plaintext string `json:"plaintext"`
+}
+
+// SessionCompactRequest is the wire body of
+// POST /api/agent/session/{convID}/compact: the agent posts the
+// summarized message tail it wants to keep, plus a count of tokens the
+// summarization freed, and airlock writes a checkpoint marker row
+// followed by the summary.
+type SessionCompactRequest struct {
+	Summary     []session.Message `json:"summary"`
+	TokensFreed int               `json:"tokensFreed"`
 }
 
 // ExtraPrompt is the self-contained declaration passed to agent.AddExtraPrompt.

@@ -73,11 +73,6 @@ type EnvVarHandle struct {
 	loaded bool
 }
 
-// envVarResponse is the wire shape of GET /api/agent/env-vars/{slug}.
-type envVarResponse struct {
-	Value string `json:"value"`
-}
-
 // Get returns the operator-supplied value, falling back to the
 // agent-declared Default when the operator hasn't set anything (always
 // "" for secrets). For Secret=true vars, the value is registered with
@@ -109,7 +104,7 @@ func (h *EnvVarHandle) Get(ctx context.Context) (string, error) {
 	}
 	h.mu.Unlock()
 
-	var resp envVarResponse
+	var resp EnvVarValueResponse
 	if err := h.agent.client.doJSON(ctx, "GET", "/api/agent/env-vars/"+h.slug, nil, &resp); err != nil {
 		return "", fmt.Errorf("agentsdk: get env var %q: %w", h.slug, err)
 	}

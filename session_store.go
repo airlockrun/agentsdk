@@ -40,13 +40,7 @@ func (s *HTTPSessionStore) Append(ctx context.Context, msgs []session.Message) e
 	return s.client.doJSON(ctx, "POST", path, msgs, nil)
 }
 
-// compactRequest is the wire format for POST /api/agent/session/{convID}/compact.
-type compactRequest struct {
-	Summary     []session.Message `json:"summary"`
-	TokensFreed int               `json:"tokensFreed"`
-}
-
 func (s *HTTPSessionStore) Compact(ctx context.Context, summary []session.Message, tokensFreed int) error {
-	body := compactRequest{Summary: summary, TokensFreed: tokensFreed}
+	body := SessionCompactRequest{Summary: summary, TokensFreed: tokensFreed}
 	return s.client.doJSON(ctx, "POST", "/api/agent/session/"+s.convID+"/compact", body, nil)
 }
