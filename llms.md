@@ -718,12 +718,12 @@ exec_ci.run("kick-build", ["--branch", "main"])
 //     stdoutSavedTo: "tmp/exec-ci-a3f9c2b1-stdout.bin",
 //     stdoutSize: 50000,
 //     stderr: "…",
-//     note: "stdout (50000 bytes) exceeded inline threshold; saved to … Use readFile(stdoutSavedTo) to read." }
+//     note: "stdout (50000 bytes) exceeded inline threshold; saved to … Use fileRead(stdoutSavedTo) to read." }
 ```
 
 When `stdoutSavedTo` or `stderrSavedTo` is set, the corresponding
 `stdout`/`stderr` field is absent — read the full payload with
-`readFile(savedTo)`. See **Reading overflowed responses** below.
+`fileRead(savedTo)`. See **Reading overflowed responses** below.
 
 **Shell features (pipes, redirection, env expansion) work** because SSH
 hands the full command line to the remote shell. Put pipes in
@@ -797,15 +797,15 @@ mutually exclusive — check the saved-to field and branch:
 ```javascript
 // Connection
 const r = conn_x.request("GET", "/big")
-const body = r.bodySavedTo ? readFile(r.bodySavedTo) : r.body
+const body = r.bodySavedTo ? fileRead(r.bodySavedTo) : r.body
 
 // Connection (JSON)
 const r = conn_x.requestJSON("GET", "/big.json")
-const data = r.bodySavedTo ? JSON.parse(readFile(r.bodySavedTo)) : r.data
+const data = r.bodySavedTo ? JSON.parse(fileRead(r.bodySavedTo)) : r.data
 
 // Exec
 const r = exec_x.run("dump-state")
-const stdout = r.stdoutSavedTo ? readFile(r.stdoutSavedTo) : r.stdout
+const stdout = r.stdoutSavedTo ? fileRead(r.stdoutSavedTo) : r.stdout
 ```
 
 Don't re-read an older `savedTo` after a fresh call to the same binding
@@ -1142,8 +1142,8 @@ agent.RegisterDirectory("cache", agentsdk.DirectoryOpts{
 })
 agent.RegisterDirectory("generated-images", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessAdmin, Write: agentsdk.AccessAdmin, List: agentsdk.AccessAdmin,
-    Description:    "Throwaway AI-generated images served via shareFileURL.",
-    LLMHint:        "served externally via shareFileURL only; do not read or list directly",
+    Description:    "Throwaway AI-generated images served via fileShareURL.",
+    LLMHint:        "served externally via fileShareURL only; do not read or list directly",
     RetentionHours: 24, // sweeper drops files older than 24h
 })
 ```
@@ -1163,7 +1163,7 @@ Default `0` means files live forever — that's right for `uploads`, `reports`,
 anything the user expects to find tomorrow. Set a TTL on directories that hold
 ephemeral artifacts (generated media, transient scratch, presigned-URL
 targets) so the bucket doesn't grow without bound. Match the TTL to whatever
-URL expiry you hand out: a `shareFileURL(path, {expiresInMinutes: 60})` link is
+URL expiry you hand out: a `fileShareURL(path, {expiresInMinutes: 60})` link is
 useless after an hour, so the bytes can go away on roughly the same horizon.
 
 **`Scope`** — **use rarely.** Default (`ScopeNone`) is correct for almost every
@@ -1505,10 +1505,25 @@ register:
 Framework-provided primitives (always present, the runtime prompt describes
 each in detail):
 
-- **File API** — `readFile`, `readBytes`, `writeFile`, `statFile`, `listDir`,
-  `deleteFile`, `fileExists`, `shareFileURL`. Operate on S3-like storage with
+- **File API** — `fileRead`, `fileReadBytes`, `fileWrite`, `fileStat`, `fileList`,
+  `fileDelete`, `fileExists`, `fileShareURL`. Operate on S3-like storage with
   slashless paths (`uploads/x`, not `/uploads/x`); see the storage section
-  above.
+  above. `fileRead`/`fileReadBytes` cap at 16 MiB.
+- **Large-file reads** — `fileReadRangeBytes(path, start, length)` (an exact
+  byte window, no whole-file load; bytes only — text is addressed by line),
+  `fileGrep(path, pattern, opts?)`, `fileHead(path, n?)`, `fileTail(path, n?)`,
+  `fileLines(path, start, count)`. Large reads transparently cache to local disk for the run, so
+  repeated scans of the same file don't re-fetch from S3.
+- **File→file transforms** (authed runs only) — `fileEncode(src, codec, dst?)` /
+  `fileDecode(src, codec, dst?)` (base64 | base64url | hex | gzip),
+  `fileDecodeText(src, charset, dst?)` (charset → UTF-8). Stream the whole file
+  with no size cap; omit `dst` for an auto scratch path.
+- **File editors** (authed runs only) — `fileEditLines(src, edits, dst?)`
+  (structured 1-based line edits: replace/delete/insert/append) and
+  `fileSed(src, script, dst?)` (a sed subset: `s/re/repl/[gi]`, `d`, `c`/`i`/`a`,
+  addresses `N`·`N,M`·`/re/`·`$`). Both stream so a file too big to load whole
+  is still editable; omit `dst` for a scratch path or pass `dst === src` to edit
+  in place.
 - **AI / media helpers** (resolved via per-agent capability defaults — no slug
   needed) — `analyzeImage(path, question?)`, `transcribeAudio(path, opts?)`,
   `generateImage(prompt, opts?)`, `speak(text, opts?)`, `embed(texts)`.
@@ -1526,9 +1541,10 @@ Do not re-declare any of these as `RegisterTool`s.
 
 - `printToUser`, `log` / `console` — always present
 - File API: each verb is bound only when at least one registered directory
-  grants `AccessPublic` for the matching cap. `readFile` / `readBytes` /
-  `statFile` / `fileExists` / `shareFileURL` need a public **Read** dir;
-  `writeFile` / `deleteFile` need a public **Write** dir; `listDir` needs a
+  grants `AccessPublic` for the matching cap. `fileRead` / `fileReadBytes` /
+  `fileReadRangeBytes` / `fileGrep` / `fileHead` / `fileTail` /
+  `fileLines` / `fileStat` / `fileExists` / `fileShareURL` need a public **Read** dir;
+  `fileWrite` / `fileDelete` need a public **Write** dir; `fileList` needs a
   public **List** dir. If you've registered no public dirs, the file API is
   invisible to public callers entirely.
 - `conn_{slug}` / `mcp_{slug}` / `topic_{slug}` / registered tools — only the
@@ -1536,7 +1552,9 @@ Do not re-declare any of these as `RegisterTool`s.
 
 Bind-time-gated *out* for public callers: `httpRequest`, `webSearch`, AI/media
 helpers (`analyzeImage`, `transcribeAudio`, `generateImage`, `speak`, `embed`),
-`attachToContext`, `queryDB` / `execDB`, `requestUpgrade`. These don't exist in
+file→file transforms (`fileEncode`, `fileDecode`, `fileDecodeText`), file
+editors (`fileEditLines`, `fileSed`), `attachToContext`, `queryDB` / `execDB`,
+`requestUpgrade`. These don't exist in
 the JS runtime for public runs — they can't be coaxed into existence by prompt
 injection, and they can't drive metered/external resources on a public
 visitor's behalf.
@@ -1555,7 +1573,7 @@ feature for public visitors. Don't do this:
 
 ```
 RegisterDirectory("generated", AccessPublic for Read+Write+List)
-// ... then hope the LLM stitches generateImage + writeFile + shareFileURL
+// ... then hope the LLM stitches generateImage + fileWrite + fileShareURL
 //     correctly on every call, with no rate limit, leaking the storage layout
 ```
 

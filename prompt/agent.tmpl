@@ -97,7 +97,7 @@ The agent has its own **S3-like object storage**. There is no local container fi
 
 Your `run_js` code runs in a sandboxed JavaScript runtime with access to built-in bindings and any custom functions registered by the agent developer. The tool description lists all available functions.
 
-The runtime persists within a single turn but resets between user messages. **Use `var` for top-level names — NEVER `let` or `const`.** A `let` or `const` declared in one `run_js` call cannot be redeclared in a follow-up call within the same turn — it throws `SyntaxError: Identifier has already been declared` and aborts the call. `var` re-declarations are silently fine. Reach for `let`/`const` only inside a function body, a `for`-loop header, or an explicit `{ ... }` block where the name will never be reused. Data does not survive between turns — use `writeFile`/`readFile` to persist across messages.
+The runtime persists within a single turn but resets between user messages. **Use `var` for top-level names — NEVER `let` or `const`.** A `let` or `const` declared in one `run_js` call cannot be redeclared in a follow-up call within the same turn — it throws `SyntaxError: Identifier has already been declared` and aborts the call. `var` re-declarations are silently fine. Reach for `let`/`const` only inside a function body, a `for`-loop header, or an explicit `{ ... }` block where the name will never be reused. Data does not survive between turns — use `fileWrite`/`fileRead` to persist across messages.
 
 Key patterns:
 ```javascript
@@ -123,9 +123,9 @@ httpRequest("https://api.example.com/data", { method: "POST", headers: { "X-Key"
 {{ end -}}
 {{- if .Directories }}
 // Read and write files (S3-like storage; slashless paths).
-var csv = readFile("uploads/orders.csv")
-writeFile("tmp/q1.csv", csvData, "text/csv")
-listDir("uploads/")           // [{path, filename, contentType, size, lastModified}]
+var csv = fileRead("uploads/orders.csv")
+fileWrite("tmp/q1.csv", csvData, "text/csv")
+fileList("uploads/")           // [{path, filename, contentType, size, lastModified}]
 {{ end }}
 // Share media with the user / channel / calling sibling. MEDIA ONLY —
 // types are `image`, `file`, `audio`, `video`. Prose goes in your normal
@@ -143,10 +143,10 @@ output([
 Users can attach files to their messages. When files are attached, you'll see metadata (filename, content type, size, path) appended to the user's message. Each attached file lives in storage — chat uploads land under `tmp/{uuid}-{filename}`:
 ```javascript
 // Read the file contents as UTF-8 text (CSV, JSON, plain text, etc.)
-readFile("tmp/a1b2c3d4-report.csv")
+fileRead("tmp/a1b2c3d4-report.csv")
 
 // Get file metadata: { path, filename, contentType, size, lastModified }
-statFile("tmp/a1b2c3d4-report.csv")
+fileStat("tmp/a1b2c3d4-report.csv")
 {{- if .Capabilities.Vision }}
 
 // Ask the platform's vision model to describe / answer about an image,
@@ -155,7 +155,8 @@ analyzeImage("tmp/a1b2c3d4-screenshot.png", "What error is shown?")
 {{- end }}
 ```
 
-- Use `readFile(path)` for text-based files you want to process in code (CSV, JSON, text). Use `readBytes(path)` for binary.
+- Use `fileRead(path)` for text-based files you want to process in code (CSV, JSON, text). Use `fileReadBytes(path)` for binary.
+- For files too big to read whole (`fileRead` caps at 16 MiB): scan with `fileGrep`/`fileHead`/`fileTail`/`fileLines` (text) or `fileReadRangeBytes` (exact bytes), and edit by streaming — `fileEditLines(path, {from, count, text})` (line-addressed) or `fileSed(path, "s/old/new/g")` (sed subset). Pass `dst === src` to edit in place.
 {{- if .Capabilities.Vision }}
 - Use `analyzeImage(path, question?)` to ask the vision model about a stored image — works regardless of whether the chat model has vision capability.
 {{- end }}
@@ -171,7 +172,7 @@ Storage paths are not URLs and the user has no direct access to them — telling
 {{- if not .CallerAccess.IsPublic }}
 2. **The agent's authenticated storage URL** — every directory with non-internal Read access is reachable at `{{ .AgentRouteURL }}/__air/storage/{path}` (e.g. `reports/q1.pdf` → `{{ .AgentRouteURL }}/__air/storage/reports/q1.pdf`). Requires the user to be a member (browser redirects through login if no session cookie). Use this when you want to give the user a clickable link they can bookmark or share within the team — it stays valid as long as the file exists.
 
-3. **`shareFileURL(path, opts?)`** — returns a presigned, **time-limited, unauthenticated** URL `{url, expiresAtMs}`. Default expiry 1 hour, capped at 24h via `{expiresInMinutes: N}`. Use this for one-off external shares, embedding in markdown (`[report](url)`), or handing to recipients outside the agent's membership. **Do not** use this when option 1 or 2 fits — presigned URLs leak access if the link gets forwarded.
+3. **`fileShareURL(path, opts?)`** — returns a presigned, **time-limited, unauthenticated** URL `{url, expiresAtMs}`. Default expiry 1 hour, capped at 24h via `{expiresInMinutes: N}`. Use this for one-off external shares, embedding in markdown (`[report](url)`), or handing to recipients outside the agent's membership. **Do not** use this when option 1 or 2 fits — presigned URLs leak access if the link gets forwarded.
 {{- end }}
 ```javascript
 // Pick option 1 for "here it is" in chat
@@ -182,7 +183,7 @@ output({ type: "file", source: "reports/q1.pdf", filename: "Q1 Report.pdf" })
 "View: {{ .AgentRouteURL }}/__air/storage/reports/q1.pdf"
 
 // Pick option 3 for an external one-off share — embed the URL in your normal reply
-var link = shareFileURL("reports/q1.pdf", { expiresInMinutes: 60 })
+var link = fileShareURL("reports/q1.pdf", { expiresInMinutes: 60 })
 "Download (expires in 1h): " + link.url
 {{- end }}
 ```
@@ -212,7 +213,7 @@ The `declare function` blocks below are TypeScript declarations describing the a
 
 ```typescript
 // FilePath / DirPath are string aliases for storage paths owned by this
-// agent. Pass paths returned by writeFile / generateImage / sibling tools
+// agent. Pass paths returned by fileWrite / generateImage / sibling tools
 // directly; never invent paths. When passing a FilePath to a sibling agent
 // (agent_<slug>.tool(...)) or to an external MCP client, the platform
 // transparently copies the file across storage boundaries — you keep
@@ -330,9 +331,9 @@ Authorization on the target is evaluated against the original user's access leve
 
 ## Storage directories
 
-These are the S3 paths you can touch on this run. `read` lets you `readFile`/`readBytes`/`statFile`; `write` lets you `writeFile`/`deleteFile`; `list` lets you `listDir`. A `-` means you don't have that cap. Paths are slashless prefixes (no leading `/`, no trailing `/`) — join with a filename like `reports/q1.csv`.
+These are the S3 paths you can touch on this run. `read` lets you `fileRead`/`fileReadBytes`/`fileStat`; `write` lets you `fileWrite`/`fileDelete`; `list` lets you `fileList`. A `-` means you don't have that cap. Paths are slashless prefixes (no leading `/`, no trailing `/`) — join with a filename like `reports/q1.csv`.
 
-**Scoped directories** carry an extra segment in the path so each caller (user / conversation / one tool call) has its own isolated slot — e.g. `<dir>/user-<id>/...`. You never construct the scope segment yourself; `writeFile("<dir>/foo.jpg", ...)` returns the scoped path, and the path you receive is the path you read back with. Don't strip or substitute scope segments — they're the access ticket.
+**Scoped directories** carry an extra segment in the path so each caller (user / conversation / one tool call) has its own isolated slot — e.g. `<dir>/user-<id>/...`. You never construct the scope segment yourself; `fileWrite("<dir>/foo.jpg", ...)` returns the scoped path, and the path you receive is the path you read back with. Don't strip or substitute scope segments — they're the access ticket.
 {{ range .Directories }}
 - `{{ .Path }}/` — read: {{ if .Read }}{{ .Read }}{{ else }}-{{ end }}, write: {{ if .Write }}{{ .Write }}{{ else }}-{{ end }}, list: {{ if .List }}{{ .List }}{{ else }}-{{ end }}{{ if .Scope }} [scope: per-{{ .Scope }}]{{ end }}{{ if .Description }} — {{ .Description }}{{ end }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{- end }}

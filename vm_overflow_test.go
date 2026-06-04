@@ -193,8 +193,8 @@ func TestVMBinding_ConnRequestJSON_OverflowOmitsData(t *testing.T) {
 		t.Fatalf("bodySavedTo missing; envelope=%v", env)
 	}
 	note, _ := env["note"].(string)
-	if !strings.Contains(note, "JSON.parse(readFile") {
-		t.Errorf("requestJSON overflow note must point at JSON.parse(readFile); got %q", note)
+	if !strings.Contains(note, "JSON.parse(fileRead") {
+		t.Errorf("requestJSON overflow note must point at JSON.parse(fileRead); got %q", note)
 	}
 }
 

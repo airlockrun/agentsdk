@@ -335,7 +335,7 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 	}
 
 	// Save full output to the framework-owned /tmp directory. The LLM reads
-	// it back via readFile(path) inside run_js.
+	// it back via fileRead(path) inside run_js.
 	path := reservedTmpPath + "/output-" + randomHex(4) + ".txt"
 	if _, err := run.agent.WriteFile(ctx, path, strings.NewReader(output), "text/plain"); err != nil {
 		// If save fails, just truncate without a path.
@@ -347,7 +347,7 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 	return output[:truncatePreviewLen] + fmt.Sprintf(
 		"\n\n[Output truncated (%dKB → %dKB shown). Full result saved at %q.\n"+
 			"Process it inside run_js without returning the full content:\n"+
-			"  var data = readFile(%q)\n"+
+			"  var data = fileRead(%q)\n"+
 			"  var parsed = JSON.parse(data) // or process as text\n"+
 			"  parsed.slice(0, 10)           // last expression = return value; only what you need\n"+
 			"]",
@@ -407,28 +407,37 @@ func buildToolDescription(agent *Agent, callerAccess Access) string {
 
 	// Built-in bindings.
 	b.WriteString("\nBuilt-in bindings:\n")
-	b.WriteString("- conn_{slug}.request(method, path, body?, headers?) → {status, contentType, size, body?, bodyPreview?, bodySavedTo?, note?} — HTTP via connection. Responses ≤8KB return inline as `body`; larger ones are auto-saved to `bodySavedTo` (a storage path) with `bodyPreview` holding the first ~1KB. When `bodySavedTo` is set, `body` is absent — read the full payload with readFile(bodySavedTo). `headers` is an optional {Name:value} object merged on top of the connection's declared headers; set a value to \"\" to suppress one.\n")
-	b.WriteString("- conn_{slug}.requestJSON(method, path, body?, headers?) → {status, contentType, size, data?, bodyPreview?, bodySavedTo?, note?} — JSON HTTP via connection. Same headers semantics as request(). Responses ≤8KB are JSON.parse'd into `data`; larger ones spill to `bodySavedTo` (read back with JSON.parse(readFile(bodySavedTo))).\n")
+	b.WriteString("- conn_{slug}.request(method, path, body?, headers?) → {status, contentType, size, body?, bodyPreview?, bodySavedTo?, note?} — HTTP via connection. Responses ≤8KB return inline as `body`; larger ones are auto-saved to `bodySavedTo` (a storage path) with `bodyPreview` holding the first ~1KB. When `bodySavedTo` is set, `body` is absent — read the full payload with fileRead(bodySavedTo). `headers` is an optional {Name:value} object merged on top of the connection's declared headers; set a value to \"\" to suppress one.\n")
+	b.WriteString("- conn_{slug}.requestJSON(method, path, body?, headers?) → {status, contentType, size, data?, bodyPreview?, bodySavedTo?, note?} — JSON HTTP via connection. Same headers semantics as request(). Responses ≤8KB are JSON.parse'd into `data`; larger ones spill to `bodySavedTo` (read back with JSON.parse(fileRead(bodySavedTo))).\n")
 	b.WriteString("- mcp_{slug}.<tool_name>(args?) — call MCP tool. The per-tool typed methods are declared in the run-env prompt; one method per tool the server advertised at sync time.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {
 		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — read-only SQL against the agent's Postgres schema.\n")
 		b.WriteString("- execDB(sql, ...params) → {rowsAffected: N} — write SQL (INSERT/UPDATE/DELETE) against the agent's Postgres schema.\n")
 	}
-	b.WriteString("- readFile(path) → string — read a file as UTF-8 text (most common case). `path` is an S3-style storage path with no leading slash, e.g. \"uploads/orders.csv\".\n")
-	b.WriteString("- readBytes(path) → Uint8Array — read a file as binary bytes. Use for images, PDFs, anything not text.\n")
-	b.WriteString("- writeFile(path, data, contentType?) → FileInfo — write a file. `data` is a string or Uint8Array. `contentType` is optional (auto-detected from extension when absent). Returns {path, filename, contentType, size, lastModified}.\n")
-	b.WriteString("- listDir(path, opts?) → FileInfo[] — list files. Non-recursive by default (one level only); pass {recursive: true} to walk the subtree. `path` may end with `/`.\n")
-	b.WriteString("- statFile(path) → FileInfo — metadata for a single file.\n")
-	b.WriteString("- fileExists(path) → boolean — sugar around statFile.\n")
-	b.WriteString("- deleteFile(path) — remove a file. Idempotent.\n")
+	b.WriteString("- fileRead(path) → string — read a whole file as UTF-8 text (most common case). `path` is an S3-style storage path with no leading slash, e.g. \"uploads/orders.csv\". Capped at 16 MiB — for larger files use fileGrep/fileHead/fileTail/fileLines (text) or fileReadRangeBytes (bytes).\n")
+	b.WriteString("- fileReadBytes(path) → Uint8Array — read a whole file as binary bytes (images, PDFs, anything not text). Same 16 MiB cap as fileRead; for a window of a large binary use fileReadRangeBytes.\n")
+	b.WriteString("- fileReadRangeBytes(path, start, length) → Uint8Array — read an exact byte window (`start` 0-based, `length` ≤ 16 MiB) without loading the whole file. The only random-access primitive for a file larger than the 16 MiB cap; makes no charset assumption — for text, address by line (fileLines/fileGrep) instead.\n")
+	b.WriteString("- fileGrep(path, pattern, opts?) → string — return lines of a (possibly huge) file matching the `pattern` regex, joined by newlines. opts: {ignoreCase?, invert?, lineNumbers?, max?}. Output is bounded; a trailing note reports any matches dropped past the cap.\n")
+	b.WriteString("- fileHead(path, n?) → string · fileTail(path, n?) → string — first / last `n` lines (default 10). fileTail fetches only the trailing window, so it's cheap on large files.\n")
+	b.WriteString("- fileLines(path, start, count) → string — a line window: `count` lines (default 10) starting at the 1-based line `start` (default 1). Page through a large text file without loading it whole.\n")
+	b.WriteString("- fileWrite(path, data, contentType?) → FileInfo — write (overwrite) a whole file. `data` is a string or Uint8Array. `contentType` is optional (auto-detected from extension when absent). Returns {path, filename, contentType, size, lastModified}.\n")
+	b.WriteString("- fileList(path, opts?) → FileInfo[] — list files. Non-recursive by default (one level only); pass {recursive: true} to walk the subtree. `path` may end with `/`.\n")
+	b.WriteString("- fileStat(path) → FileInfo — metadata for a single file.\n")
+	b.WriteString("- fileExists(path) → boolean — sugar around fileStat.\n")
+	b.WriteString("- fileDelete(path) — remove a file. Idempotent.\n")
+	b.WriteString("- fileEncode(src, codec, dst?) · fileDecode(src, codec, dst?) — file→file byte transform; codec is base64 | base64url | hex | gzip. Streams the whole file (no size cap). Omit `dst` for an auto scratch path: a small text result returns {content, size}, otherwise {savedTo, preview, size}. Give `dst` (≠ src) to write a chosen path → {savedTo, size}.\n")
+	b.WriteString("- fileDecodeText(src, charset, dst?) — decode a file in another charset (latin1, iso-8859-1, windows-1252, cp1252, utf-16, utf-16le, utf-16be) to UTF-8 text. Same dst/return semantics as fileEncode.\n")
+	b.WriteString("- fileEditLines(src, edits, dst?) — edit a (possibly huge) file by 1-based line number, streaming so size doesn't matter. `edits` is one object or an array: {from, count, text} replaces lines [from,from+count) with text · {from, count} deletes them · {from, count:0, text} inserts text before line `from` · {append:text} appends at EOF. Include trailing newlines in `text`. Locate lines first with fileGrep({lineNumbers:true})/fileLines.\n")
+	b.WriteString("- fileSed(src, script, dst?) — apply a sed script (one command per line) in a single streaming pass. Addresses: N · N,M · /regex/ · $ (last line). Commands: s/regex/replacement/[g][i] (g=all in line, i=ignore-case; backrefs are $1) · d (delete) · c\\text (change) · i\\text (insert before) · a\\text (append after). e.g. \"s/ERROR/WARN/gi\" or \"/^#/d\".\n")
+	b.WriteString("  For both editors: omit `dst` → result goes to a scratch path (small text inline as {content,size}, else {savedTo,preview,size}); pass `dst` to write a path, or `dst === src` to edit in place. Returns {savedTo,size} when written.\n")
 	b.WriteString("- output(parts) — share media with the user (web), the channel (bridge), or the calling sibling (A2A). `parts` is a single object or an array. Each part's `type` is one of `image` / `file` / `audio` / `video`. Prose goes in your normal reply, not here. Per-part fields: {type, text, source, url, data, filename, mimeType, alt, duration}. `text` on a media part is its caption. `source` accepts a storage path.\n")
 	b.WriteString("- log(message) — emit a log line visible in the run timeline.\n")
 	b.WriteString("- webSearch(query, count?) → {results: [{title, url, snippet}], synthesis?, provider}\n")
-	b.WriteString("- httpRequest(url, opts?) → {status, headers, contentType, size, body?, savedTo?, bodyPreview?, note?} — HTML is converted to markdown by default; binary and large/over-8KB responses are auto-saved to storage. `size` is always the byte length of the content (inline body, converted markdown, or the saved object) — never 0 when there is content. When a response is saved, `body` is absent: `savedTo` is the storage path (pass to readFile(...) / attachToContext(...)) and `bodyPreview` holds the first ~1KB so you can tell what it is without re-reading. `headers` is a curated subset by default (content-type, length, disposition, location, retry-after, etag, last-modified, link, rate-limit); pass {allHeaders:true} for the full set. Opts: {method, headers, body, timeout, saveAs, raw, allHeaders}; `saveAs` is a storage path with no leading slash.\n")
-	b.WriteString("- attachToContext(path) → string — load a stored file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files use readFile(path) instead.\n")
+	b.WriteString("- httpRequest(url, opts?) → {status, headers, contentType, size, body?, savedTo?, bodyPreview?, note?} — HTML is converted to markdown by default; binary and large/over-8KB responses are auto-saved to storage. `size` is always the byte length of the content (inline body, converted markdown, or the saved object) — never 0 when there is content. When a response is saved, `body` is absent: `savedTo` is the storage path (pass to fileRead(...) / attachToContext(...)) and `bodyPreview` holds the first ~1KB so you can tell what it is without re-reading. `headers` is a curated subset by default (content-type, length, disposition, location, retry-after, etag, last-modified, link, rate-limit); pass {allHeaders:true} for the full set. Opts: {method, headers, body, timeout, saveAs, raw, allHeaders}; `saveAs` is a storage path with no leading slash.\n")
+	b.WriteString("- attachToContext(path) → string — load a stored file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files use fileRead(path) instead.\n")
 	b.WriteString("- analyzeImage(path, question?) → string — sends a stored image to the platform's vision model and returns its reply. `question` defaults to \"Describe this image.\" Use this when the current chat model lacks vision; it routes to the configured vision_model regardless of which exec model is running.\n")
 	b.WriteString("- transcribeAudio(path, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. opts: {language?, prompt?, mimeType?}.\n")
-	b.WriteString("- generateImage(prompt, opts?) → {file: FileInfo, mimeType, size} — text-to-image; result auto-saved. Pass `file.path` to output({source: file.path, ...}) or readBytes(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
+	b.WriteString("- generateImage(prompt, opts?) → {file: FileInfo, mimeType, size} — text-to-image; result auto-saved. Pass `file.path` to output({source: file.path, ...}) or fileReadBytes(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
 	b.WriteString("- speak(text, opts?) → {file: FileInfo, mimeType, size} — text-to-speech; result auto-saved. Pass `file.path` to output({source: file.path, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
 	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
 	if accessSatisfies(callerAccess, AccessAdmin) {

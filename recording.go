@@ -46,6 +46,9 @@ func (r *run) hasActionErrors() bool {
 }
 
 func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, errorKind, panicTrace string, checkpoint json.RawMessage) error {
+	// The run is terminal here (every dispatcher path funnels through this
+	// finalizer); drop the local-disk read cache before flushing.
+	r.cleanupScratch()
 	body := struct {
 		RunID      string          `json:"runId"`
 		Status     string          `json:"status"`

@@ -114,11 +114,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("deleteFile calls backend", func(t *testing.T) {
+	t.Run("fileDelete calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `deleteFile("uploads/a.txt")`)
+		_, err := executeJS(run.vmRuntime(), `fileDelete("uploads/a.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -131,11 +131,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("listDir returns array", func(t *testing.T) {
+	t.Run("fileList returns array", func(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `JSON.stringify(listDir("uploads/"))`)
+		result, err := executeJS(run.vmRuntime(), `JSON.stringify(fileList("uploads/"))`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -144,11 +144,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("writeFile calls backend with absolute path", func(t *testing.T) {
+	t.Run("fileWrite calls backend with absolute path", func(t *testing.T) {
 		a, mock := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `writeFile("uploads/test.txt", "hello", "text/plain")`)
+		_, err := executeJS(run.vmRuntime(), `fileWrite("uploads/test.txt", "hello", "text/plain")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,11 +158,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("readFile calls backend with absolute path", func(t *testing.T) {
+	t.Run("fileRead calls backend with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `readFile("uploads/test.txt")`)
+		result, err := executeJS(run.vmRuntime(), `fileRead("uploads/test.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -171,8 +171,8 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("readBytes returns a usable Uint8Array", func(t *testing.T) {
-		// Regression: readBytes used to return a raw ArrayBuffer, which
+	t.Run("fileReadBytes returns a usable Uint8Array", func(t *testing.T) {
+		// Regression: fileReadBytes used to return a raw ArrayBuffer, which
 		// isn't iterable and has no .length, so `Array.from(b.slice(...))`
 		// silently produced []. The fix wraps in Uint8Array via the
 		// global TypedArray constructor — invoke as a constructor (not
@@ -186,7 +186,7 @@ func TestVM(t *testing.T) {
 		// .slice returns a typed array with the right bytes, and
 		// Array.from materializes a real number array.
 		result, err := executeJS(run.vmRuntime(), `
-			var b = readBytes("uploads/test.txt");
+			var b = fileReadBytes("uploads/test.txt");
 			JSON.stringify({
 				ctor: b.constructor.name,
 				length: b.length,
@@ -273,11 +273,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("statFile returns FileInfo with absolute path", func(t *testing.T) {
+	t.Run("fileStat returns FileInfo with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `var fi = statFile("uploads/test.txt"); fi.path + ":" + fi.size`)
+		result, err := executeJS(run.vmRuntime(), `var fi = fileStat("uploads/test.txt"); fi.path + ":" + fi.size`)
 		if err != nil {
 			t.Fatal(err)
 		}

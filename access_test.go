@@ -99,7 +99,7 @@ func TestCheckFileAccess_FailClosed(t *testing.T) {
 }
 
 // TestCheckFileAccess_DeleteFoldsIntoWrite verifies that delete folds
-// into the Write cap: a caller with Write can call deleteFile (there is
+// into the Write cap: a caller with Write can call fileDelete (there is
 // no separate delete cap).
 func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
 	a, _ := testAgent(t)
@@ -109,7 +109,7 @@ func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
 	ctx := WithCaller(context.Background(), Caller{Access: AccessUser})
 	// OpWrite is the operation tag for deletes. The agent.DeleteFile
 	// path bypasses CheckFileAccess (trusted), but the VM binding for
-	// deleteFile() goes through CheckFileAccess(OpWrite) — verify the
+	// fileDelete() goes through CheckFileAccess(OpWrite) — verify the
 	// gate accepts a user-level caller.
 	if err := a.CheckFileAccess(ctx, "uploads/foo", OpWrite); err != nil {
 		t.Fatalf("expected user write to succeed, got %v", err)

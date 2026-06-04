@@ -38,6 +38,8 @@ type run struct {
 	attachedKeys        map[string]struct{} // keys attached this run for idempotency
 	pendingLogs         []LogEntry          // logs from current executeJS call, drained after each execution
 	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result
+	fileCache           *fileCache          // per-run local-disk read cache (large-file reads spill here)
+	cleanupOnce         sync.Once           // guards cleanupScratch so run.complete can call it on every path
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {
@@ -52,6 +54,7 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 		conversationID: conversationID,
 		ctx:            withGoWall(ctx, gw),
 		gw:             gw,
+		fileCache:      newFileCache(),
 		// Default to admin — webhook/cron/route handlers and tests are
 		// trusted contexts. /prompt overrides this with the per-turn
 		// CallerAccess from PromptInput.

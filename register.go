@@ -192,7 +192,7 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 
 // RegisterDirectory declares an S3-backed directory at the given path,
 // gated by independent Read / Write / List caps. Inside run_js the flat
-// verbs (readFile, writeFile, listDir, deleteFile, statFile, readBytes,
+// verbs (fileRead, fileWrite, fileList, fileDelete, fileStat, fileReadBytes,
 // fileExists) check the calling run's access against the directory's
 // caps via CheckFileAccess.
 //

@@ -16,7 +16,7 @@ import (
 
 // mediaResult is the JS-facing return value for generateImage / speak.
 // Path is the absolute storage path the LLM uses for downstream
-// output / attachToContext / readBytes calls.
+// output / attachToContext / fileReadBytes calls.
 type mediaResult struct {
 	Path     string `json:"path"`
 	MimeType string `json:"mimeType"`

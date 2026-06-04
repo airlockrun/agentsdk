@@ -167,7 +167,7 @@ func dirCap(d *Directory, op FileOp) Access {
 
 // hasPublicDirCap reports whether at least one registered directory grants
 // AccessPublic for the given op. Used at VM bind time so file primitives
-// (readFile, writeFile, listDir, etc.) appear in a public-caller's
+// (fileRead, fileWrite, fileList, etc.) appear in a public-caller's
 // runtime only when there's actually some directory they could touch —
 // keeps the public attack surface tight and avoids dangling bindings
 // that would just throw on every CheckFileAccess.
@@ -317,6 +317,32 @@ func (a *Agent) OpenFile(ctx context.Context, path string) (io.ReadCloser, error
 		return nil, err
 	}
 	return a.openFileRaw(ctx, canon)
+}
+
+// OpenFileRange streams the inclusive byte range [start, end] of a file
+// (HTTP Range semantics). The returned ReadCloser must be closed by the
+// caller. Trusted: no access check.
+func (a *Agent) OpenFileRange(ctx context.Context, path string, start, end int64) (io.ReadCloser, error) {
+	canon, err := normalizePath(path)
+	if err != nil {
+		return nil, err
+	}
+	return a.openFileRangeRaw(ctx, canon, start, end)
+}
+
+// ReadRange reads the inclusive byte range [start, end] of a file fully into
+// memory. Trusted: no access check.
+func (a *Agent) ReadRange(ctx context.Context, path string, start, end int64) ([]byte, error) {
+	if gw := goWallFrom(ctx); gw != nil {
+		gw.enter()
+		defer gw.exit()
+	}
+	rc, err := a.OpenFileRange(ctx, path, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
 // ReadFile reads a file fully into memory. For very large files prefer
@@ -492,12 +518,12 @@ func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, c
 	}
 	resp, err := a.client.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("agentsdk: writeFile %s: %w", path, err)
+		return fmt.Errorf("agentsdk: fileWrite %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: writeFile %s: status %d: %s", path, resp.StatusCode, string(b))
+		return fmt.Errorf("agentsdk: fileWrite %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return nil
 }
@@ -518,6 +544,24 @@ func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, er
 	return resp.Body, nil
 }
 
+// openFileRangeRaw streams the inclusive byte range [start, end] via a ranged
+// GET. A satisfiable range returns 206; the caller closes resp.Body.
+func (a *Agent) openFileRangeRaw(ctx context.Context, path string, start, end int64) (io.ReadCloser, error) {
+	resp, err := a.client.getRange(ctx, "/api/agent/storage/"+path, start, end)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == 404 {
+		resp.Body.Close()
+		return nil, ErrNotFound
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		resp.Body.Close()
+		return nil, fmt.Errorf("agentsdk: openFileRange %s: status %d", path, resp.StatusCode)
+	}
+	return resp.Body, nil
+}
+
 func (a *Agent) deleteFileRaw(ctx context.Context, path string) error {
 	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage/"+path, nil)
 	if err != nil {
@@ -526,7 +570,7 @@ func (a *Agent) deleteFileRaw(ctx context.Context, path string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: deleteFile %s: status %d: %s", path, resp.StatusCode, string(b))
+		return fmt.Errorf("agentsdk: fileDelete %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return nil
 }

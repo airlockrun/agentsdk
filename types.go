@@ -428,7 +428,7 @@ type Directory struct {
 	// stay forever — that's the default for normal builder directories.
 	// The framework's /tmp registers with 72 to garbage-collect chat
 	// uploads and generated media; tools that produce throwaway artifacts
-	// (e.g. AI-generated images served via shareFileURL with a 1h URL
+	// (e.g. AI-generated images served via fileShareURL with a 1h URL
 	// expiry) should set a matching short TTL so the bytes go away when
 	// the URL does.
 	RetentionHours int
@@ -1069,7 +1069,7 @@ type HTTPResponse struct {
 	// which is 0 for chunked/unknown).
 	Size int `json:"size"`
 	// BodyPreview is the head (~1 KB) of a saved text/markdown body so
-	// the result is legible without a second readFile. Empty for binary
+	// the result is legible without a second fileRead. Empty for binary
 	// or inline (Body carries the whole thing) responses.
 	BodyPreview string `json:"bodyPreview,omitempty"`
 	SavedTo     string `json:"savedTo,omitempty"` // S3 key if body was auto-saved

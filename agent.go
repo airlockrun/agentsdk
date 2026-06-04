@@ -156,7 +156,7 @@ func New(cfg Config) *Agent {
 	// A2A inbox: airlock copies file args from sibling callers into
 	// agents/{this}/__a2a/{callerRun}/... before forwarding the tool
 	// call. Tool bodies read it transparently — the path arrives in
-	// the arg, not via any direct readFile of "__a2a/...". Admin-only
+	// the arg, not via any direct fileRead of "__a2a/...". Admin-only
 	// because nobody should be poking at it from JS.
 	// Inbox for files airlock places here on behalf of an external
 	// caller (A2A tool args, prompt-meta files, inline MCP uploads).
@@ -179,7 +179,7 @@ func New(cfg Config) *Agent {
 	})
 	// Outbox: airlock copies file results returned from sibling
 	// agents into agents/{this}/siblings/<sibling-slug>/<path>.
-	// Caller's run_js can readFile() these naturally; longer retention
+	// Caller's run_js can fileRead() these naturally; longer retention
 	// than the inbox because the caller may want to keep working with
 	// the file across follow-up turns.
 	a.directories = append(a.directories, &Directory{

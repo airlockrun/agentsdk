@@ -16,8 +16,8 @@ func TestCapJSBytes(t *testing.T) {
 	vm := goja.New()
 
 	t.Run("under cap is a no-op", func(t *testing.T) {
-		capJSBytes(vm, "readFile", maxJSValueBytes-1)
-		capJSBytes(vm, "readFile", maxJSValueBytes) // exactly at cap is allowed
+		capJSBytes(vm, "fileRead", maxJSValueBytes-1)
+		capJSBytes(vm, "fileRead", maxJSValueBytes) // exactly at cap is allowed
 	})
 
 	t.Run("over cap aborts with actionable error", func(t *testing.T) {
@@ -31,13 +31,13 @@ func TestCapJSBytes(t *testing.T) {
 				t.Fatalf("panic value is %T, want goja.Value", r)
 			}
 			msg := v.ToString().String()
-			for _, want := range []string{"readFile", "too large for run_js", "storage path"} {
+			for _, want := range []string{"fileRead", "too large for run_js", "storage path"} {
 				if !strings.Contains(msg, want) {
 					t.Fatalf("error %q missing %q", msg, want)
 				}
 			}
 		}()
-		capJSBytes(vm, "readFile", maxJSValueBytes+1)
+		capJSBytes(vm, "fileRead", maxJSValueBytes+1)
 	})
 }
 

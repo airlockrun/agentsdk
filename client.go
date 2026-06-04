@@ -58,6 +58,26 @@ func (c *airlockClient) do(ctx context.Context, method, path string, body io.Rea
 	return resp, nil
 }
 
+// getRange issues a GET with a byte-range header for the inclusive range
+// [start, end] (HTTP Range semantics). Mirrors do's auth header and goWall
+// accounting; the caller closes resp.Body.
+func (c *airlockClient) getRange(ctx context.Context, path string, start, end int64) (*http.Response, error) {
+	req, err := c.newRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	if gw := goWallFrom(ctx); gw != nil {
+		gw.enter()
+		defer gw.exit()
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("agentsdk: GET %s (range): %w", path, err)
+	}
+	return resp, nil
+}
+
 // doJSON sends a JSON request and decodes the JSON response.
 // Returns *AuthRequiredError on 402, generic error on non-2xx.
 func (c *airlockClient) doJSON(ctx context.Context, method, path string, reqBody, result any) error {
