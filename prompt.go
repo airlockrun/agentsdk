@@ -63,6 +63,9 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		run := newRun(agent, runID, bridgeID, input.ConversationID, ctx)
 		run.parentRunID = parentRunID
 		run.userID = userID
+		run.platform = input.Platform
+		run.userDisplayName = input.UserDisplayName
+		run.userEmail = input.UserEmail
 		// Stash the per-turn access level for vm.go's bind-time gating.
 		// Empty defaults to AccessUser (safest broad default for a /prompt).
 		if input.CallerAccess != "" {

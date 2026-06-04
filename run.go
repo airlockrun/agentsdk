@@ -40,6 +40,9 @@ type run struct {
 	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result
 	fileCache           *fileCache          // per-run local-disk read cache (large-file reads spill here)
 	cleanupOnce         sync.Once           // guards cleanupScratch so run.complete can call it on every path
+	platform            string              // channel for the <env> block (web/telegram/discord/a2a); set explicitly per dispatch
+	userDisplayName     string              // originating user's display name for <env> (empty when none)
+	userEmail           string              // originating user's email for <env> (empty when none)
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {

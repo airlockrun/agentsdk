@@ -50,6 +50,15 @@ type AgentData struct {
 	Siblings            []SiblingInfo
 	Directories         []DirInfo
 	ExecEndpoints       []ExecEndpointInfo
+
+	// Per-turn environment, rendered into the <env> block. Each is set
+	// explicitly by the dispatch path (never inferred) and omitted from
+	// the block when empty.
+	Date         string
+	Platform     string // web | telegram | discord | a2a
+	UserName     string
+	UserEmail    string
+	Conversation string
 }
 
 // Capabilities mirrors agentsdk.Capabilities — duplicated here to

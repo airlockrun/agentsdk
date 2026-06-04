@@ -251,7 +251,18 @@ func (a *Agent) DB() *AgentDB {
 //
 // Unknown caller access values panic — they can only happen via a
 // wire-shape bug, and silently mapping would mask it.
-func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, runModalities []string) string {
+// promptEnv is the per-turn environment rendered into the prompt's <env>
+// block. Every field is set explicitly by the caller (never inferred); an
+// empty field is simply omitted from the block.
+type promptEnv struct {
+	Date         string
+	Platform     string
+	UserName     string
+	UserEmail    string
+	Conversation string
+}
+
+func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, runModalities []string, env promptEnv) string {
 	switch caller {
 	case AccessAdmin, AccessUser, AccessPublic, "":
 		// ok
@@ -259,6 +270,11 @@ func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, r
 		panic("agentsdk: renderSystemPrompt: unknown caller access " + string(caller))
 	}
 	data := a.buildPromptData(caller, visibleSiblings, runModalities)
+	data.Date = env.Date
+	data.Platform = env.Platform
+	data.UserName = env.UserName
+	data.UserEmail = env.UserEmail
+	data.Conversation = env.Conversation
 	tier := string(caller)
 	if tier == "" {
 		tier = string(AccessUser)

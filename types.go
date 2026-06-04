@@ -393,6 +393,14 @@ type PromptInput struct {
 	// suspension that still reaches the triggering surface by another path
 	// (e.g. an A2A-delegated confirmation) is auto-denied there instead.
 	AutoConfirm bool `json:"autoConfirm,omitempty"`
+
+	// Platform / UserDisplayName / UserEmail are per-turn context for the
+	// prompt's <env> block. Airlock sets Platform explicitly per dispatch
+	// path (web/telegram/discord/a2a — never inferred) and resolves the
+	// originating user's name/email; any may be empty (then omitted).
+	Platform        string `json:"platform,omitempty"`
+	UserDisplayName string `json:"userDisplayName,omitempty"`
+	UserEmail       string `json:"userEmail,omitempty"`
 }
 
 // --- Directories ---
