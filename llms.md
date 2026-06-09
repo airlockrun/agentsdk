@@ -473,37 +473,70 @@ agent.RegisterRoute(&agentsdk.Route{
 - `AccessPublic` — anyone, no auth. **Only when the user explicitly asks** for
   a public-facing page. Never default to public.
 
-### templ + htmx + pico.css — HTML UI
+### templ + htmx + Tailwind v4 — HTML UI
 
-Agents use [templ](https://templ.guide) for type-safe HTML and
-[htmx](https://htmx.org) for interactivity. **[pico.css](https://picocss.com)
-is the default UI library** — semantic HTML (`<main class="container">`,
-`<article>`, `<form>`, `<button>`, `<table>`) auto-styles; the classed build's
-opt-in helpers (`.container`, `.grid`, `.secondary`, `.outline`, …) are there
-when you need them. Use pico unless the user asks for a different look. If
-you pick a different styling approach (Tailwind, plain CSS, another classless
-framework), **record that decision in `NOTES.md`** so future upgrades don't
-half-revert it.
+Agents use [templ](https://templ.guide) for type-safe HTML,
+[htmx](https://htmx.org) for interactivity, and
+[Tailwind v4](https://tailwindcss.com) for styling.
 
-htmx and pico.css are bundled into agentsdk and served same-origin under
-`/__air/assets/` — the scaffold layout references them via
-`agentsdk.Assets.HTMX` and `agentsdk.Assets.Pico`. URLs are versioned so a
-bumped agentsdk auto-invalidates the browser cache. Current served versions
-are `agentsdk.HTMXVersion` and `agentsdk.PicoVersion` — read them from
-`/libs/agentsdk/assets.go` if you need the exact strings (for SRI-style refs
-elsewhere, etc.).
+**htmx is bundled into agentsdk** and served same-origin from
+`/__air/assets/htmx-{version}.min.js`. The scaffold layout references
+it via `agentsdk.Assets.HTMX`; the version is `agentsdk.HTMXVersion`.
 
-**`/__air/assets/*` is framework-reserved** (the runtime ships htmx, pico, and
-similar platform-wide essentials there). For YOUR own static files — icons,
-images, page-specific CSS, custom fonts — embed them with `//go:embed` and
-serve via a `RegisterRoute` under a different prefix, e.g. `/static/{name}`.
-Don't add files to `/__air/assets/`.
+**Tailwind is per-agent.** The scaffold ships:
 
-**Before any Go command (`go build`, `go vet`, `go test`, ...), run
-`go tool templ generate` first.** The scaffold contains only `.templ` source;
-without generation, Go reports misleading errors like "package agent/views is
-not in std". Re-run whenever you modify a `.templ`. The Docker build re-runs
-it; you don't commit generated files.
+- `styles/app.css` — the source. Edit this to brand the agent (the
+  `@theme` block of tokens, custom `@font-face` rules, hand-rolled
+  components under `@layer components`).
+- `views/static/app.css` — the compiled output. Built by the Docker
+  step `tailwindcss -i styles/app.css -o views/static/app.css
+  --minify`. Gitignored. Never edit by hand.
+- `views/assets.go` — `//go:embed`s the compiled output and exposes
+  `views.AppCSS` + `views.AppCSSPath` (carries an 8-char content hash
+  so a rebuilt agent serves the stylesheet at a fresh URL).
+- A `/static/{name}` route in `main.go` serves the stylesheet under
+  the hashed URL with immutable `Cache-Control`.
+
+The layout already links it:
+
+```html
+<link rel="stylesheet" href={ views.AppCSSPath }/>
+```
+
+**`/__air/assets/*` is framework-reserved** for htmx and any future
+runtime essentials. For YOUR own static files (icons, fonts,
+page-specific assets), embed them under `views/static/` and extend
+the `/static/{name}` handler in `main.go` — that's the same route the
+stylesheet uses, and it sits behind `AccessPublic` so unauthenticated
+browsers can fetch it.
+
+**Build order.** Whenever you modify a `.templ` or `styles/app.css`,
+run all three generators before `go build` (or `go vet`, `go test`,
+...):
+
+```bash
+go tool templ generate
+tailwindcss -i styles/app.css -o views/static/app.css --minify
+go build -o /tmp/agent .
+```
+
+`templ generate` first (emits `*_templ.go`); `tailwindcss` next (scans
+the materialised `.templ` source for class names, writes the
+stylesheet); `go build` last (the `//go:embed` reads the stylesheet).
+You don't commit the generated `*_templ.go` or `views/static/app.css`
+— the Docker build regenerates both.
+
+If you want to use a different styling approach (no Tailwind, plain
+CSS, another framework), **record that decision in `NOTES.md`** so
+future upgrades don't half-revert it.
+
+> **Styling, design taste, and htmx polish guidance lives in a
+> separate file: `/libs/agentsdk/llms.web.md`. Read it before you
+> create or modify any `.templ`, edit `styles/app.css`, or otherwise
+> touch how the agent's pages look.** It covers Tailwind v4 `@theme`
+> tokens, palette/font decisions, the layout shapes that earn their
+> keep, swap-target nesting pitfalls, and the one-sentence self-check
+> that catches default-Tailwind output.
 
 ```go
 // Register a templ page
