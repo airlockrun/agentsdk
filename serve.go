@@ -46,6 +46,9 @@ func (a *Agent) Serve() {
 	// A2A: airlock's MCP server forwards user-registered tool calls
 	// here so sibling agents can invoke them directly (no LLM loop).
 	mux.HandleFunc("POST /__air/tool/{name}", a.handleDirectTool)
+	// Bundled frontend assets (htmx, pico.css) — same-origin so the
+	// scaffold layout doesn't depend on a CDN.
+	mux.HandleFunc("GET /__air/assets/{name}", a.handleAsset)
 
 	// Mount custom routes registered via RegisterRoute.
 	// Each route gets a lazy-run installed in ctx — a run is only created

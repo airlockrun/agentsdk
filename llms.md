@@ -473,11 +473,31 @@ agent.RegisterRoute(&agentsdk.Route{
 - `AccessPublic` — anyone, no auth. **Only when the user explicitly asks** for
   a public-facing page. Never default to public.
 
-### templ + htmx — HTML UI
+### templ + htmx + pico.css — HTML UI
 
 Agents use [templ](https://templ.guide) for type-safe HTML and
-[htmx](https://htmx.org) for interactivity. The scaffold has `views/` with a
-layout and index. htmx is loaded from CDN.
+[htmx](https://htmx.org) for interactivity. **[pico.css](https://picocss.com)
+is the default UI library** — semantic HTML (`<main class="container">`,
+`<article>`, `<form>`, `<button>`, `<table>`) auto-styles; the classed build's
+opt-in helpers (`.container`, `.grid`, `.secondary`, `.outline`, …) are there
+when you need them. Use pico unless the user asks for a different look. If
+you pick a different styling approach (Tailwind, plain CSS, another classless
+framework), **record that decision in `NOTES.md`** so future upgrades don't
+half-revert it.
+
+htmx and pico.css are bundled into agentsdk and served same-origin under
+`/__air/assets/` — the scaffold layout references them via
+`agentsdk.Assets.HTMX` and `agentsdk.Assets.Pico`. URLs are versioned so a
+bumped agentsdk auto-invalidates the browser cache. Current served versions
+are `agentsdk.HTMXVersion` and `agentsdk.PicoVersion` — read them from
+`/libs/agentsdk/assets.go` if you need the exact strings (for SRI-style refs
+elsewhere, etc.).
+
+**`/__air/assets/*` is framework-reserved** (the runtime ships htmx, pico, and
+similar platform-wide essentials there). For YOUR own static files — icons,
+images, page-specific CSS, custom fonts — embed them with `//go:embed` and
+serve via a `RegisterRoute` under a different prefix, e.g. `/static/{name}`.
+Don't add files to `/__air/assets/`.
 
 **Before any Go command (`go build`, `go vet`, `go test`, ...), run
 `go tool templ generate` first.** The scaffold contains only `.templ` source;
