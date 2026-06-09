@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-
-	"github.com/dop251/goja"
 )
 
 const (
@@ -99,21 +97,6 @@ type spillFields struct {
 func spillFor(ctx context.Context, agent *Agent, r io.Reader, dstPath string) spillFields {
 	inline, savedTo, size, err := peekAndSpill(ctx, agent, r, dstPath, "application/octet-stream")
 	return spillFields{inline: inline, savedTo: savedTo, size: size, err: err}
-}
-
-// setStreamFields projects a spillFields onto a JS envelope. When inline
-// (savedTo==""), sets `{name}: "<bytes>"`. When spilled, sets
-// `{name}Preview`, `{name}SavedTo`, and `{name}Size`. Keys are mutually
-// exclusive — never both — so the LLM's `if (resp.stdoutSavedTo)` idiom
-// reads cleanly.
-func setStreamFields(obj *goja.Object, name string, s spillFields) {
-	if s.savedTo == "" {
-		obj.Set(name, string(s.inline))
-		return
-	}
-	obj.Set(name+"Preview", string(s.inline))
-	obj.Set(name+"SavedTo", s.savedTo)
-	obj.Set(name+"Size", s.size)
 }
 
 // execOverflowNote is the LLM-readable explanation appended when at least

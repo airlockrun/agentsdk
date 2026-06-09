@@ -262,7 +262,7 @@ type promptEnv struct {
 	Conversation string
 }
 
-func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, runModalities []string, env promptEnv) string {
+func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, runModalities []string, env promptEnv, directTools bool) string {
 	switch caller {
 	case AccessAdmin, AccessUser, AccessPublic, "":
 		// ok
@@ -275,6 +275,7 @@ func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, r
 	data.UserName = env.UserName
 	data.UserEmail = env.UserEmail
 	data.Conversation = env.Conversation
+	data.DirectTools = directTools
 	tier := string(caller)
 	if tier == "" {
 		tier = string(AccessUser)

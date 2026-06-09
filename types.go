@@ -394,6 +394,14 @@ type PromptInput struct {
 	// (e.g. an A2A-delegated confirmation) is auto-denied there instead.
 	AutoConfirm bool `json:"autoConfirm,omitempty"`
 
+	// DirectTools selects the per-run tool surface. When false (default),
+	// the LLM gets one `run_js` tool and capabilities are JS bindings inside
+	// the goja sandbox. When true, every capability is its own typed LLM
+	// tool — no JS sandbox, no TypeScript manifest in the prompt. Airlock
+	// sets this based on the resolved caller; today it's hardcoded to
+	// `callerAccess == AccessPublic`.
+	DirectTools bool `json:"directTools,omitempty"`
+
 	// Platform / UserDisplayName / UserEmail are per-turn context for the
 	// prompt's <env> block. Airlock sets Platform explicitly per dispatch
 	// path (web/telegram/discord/a2a — never inferred) and resolves the

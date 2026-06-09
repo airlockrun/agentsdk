@@ -1490,17 +1490,29 @@ structured output can be combined: the model calls tools first, then produces
 structured output on the final step. Other strategies: `output.Array`,
 `output.Choice`, `output.JSON`, `output.Text` (default).
 
-## Built-in VM bindings (DO NOT re-register)
+## Built-in VM bindings (don't shadow them)
 
-The runtime system prompt fully documents JS bindings the LLM can use inside
-`run_js`. Your only concern as an agent author is **don't shadow them with
-`RegisterTool` names**. The auto-bound names per-agent depend on what you
-register:
+The runtime system prompt fully documents the bindings the LLM can use. As an
+agent author the practical rule is: **don't name a `RegisterTool` the same as
+a built-in or you'll silently lose it.** `RegisterTool` doesn't panic on a
+collision — both modes (JS sandbox via `run_js`, direct-tool mode for public
+callers) bind built-ins *after* registered tools, so the built-in wins and
+your tool becomes unreachable. The behaviour is identical across modes, so a
+collision can't sneak past JS testing only to break in production direct mode.
 
-- `conn_{slug}` — for each `RegisterConnection` (request, requestJSON)
-- `mcp_{slug}` — for each `RegisterMCP`; one method per discovered MCP tool,
-  e.g. `mcp_github.search_repos({...})`
-- `topic_{slug}` — for each `RegisterTopic` (subscribe, unsubscribe)
+Built-in names are **camelCase**. Anything you put on the agent's bindings
+namespaces — connections, exec endpoints, topics, MCPs, siblings — auto-binds
+with a **`{prefix}_`** name at runtime. Pick `RegisterTool` names that don't
+start with one of these prefixes, or you'll shadow your own binding:
+
+- `conn_` — `RegisterConnection`
+- `exec_` — `RegisterExecEndpoint`
+- `topic_` — `RegisterTopic`
+- `mcp_` — `RegisterMCP`
+- `agent_` — A2A sibling tools (synced, not registered by you)
+
+Two fixed top-level names are also reserved: `run_js` (the JS sandbox entry
+point) and `promptAgent` (open-ended A2A delegation).
 
 Framework-provided primitives (always present, the runtime prompt describes
 each in detail):
@@ -1534,7 +1546,8 @@ each in detail):
   `execDB(sql, ...params)`.
 - **Self-rebuild** (admin runs only) — `requestUpgrade(description)`.
 
-Do not re-declare any of these as `RegisterTool`s.
+If you re-declare any of these as `RegisterTool`s the built-in shadows yours
+in both modes — your handler will never run. Pick a different name.
 
 **Public-caller surface is much narrower.** A run triggered by an
 `AccessPublic` caller (unauthenticated bot, public route) only sees:

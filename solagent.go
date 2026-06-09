@@ -24,7 +24,7 @@ func newSolAgent(a *Agent, run *run, supportedModalities []string) *agent.Agent 
 		Model:        "", // caller sets model or passes Model override
 		Tools:        buildSolTools(a, run, supportedModalities),
 		MaxSteps:     maxToolSteps,
-		SystemPrompt: a.renderSystemPrompt(run.callerAccess, run.visibleSiblings, supportedModalities, env), // rendered per-run from live registrations + synced PromptData; the <env> block carries per-turn date/platform/user/conversation
+		SystemPrompt: a.renderSystemPrompt(run.callerAccess, run.visibleSiblings, supportedModalities, env, run.directTools), // rendered per-run from live registrations + synced PromptData; the <env> block carries per-turn date/platform/user/conversation
 		// Redactor closes over a's live sensitive set so values
 		// registered after Run start (via secret.Get inside a tool) are
 		// stripped from the next-step LLM input.

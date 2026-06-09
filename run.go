@@ -24,6 +24,7 @@ type run struct {
 	supportedModalities []string
 	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
 	autoConfirm         bool        // run_js skips the request_confirmation gate (set for non-interactive runs, e.g. public one-shot bridge sessions)
+	directTools         bool        // expose each capability as its own typed LLM tool instead of a single run_js binding; airlock sets this for public-tier runs today
 	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with PromptData.Siblings at render time
 	ctx                 context.Context
 	gw                  *goWall // go-call time accumulator (L3 CPU guard)

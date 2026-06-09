@@ -20,20 +20,30 @@ type runJSInput struct {
 	RequestConfirmation bool   `json:"request_confirmation,omitempty" jsonschema:"description=Set to true if this code modifies external data or has side effects the user should review first. The code will NOT execute — instead the user will be shown the code and asked to approve."`
 }
 
-// buildSolTools creates the tool.Set for Sol's Runner. All agent capabilities
-// are exposed as JS functions inside the run_js VM — see vm.go. This keeps the
-// LLM's tool surface minimal (one escape hatch) while still giving agents full
-// composability (loops, data-flow chains, conditionals) in a single tool call.
+// buildSolTools creates the tool.Set for Sol's Runner. In the default
+// (JS) surface every capability is a goja binding inside one `run_js`
+// tool — minimal LLM surface, maximal composability. In direct-tools
+// mode (run.directTools, set by airlock for public-tier callers today)
+// each capability is its own typed LLM tool and run_js is absent —
+// narrower attack surface and predictable single-call exchanges. See
+// buildDirectTools in directtools.go for the direct-tools shape.
 func buildSolTools(agent *Agent, run *run, supportedModalities []string) tool.Set {
-	ts := tool.Set{
-		"run_js": buildRunJSTool(agent, run),
+	var ts tool.Set
+	if run.directTools {
+		ts = buildDirectTools(agent, run, supportedModalities)
+	} else {
+		ts = tool.Set{
+			"run_js": buildRunJSTool(agent, run),
+		}
 	}
 
 	// promptAgent: open-ended A2A delegation as a first-class tool (not
 	// a run_js binding). A suspendable sibling LLM-loop round-trip must
 	// be its own pending tool call so Sol's suspend/resume handles it
 	// natively (no JS-sandbox re-run / idempotency problem). Only
-	// registered when this run can see at least one sibling.
+	// registered when this run can see at least one sibling. Surfaces
+	// identically in both modes — the JS/direct split governs the
+	// per-capability surface, not the open-ended delegation primitive.
 	if t, ok := buildPromptAgentTool(agent, run); ok {
 		ts["promptAgent"] = t
 	}
@@ -46,10 +56,24 @@ func buildSolTools(agent *Agent, run *run, supportedModalities []string) tool.Se
 	return ts
 }
 
+// runJSDescription is the LLM-facing description of the run_js tool. Tool
+// descriptions ride with every tool call envelope, so this stays short:
+// the system prompt's "JavaScript environment" and "Built-in functions"
+// sections carry the runtime rules, the var/let guidance, the
+// request_confirmation policy, and every binding's signature — there's no
+// need to repeat them per-tool.
+const runJSDescription = `Execute JavaScript in the agent's sandboxed runtime.
+
+The system prompt's "JavaScript environment" and "Built-in functions" sections describe the runtime semantics (ES5.1 + select ES6, no async/await, ` + "`var`" + ` for top-level names, last-expression-returned), every built-in binding, and the request_confirmation policy. Read those first.
+
+Parameters:
+- code: JS source to execute. The value of the last expression is the result; do NOT use a top-level ` + "`return`" + ` statement.
+- request_confirmation: set true ONLY for code that modifies external data (sending messages, deleting records, spending money). Read-only operations and lookups must NEVER set this. When set, the user sees the commented code and decides whether to approve — comment every line so they can understand exactly what will happen.`
+
 // buildRunJSTool creates the run_js tool for a given agent and run.
 func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 	return tool.New("run_js").
-		Description(buildToolDescription(agent, run.callerAccess)).
+		Description(runJSDescription).
 		SchemaFromStruct(runJSInput{}).
 		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
 			var args runJSInput
@@ -386,127 +410,3 @@ func randomHex(n int) string {
 	return fmt.Sprintf("%x", b)
 }
 
-// buildToolDescription generates the run_js tool description including the
-// function manifest. callerAccess gates admin-only bindings (queryDB,
-// execDB, requestUpgrade) so they're not advertised to AccessUser /
-// AccessPublic runs. Whoever sees a binding here can call it — we never
-// surface "this binding is admin-only, ask your admin" framing because
-// the LLM doesn't know its own access level and surfacing the gate just
-// confuses non-admin runs into recommending things their user can't do.
-func buildToolDescription(agent *Agent, callerAccess Access) string {
-	var b strings.Builder
-	b.WriteString("Execute JavaScript code. The runtime is ES5.1 with select ES6 features (let/const, arrow functions, classes, destructuring, template literals, Map/Set) — there is NO `async`/`await` and NO Promises; using `await` is a syntax error. All bindings below are synchronous: call them directly, e.g. `var r = httpRequest(url)` not `await httpRequest(url)`.\n\n")
-	b.WriteString("The value of the last expression is returned — do NOT use a top-level `return` statement (it's a syntax error outside a function). Write the value you want as the final expression. Example: `var r = httpRequest(url); r` returns `r`. `return r;` does NOT work.\n\n")
-	b.WriteString("Variables declared in one run_js call persist into the next call within the same turn (the VM resets only on the next user message). **ALWAYS use `var` for top-level names — NEVER `let` or `const`.** Redeclaring a `let` or `const` with a name that already exists from a previous run_js call throws `SyntaxError: Identifier has already been declared` and aborts the call — and you can't tell if a name is taken without trying it. `var` redeclarations are silently fine. Reach for `let`/`const` only inside a function body, a `for`-loop header, or a `{ ... }` block whose name won't be reused. This is the single most common cause of run_js failures across multi-step turns; treat `var` at the top level as a hard rule.\n\n")
-	b.WriteString("Prefer ONE run_js call over many when it's safe. If a sequence is read-only or strictly additive (list → filter → look up one item → format), do it in a single call: fewer turns, less chance of stale state between calls, cheaper for the user. Split into multiple calls only when an earlier result must be inspected before deciding what to do next, or when an action is destructive enough that you want a confirmation gate between steps. Example: `var items = listX(); var target = items.find(i => i.name === 'foo'); if (!target.enabled) { updateX(target.id, {enabled: true}); } target` — one call, not three.\n\n")
-	b.WriteString("IMPORTANT: request_confirmation parameter usage:\n")
-	b.WriteString("- Set request_confirmation=true ONLY for code that modifies external data (sending messages, deleting records, spending money).\n")
-	b.WriteString("- Read-only operations, data lookups, and computations must NEVER use request_confirmation — just execute them.\n")
-	b.WriteString("- When requesting confirmation, add comments to the code explaining what it does so the user can make an informed decision.\n")
-	b.WriteString("\nTools registered via `agent.RegisterTool` are declared as typed JS globals in the system prompt (not repeated here). Call them by name with a single object argument matching the declared input type.\n")
-
-	// Built-in bindings.
-	b.WriteString("\nBuilt-in bindings:\n")
-	b.WriteString("- conn_{slug}.request(method, path, body?, headers?) → {status, contentType, size, body?, bodyPreview?, bodySavedTo?, note?} — HTTP via connection. Responses ≤8KB return inline as `body`; larger ones are auto-saved to `bodySavedTo` (a storage path) with `bodyPreview` holding the first ~1KB. When `bodySavedTo` is set, `body` is absent — read the full payload with fileRead(bodySavedTo). `headers` is an optional {Name:value} object merged on top of the connection's declared headers; set a value to \"\" to suppress one.\n")
-	b.WriteString("- conn_{slug}.requestJSON(method, path, body?, headers?) → {status, contentType, size, data?, bodyPreview?, bodySavedTo?, note?} — JSON HTTP via connection. Same headers semantics as request(). Responses ≤8KB are JSON.parse'd into `data`; larger ones spill to `bodySavedTo` (read back with JSON.parse(fileRead(bodySavedTo))).\n")
-	b.WriteString("- mcp_{slug}.<tool_name>(args?) — call MCP tool. The per-tool typed methods are declared in the run-env prompt; one method per tool the server advertised at sync time.\n")
-	if accessSatisfies(callerAccess, AccessAdmin) {
-		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — read-only SQL against the agent's Postgres schema.\n")
-		b.WriteString("- execDB(sql, ...params) → {rowsAffected: N} — write SQL (INSERT/UPDATE/DELETE) against the agent's Postgres schema.\n")
-	}
-	b.WriteString("- fileRead(path) → string — read a whole file as UTF-8 text (most common case). `path` is an S3-style storage path with no leading slash, e.g. \"uploads/orders.csv\". Capped at 16 MiB — for larger files use fileGrep/fileHead/fileTail/fileLines (text) or fileReadRangeBytes (bytes).\n")
-	b.WriteString("- fileReadBytes(path) → Uint8Array — read a whole file as binary bytes (images, PDFs, anything not text). Same 16 MiB cap as fileRead; for a window of a large binary use fileReadRangeBytes.\n")
-	b.WriteString("- fileReadRangeBytes(path, start, length) → Uint8Array — read an exact byte window (`start` 0-based, `length` ≤ 16 MiB) without loading the whole file. The only random-access primitive for a file larger than the 16 MiB cap; makes no charset assumption — for text, address by line (fileLines/fileGrep) instead.\n")
-	b.WriteString("- fileGrep(path, pattern, opts?) → string — return lines of a (possibly huge) file matching the `pattern` regex, joined by newlines. opts: {ignoreCase?, invert?, lineNumbers?, max?}. Output is bounded; a trailing note reports any matches dropped past the cap.\n")
-	b.WriteString("- fileHead(path, n?) → string · fileTail(path, n?) → string — first / last `n` lines (default 10). fileTail fetches only the trailing window, so it's cheap on large files.\n")
-	b.WriteString("- fileLines(path, start, count) → string — a line window: `count` lines (default 10) starting at the 1-based line `start` (default 1). Page through a large text file without loading it whole.\n")
-	b.WriteString("- fileWrite(path, data, contentType?) → FileInfo — write (overwrite) a whole file. `data` is a string or Uint8Array. `contentType` is optional (auto-detected from extension when absent). Returns {path, filename, contentType, size, lastModified}.\n")
-	b.WriteString("- fileList(path, opts?) → FileInfo[] — list files. Non-recursive by default (one level only); pass {recursive: true} to walk the subtree. `path` may end with `/`.\n")
-	b.WriteString("- fileStat(path) → FileInfo — metadata for a single file.\n")
-	b.WriteString("- fileExists(path) → boolean — sugar around fileStat.\n")
-	b.WriteString("- fileDelete(path) — remove a file. Idempotent.\n")
-	b.WriteString("- fileEncode(src, codec, dst?) · fileDecode(src, codec, dst?) — file→file byte transform; codec is base64 | base64url | hex | gzip. Streams the whole file (no size cap). Omit `dst` for an auto scratch path: a small text result returns {content, size}, otherwise {savedTo, preview, size}. Give `dst` (≠ src) to write a chosen path → {savedTo, size}.\n")
-	b.WriteString("- fileDecodeText(src, charset, dst?) — decode a file in another charset (latin1, iso-8859-1, windows-1252, cp1252, utf-16, utf-16le, utf-16be) to UTF-8 text. Same dst/return semantics as fileEncode.\n")
-	b.WriteString("- fileEditLines(src, edits, dst?) — edit a (possibly huge) file by 1-based line number, streaming so size doesn't matter. `edits` is one object or an array: {from, count, text} replaces lines [from,from+count) with text · {from, count} deletes them · {from, count:0, text} inserts text before line `from` · {append:text} appends at EOF. Include trailing newlines in `text`. Locate lines first with fileGrep({lineNumbers:true})/fileLines.\n")
-	b.WriteString("- fileSed(src, script, dst?) — apply a sed script (one command per line) in a single streaming pass. Addresses: N · N,M · /regex/ · $ (last line). Commands: s/regex/replacement/[g][i] (g=all in line, i=ignore-case; backrefs are $1) · d (delete) · c\\text (change) · i\\text (insert before) · a\\text (append after). e.g. \"s/ERROR/WARN/gi\" or \"/^#/d\".\n")
-	b.WriteString("  For both editors: omit `dst` → result goes to a scratch path (small text inline as {content,size}, else {savedTo,preview,size}); pass `dst` to write a path, or `dst === src` to edit in place. Returns {savedTo,size} when written.\n")
-	b.WriteString("- output(parts) — share media with the user (web), the channel (bridge), or the calling sibling (A2A). `parts` is a single object or an array. Each part's `type` is one of `image` / `file` / `audio` / `video`. Prose goes in your normal reply, not here. Per-part fields: {type, text, source, url, data, filename, mimeType, alt, duration}. `text` on a media part is its caption. `source` accepts a storage path.\n")
-	b.WriteString("- log(message) — emit a log line visible in the run timeline.\n")
-	b.WriteString("- webSearch(query, count?) → {results: [{title, url, snippet}], synthesis?, provider}\n")
-	b.WriteString("- httpRequest(url, opts?) → {status, headers, contentType, size, body?, savedTo?, bodyPreview?, note?} — HTML is converted to markdown by default; binary and large/over-8KB responses are auto-saved to storage. `size` is always the byte length of the content (inline body, converted markdown, or the saved object) — never 0 when there is content. When a response is saved, `body` is absent: `savedTo` is the storage path (pass to fileRead(...) / attachToContext(...)) and `bodyPreview` holds the first ~1KB so you can tell what it is without re-reading. `headers` is a curated subset by default (content-type, length, disposition, location, retry-after, etag, last-modified, link, rate-limit); pass {allHeaders:true} for the full set. Opts: {method, headers, body, timeout, saveAs, raw, allHeaders}; `saveAs` is a storage path with no leading slash.\n")
-	b.WriteString("- attachToContext(path) → string — load a stored file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files use fileRead(path) instead.\n")
-	b.WriteString("- analyzeImage(path, question?) → string — sends a stored image to the platform's vision model and returns its reply. `question` defaults to \"Describe this image.\" Use this when the current chat model lacks vision; it routes to the configured vision_model regardless of which exec model is running.\n")
-	b.WriteString("- transcribeAudio(path, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. opts: {language?, prompt?, mimeType?}.\n")
-	b.WriteString("- generateImage(prompt, opts?) → {file: FileInfo, mimeType, size} — text-to-image; result auto-saved. Pass `file.path` to output({source: file.path, ...}) or fileReadBytes(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
-	b.WriteString("- speak(text, opts?) → {file: FileInfo, mimeType, size} — text-to-speech; result auto-saved. Pass `file.path` to output({source: file.path, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
-	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
-	if accessSatisfies(callerAccess, AccessAdmin) {
-		b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities. The current agent keeps running until the new build finishes; the description should specify what to add or change. The builder writes the agent's Go code to expose new tools, add routes, crons, webhooks etc. It is constrained by agent's SDK and platform limitations: it has access to DB, file system, and network, and can add container dependencies (e.g. a CLI utility), but cannot start new services (e.g. redis), or create React apps, or install DB extensions.\n")
-	}
-
-	// Directory inventory — which paths the LLM can read/write/list, and
-	// at what access level the current run satisfies each cap. Builders
-	// who want to steer the model away from a directory (without breaking
-	// admin reachability) set Directory.LLMHint, appended in parentheses
-	// after the description.
-	if len(agent.directories) > 0 {
-		b.WriteString("\nDirectories registered for this agent (paths your code can use):\n")
-		for _, d := range agent.directories {
-			caps := []string{}
-			if accessSatisfies(callerAccess, d.Read) {
-				caps = append(caps, "read")
-			}
-			if accessSatisfies(callerAccess, d.Write) {
-				caps = append(caps, "write")
-			}
-			if accessSatisfies(callerAccess, d.List) {
-				caps = append(caps, "list")
-			}
-			capsStr := "no access"
-			if len(caps) > 0 {
-				capsStr = strings.Join(caps, "+")
-			}
-			desc := d.Description
-			if desc == "" && d.Path == reservedTmpPath {
-				desc = "framework scratch (truncated tool output, generated media)"
-			}
-			line := fmt.Sprintf("- %s (%s)", d.Path, capsStr)
-			if desc != "" {
-				line += " — " + desc
-			}
-			if d.LLMHint != "" {
-				line += " [" + d.LLMHint + "]"
-			}
-			b.WriteString(line + "\n")
-		}
-	}
-
-	// Topic bindings.
-	if len(agent.topics) > 0 {
-		b.WriteString("\nNotification topics (subscribe the current conversation to receive notifications):\n")
-		for slug, def := range agent.topics {
-			line := fmt.Sprintf("- topic_%s.subscribe() / topic_%s.unsubscribe() — %s", slug, slug, def.Description)
-			if def.LLMHint != "" {
-				line += " [" + def.LLMHint + "]"
-			}
-			b.WriteString(line + "\n")
-		}
-	}
-
-	// Connection LLM instructions.
-	for slug, def := range agent.auths {
-		if def.LLMHint == "" && len(def.Scopes) == 0 {
-			continue
-		}
-		b.WriteString(fmt.Sprintf("\nConnection %q (%s):\n", slug, def.Name))
-		if def.AuthMode == "oauth" && len(def.Scopes) > 0 {
-			b.WriteString(fmt.Sprintf("OAuth scopes: %s\n", strings.Join(def.Scopes, ", ")))
-		}
-		if def.LLMHint != "" {
-			b.WriteString(def.LLMHint)
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
-}

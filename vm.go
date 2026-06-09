@@ -48,19 +48,11 @@ func fileInfoToJS(vm *goja.Runtime, info FileInfo) goja.Value {
 	return obj
 }
 
-// mediaResultToJS shapes a *mediaResult as the JS-facing
-// { file: FileInfo, mimeType, size } structure. The path inside the file
-// object is what the LLM passes to fileReadBytes / output / attachToContext.
+// mediaResultToJS is the goja-side projection of *mediaResult; the canonical
+// shape lives on mediaResult.toMap so vm.go and direct-mode produce identical
+// envelopes.
 func mediaResultToJS(vm *goja.Runtime, res *mediaResult) goja.Value {
-	file := vm.NewObject()
-	file.Set("path", res.Path)
-	file.Set("contentType", res.MimeType)
-	file.Set("size", res.Size)
-	out := vm.NewObject()
-	out.Set("file", file)
-	out.Set("mimeType", res.MimeType)
-	out.Set("size", res.Size)
-	return out
+	return vm.ToValue(res.toMap())
 }
 
 // newVM creates a fresh goja Runtime for a Run, binding all registered
@@ -204,32 +196,23 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				body = call.Arguments[2].String()
 			}
 			headers := headersFromJSArg(call.Argument(3))
-			resp, err := handle.RequestStream(run.ctx, RequestOpts{
+			res, err := connRequestExec(run.ctx, run.agent, handle, connSlug, RequestOpts{
 				Method: method, Path: path, Body: body, Headers: headers,
 			})
 			if err != nil {
 				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			defer resp.Body.Close()
-
-			contentType := resp.Headers.Get("Content-Type")
-			dst := fmt.Sprintf("tmp/conn-%s-%s.bin", connSlug, newCallID())
-			inline, savedTo, size, err := peekAndSpill(run.ctx, run.agent, resp.Body, dst, contentType)
-			if err != nil {
-				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
-			}
-
 			out := vm.NewObject()
-			out.Set("status", resp.StatusCode)
-			out.Set("contentType", contentType)
-			out.Set("size", size)
-			if savedTo == "" {
-				out.Set("body", string(inline))
-			} else {
-				out.Set("bodyPreview", string(inline))
-				out.Set("bodySavedTo", savedTo)
-				out.Set("note", fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Use fileRead(bodySavedTo) to read the full body.", size, savedTo))
+			out.Set("status", res.Status)
+			out.Set("contentType", res.ContentType)
+			out.Set("size", res.Size)
+			if !res.Spilled {
+				out.Set("body", string(res.Inline))
+				return out
 			}
+			out.Set("bodyPreview", string(res.BodyPreview))
+			out.Set("bodySavedTo", res.SavedTo)
+			out.Set("note", connSpilledNote(res.Size, res.SavedTo, "raw"))
 			return out
 		})
 
@@ -241,50 +224,41 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				body = call.Arguments[2].Export()
 			}
 			headers := headersFromJSArg(call.Argument(3))
-			resp, err := handle.RequestStream(run.ctx, RequestOpts{
+			res, err := connRequestExec(run.ctx, run.agent, handle, connSlug, RequestOpts{
 				Method: method, Path: path, Body: body, Headers: headers,
 			})
 			if err != nil {
 				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			defer resp.Body.Close()
-
-			contentType := resp.Headers.Get("Content-Type")
-			dst := fmt.Sprintf("tmp/conn-%s-%s.bin", connSlug, newCallID())
-			inline, savedTo, size, err := peekAndSpill(run.ctx, run.agent, resp.Body, dst, contentType)
-			if err != nil {
-				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
-			}
-
 			out := vm.NewObject()
-			out.Set("status", resp.StatusCode)
-			out.Set("contentType", contentType)
-			out.Set("size", size)
-			if savedTo == "" {
-				if len(inline) == 0 {
-					out.Set("data", goja.Null())
-					return out
-				}
-				// Round-trip through the runtime's own JSON.parse so the
-				// resulting value is a native JS object (not a Go-reflected
-				// map). Native objects stringify cleanly via JSON.stringify
-				// and behave like real objects under Object.keys / spread /
-				// in checks; Go-reflected wrappers don't, and toString them
-				// as "[object Object]".
-				parseFn, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
-				if !ok {
-					panic(vm.NewGoError(fmt.Errorf("requestJSON: JSON.parse not available")))
-				}
-				val, err := parseFn(goja.Undefined(), vm.ToValue(string(inline)))
-				if err != nil {
-					panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
-				}
-				out.Set("data", val)
+			out.Set("status", res.Status)
+			out.Set("contentType", res.ContentType)
+			out.Set("size", res.Size)
+			if res.Spilled {
+				out.Set("bodyPreview", string(res.BodyPreview))
+				out.Set("bodySavedTo", res.SavedTo)
+				out.Set("note", connSpilledNote(res.Size, res.SavedTo, "json"))
 				return out
 			}
-			out.Set("bodyPreview", string(inline))
-			out.Set("bodySavedTo", savedTo)
-			out.Set("note", fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Read with: JSON.parse(fileRead(bodySavedTo)).", size, savedTo))
+			if len(res.Inline) == 0 {
+				out.Set("data", goja.Null())
+				return out
+			}
+			// Round-trip through the runtime's own JSON.parse so the resulting
+			// value is a native JS object (not a Go-reflected map). Native
+			// objects stringify cleanly via JSON.stringify and behave like
+			// real objects under Object.keys / spread / in checks;
+			// Go-reflected wrappers don't, and toString them as
+			// "[object Object]".
+			parseFn, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+			if !ok {
+				panic(vm.NewGoError(fmt.Errorf("requestJSON: JSON.parse not available")))
+			}
+			val, err := parseFn(goja.Undefined(), vm.ToValue(string(res.Inline)))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
+			}
+			out.Set("data", val)
 			return out
 		})
 
@@ -369,16 +343,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			case waitErr != nil:
 				panic(vm.NewGoError(waitErr))
 			}
-
-			out := vm.NewObject()
-			out.Set("exitCode", exit.ExitCode)
-			out.Set("durationMs", exit.DurationMs)
-			setStreamFields(out, "stdout", outR)
-			setStreamFields(out, "stderr", errR)
-			if outR.savedTo != "" || errR.savedTo != "" {
-				out.Set("note", execOverflowNote(outR, errR))
-			}
-			return out
+			return vm.ToValue(buildExecRunOutput(outR, errR, exit))
 		})
 
 		vm.Set("exec_"+slug, obj)
@@ -1042,38 +1007,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("httpRequest: %w", err)))
 			}
-
-			result := vm.NewObject()
-			result.Set("status", resp.Status)
-			result.Set("headers", resp.Headers)
-			result.Set("contentType", resp.ContentType)
-			result.Set("size", resp.Size)
-			if resp.SavedTo != "" {
-				// Airlock returns the storage path; expose it as a string so
-				// the LLM can pass it directly to fileRead/fileReadBytes/
-				// attachToContext/etc.
-				result.Set("savedTo", resp.SavedTo)
-			}
-			if resp.BodyPreview != "" {
-				// Head of a saved body so the result is legible without an
-				// immediate fileRead(savedTo).
-				result.Set("bodyPreview", resp.BodyPreview)
-			}
-			if resp.Note != "" {
-				result.Set("note", resp.Note)
-			}
-
-			// Auto-parse JSON responses.
-			if strings.Contains(resp.ContentType, "application/json") && resp.Body != "" {
-				var parsed any
-				if jsonErr := json.Unmarshal([]byte(resp.Body), &parsed); jsonErr == nil {
-					result.Set("body", parsed)
-					return result
-				}
-			}
-
-			result.Set("body", resp.Body)
-			return result
+			return vm.ToValue(httpResponseToMap(resp))
 		})
 
 		// Web search via Airlock proxy (no API keys in container).

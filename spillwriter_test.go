@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/dop251/goja"
 )
 
 // recordingStorageServer stands in for airlock's /api/agent/storage PUT
@@ -183,36 +181,47 @@ func TestNewCallID_Length(t *testing.T) {
 	}
 }
 
-func TestSetStreamFields_InlineVsSpilled(t *testing.T) {
-	vm := goja.New()
-
+func TestBuildExecRunOutput_InlineVsSpilled(t *testing.T) {
 	t.Run("inline", func(t *testing.T) {
-		obj := vm.NewObject()
-		setStreamFields(obj, "stdout", spillFields{inline: []byte("hello"), size: 5})
-		if got := obj.Get("stdout").String(); got != "hello" {
-			t.Errorf("stdout = %q, want hello", got)
+		out := buildExecRunOutput(
+			spillFields{inline: []byte("hello"), size: 5},
+			spillFields{},
+			ExecExit{ExitCode: 0, DurationMs: 12},
+		)
+		if out.Stdout != "hello" {
+			t.Errorf("Stdout = %q, want hello", out.Stdout)
 		}
-		if v := obj.Get("stdoutSavedTo"); v != nil && !goja.IsUndefined(v) {
-			t.Errorf("stdoutSavedTo should be absent on inline result, got %v", v)
+		if out.StdoutSize != 5 {
+			t.Errorf("StdoutSize = %d, want 5", out.StdoutSize)
+		}
+		if out.StdoutSavedTo != "" {
+			t.Errorf("StdoutSavedTo should be empty on inline result, got %q", out.StdoutSavedTo)
+		}
+		if out.Note != "" {
+			t.Errorf("Note should be empty when nothing spilled, got %q", out.Note)
 		}
 	})
 
 	t.Run("spilled", func(t *testing.T) {
-		obj := vm.NewObject()
-		setStreamFields(obj, "stdout", spillFields{
-			inline: []byte("preview…"), savedTo: "tmp/exec-x-deadbeef-stdout.bin", size: 50000,
-		})
-		if v := obj.Get("stdout"); v != nil && !goja.IsUndefined(v) {
-			t.Errorf("stdout should be absent on spilled result, got %v", v)
+		out := buildExecRunOutput(
+			spillFields{inline: []byte("preview…"), savedTo: "tmp/exec-x-deadbeef-stdout.bin", size: 50000},
+			spillFields{},
+			ExecExit{ExitCode: 1, DurationMs: 7},
+		)
+		if out.Stdout != "" {
+			t.Errorf("Stdout should be empty on spilled result, got %q", out.Stdout)
 		}
-		if got := obj.Get("stdoutPreview").String(); got != "preview…" {
-			t.Errorf("stdoutPreview = %q", got)
+		if out.StdoutPreview != "preview…" {
+			t.Errorf("StdoutPreview = %q", out.StdoutPreview)
 		}
-		if got := obj.Get("stdoutSavedTo").String(); got != "tmp/exec-x-deadbeef-stdout.bin" {
-			t.Errorf("stdoutSavedTo = %q", got)
+		if out.StdoutSavedTo != "tmp/exec-x-deadbeef-stdout.bin" {
+			t.Errorf("StdoutSavedTo = %q", out.StdoutSavedTo)
 		}
-		if got := obj.Get("stdoutSize").ToInteger(); got != 50000 {
-			t.Errorf("stdoutSize = %d, want 50000", got)
+		if out.StdoutSize != 50000 {
+			t.Errorf("StdoutSize = %d, want 50000", out.StdoutSize)
+		}
+		if out.Note == "" {
+			t.Errorf("Note should be populated when stdout spilled")
 		}
 	})
 }

@@ -14,13 +14,34 @@ import (
 	"github.com/airlockrun/goai/stream"
 )
 
-// mediaResult is the JS-facing return value for generateImage / speak.
-// Path is the absolute storage path the LLM uses for downstream
-// output / attachToContext / fileReadBytes calls.
+// mediaResult is the LLM-facing return value for generateImage / speak.
+// Path is the canonical storage path the LLM uses for downstream
+// output / attachToContext / fileReadBytes calls. The on-wire shape (see
+// toMap) wraps Path/MimeType/Size as a `file` sub-object plus mirrors
+// MimeType / Size at the top level for backwards-compatible access.
 type mediaResult struct {
 	Path     string `json:"path"`
 	MimeType string `json:"mimeType"`
 	Size     int    `json:"size"`
+}
+
+// toMap projects mediaResult onto the LLM-facing shape used by both
+// generateImage and speak in JS and direct modes:
+//
+//	{ file: { path, contentType, size }, mimeType, size }
+//
+// The wrapped file mirror exists so the LLM can pass result.file directly
+// to output() / attachToContext() / fileReadBytes() without re-shaping.
+func (r *mediaResult) toMap() map[string]any {
+	return map[string]any{
+		"file": map[string]any{
+			"path":        r.Path,
+			"contentType": r.MimeType,
+			"size":        r.Size,
+		},
+		"mimeType": r.MimeType,
+		"size":     r.Size,
+	}
 }
 
 // transcribeAudio loads bytes from agent storage at `path`, runs them through

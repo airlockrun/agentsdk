@@ -59,6 +59,15 @@ type AgentData struct {
 	UserName     string
 	UserEmail    string
 	Conversation string
+
+	// DirectTools is true when the run exposes each capability as its
+	// own typed LLM tool instead of one `run_js` binding. The template
+	// branches on this to skip JS-flavoured sections (the TypeScript
+	// manifest, `## JavaScript environment`, `var` / `let` guidance, the
+	// namespaced binding docs) and emit a short tool-listing block
+	// instead. Schemas reach the model via the tool-calling protocol,
+	// not the system prompt.
+	DirectTools bool
 }
 
 // Capabilities mirrors agentsdk.Capabilities — duplicated here to

@@ -167,18 +167,28 @@ func (r *run) streamThrough(ctx context.Context, src, dstCanon, contentType, suf
 	return &transformResult{savedTo: autoPath, size: cr.n}, nil
 }
 
+// toMap projects transformResult onto the LLM-facing JSON shape shared by
+// the run_js fileEncode/fileDecode/fileDecodeText/fileEditLines/fileSed
+// bindings and the direct-mode equivalents. `inline:true` carries `content`;
+// `inline:false` carries `savedTo` and (when set) `preview`.
+func (r *transformResult) toMap() map[string]any {
+	out := map[string]any{
+		"inline": r.inline,
+		"size":   r.size,
+	}
+	if r.inline {
+		out["content"] = r.content
+		return out
+	}
+	out["savedTo"] = r.savedTo
+	if r.preview != "" {
+		out["preview"] = r.preview
+	}
+	return out
+}
+
 func transformResultToJS(vm *goja.Runtime, res *transformResult) goja.Value {
-	o := vm.NewObject()
-	o.Set("size", res.size)
-	if res.inline {
-		o.Set("content", res.content)
-		return o
-	}
-	o.Set("savedTo", res.savedTo)
-	if res.preview != "" {
-		o.Set("preview", res.preview)
-	}
-	return o
+	return vm.ToValue(res.toMap())
 }
 
 // encodeContentType returns the MIME type for an encode codec's output.
