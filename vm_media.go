@@ -100,8 +100,8 @@ func (r *run) analyzeImage(ctx context.Context, path, question string) (string, 
 		Messages: []goai.Message{
 			message.NewUserMessageWithParts(
 				goai.TextPart{Text: question},
-				message.ImagePart{
-					Image:    base64.StdEncoding.EncodeToString(imgBytes),
+				message.FilePart{
+					Data:     message.FileDataBytes{Data: base64.StdEncoding.EncodeToString(imgBytes)},
 					MimeType: mimeType,
 				},
 			),

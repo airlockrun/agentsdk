@@ -47,12 +47,18 @@ func (s *ndjsonSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
 		}
 		s.seenPerm[p.ToolCallID] = struct{}{}
 	}
+	// "code" is kept as a top-level field so older airlock versions
+	// (pre-metadata) still render run_js confirmations. "metadata" carries
+	// the full payload so newer airlock can pick the right body for
+	// non-run_js permissions (args for sysagent-style tools, message for
+	// doom_loop, etc.).
 	_ = s.ew.writeLine(ndjsonLine{
 		Type: "confirmation_required",
 		Data: map[string]any{
 			"permission": p.Permission,
 			"patterns":   p.Patterns,
 			"code":       p.Metadata["code"],
+			"metadata":   p.Metadata,
 			"toolCallId": p.ToolCallID,
 		},
 	})

@@ -1,13 +1,23 @@
-# Building Airlock agents with agentsdk
+# agentsdk — API reference
 
-This is the reference for writing an Airlock agent in Go with `agentsdk`. It
-documents the SDK surface and the patterns that make an agent behave well at
-runtime. It is consumed two ways, and both should treat it as authoritative:
+This file documents the agentsdk SDK surface: every `Register*` API, the
+LLM-calling helpers, storage, seal/unseal, built-in JS bindings, and the
+runtime contracts an agent must satisfy. It is the answer to *"what does
+the SDK give me?"*.
 
-- **The Airlock agent-builder** reads it before generating or upgrading agent
-  code.
-- **You, by hand** — point your editor's AI at this file (it ships in the
-  `agentsdk` module) or read it directly when writing or modifying an agent.
+It is consumed two ways, and both should treat it as authoritative:
+
+- **The Airlock agent-builder** reads it before generating or upgrading
+  agent code.
+- **You, by hand** — point your editor's AI at this file (it ships in
+  the `agentsdk` module) or read it directly when writing or modifying
+  an agent.
+
+For the orthogonal half — *how* to wire the SDK together inside a real
+agent (file layout, MVC, build chain, NOTES.md convention, UI design
+rules) — read **`AGENTS.md` at the agent's repo root**. That file is
+materialised by the Airlock scaffold once and stays with the agent; this
+file is the canonical SDK reference.
 
 ## Mental model
 
@@ -26,49 +36,6 @@ touch the JS engine — you write plain typed Go.
 Airlock is the runtime around the agent: auth, storage (S3-like), the LLM
 proxy, credential injection for outbound HTTP/MCP, conversation history,
 triggers (webhooks/crons/bridges), and the per-agent Postgres schema.
-
-## Project layout
-
-```
-{agent-repo}/
-├── main.go            # Entrypoint — registrations only, no business logic
-├── go.mod             # Module file (usually leave as-is)
-├── sqlc.yaml          # sqlc config (pre-configured)
-├── setup.sh           # (optional) system setup — runs as root at image build, baked into runtime image
-├── views/
-│   ├── layout.templ
-│   └── index.templ
-├── db/
-│   ├── migrations/    # goose SQL/Go migrations (you create)
-│   │   └── doc.go     # package declaration (pre-scaffolded)
-│   └── queries/       # sqlc query files (you create)
-└── internal/db/       # sqlc-generated code
-```
-
-**Keep `main.go` thin** — registrations only. Business logic lives in domain
-packages:
-
-```
-{agent-repo}/
-├── main.go         # Registrations
-├── deps/
-│   └── deps.go     # Deps struct — shared by all domain packages
-├── spotify/
-│   ├── service.go  # Pure Go (handles + plain types)
-│   └── tools.go    # Tool Execute funcs
-```
-
-`Deps` is a single struct shared by every domain package, so it lives in
-its own `deps` package — not inside a feature package. A feature package
-(`spotify`) can't be imported by a sibling (`weather`) without coupling
-them, and `main` can't be imported at all. Keeping `Deps` in `deps/`
-lets `main.go` and every domain package import the same type.
-
-Each domain package has two layers:
-
-1. **Pure Go** — business logic, API calls. Accept handles, return plain types.
-2. **Tool Execute** — `func(ctx, In) (Out, error)` that pulls handles via
-   `GetDeps` and calls into pure Go.
 
 ## Minimal example — Weather agent
 
@@ -473,123 +440,43 @@ agent.RegisterRoute(&agentsdk.Route{
 - `AccessPublic` — anyone, no auth. **Only when the user explicitly asks** for
   a public-facing page. Never default to public.
 
-### templ + htmx + Tailwind v4 — HTML UI
+### Framework asset surface — HTML UI
 
-Agents use [templ](https://templ.guide) for type-safe HTML,
-[htmx](https://htmx.org) for interactivity, and
-[Tailwind v4](https://tailwindcss.com) for styling.
+agentsdk bundles htmx and exposes:
 
-**htmx is bundled into agentsdk** and served same-origin from
-`/__air/assets/htmx-{version}.min.js`. The scaffold layout references
-it via `agentsdk.Assets.HTMX`; the version is `agentsdk.HTMXVersion`.
+- `agentsdk.Assets.HTMX` — versioned URL (e.g. `/__air/assets/htmx-2.0.10.min.js`).
+  Use it in your layout `<head>`: `<script src={ agentsdk.Assets.HTMX }></script>`.
+- `agentsdk.HTMXVersion` — the bundled version string, if you need it
+  programmatically.
 
-**Tailwind is per-agent.** The scaffold ships:
+**`/__air/assets/*` is framework-reserved.** agentsdk owns this prefix
+for its bundled assets. For YOUR own static files (icons, fonts,
+page-specific assets), embed them under your agent and serve them from
+a route you register — the scaffold uses `/static/{name}` for the
+compiled Tailwind stylesheet; extend that handler for additional
+files.
 
-- `styles/app.css` — the source. Edit this to brand the agent (the
-  `@theme` block of tokens, custom `@font-face` rules, hand-rolled
-  components under `@layer components`).
-- `views/static/app.css` — the compiled output. Built by the Docker
-  step `tailwindcss -i styles/app.css -o views/static/app.css
-  --minify`. Gitignored. Never edit by hand.
-- `views/assets.go` — `//go:embed`s the compiled output and exposes
-  `views.AppCSS` + `views.AppCSSPath` (carries an 8-char content hash
-  so a rebuilt agent serves the stylesheet at a fresh URL).
-- A `/static/{name}` route in `main.go` serves the stylesheet under
-  the hashed URL with immutable `Cache-Control`.
-
-The layout already links it:
-
-```html
-<link rel="stylesheet" href={ views.AppCSSPath }/>
-```
-
-**`/__air/assets/*` is framework-reserved** for htmx and any future
-runtime essentials. For YOUR own static files (icons, fonts,
-page-specific assets), embed them under `views/static/` and extend
-the `/static/{name}` handler in `main.go` — that's the same route the
-stylesheet uses, and it sits behind `AccessPublic` so unauthenticated
-browsers can fetch it.
-
-**Build order.** Whenever you modify a `.templ` or `styles/app.css`,
-run all three generators before `go build` (or `go vet`, `go test`,
-...):
-
-```bash
-go tool templ generate
-tailwindcss -i styles/app.css -o views/static/app.css --minify
-go build -o /tmp/agent .
-```
-
-`templ generate` first (emits `*_templ.go`); `tailwindcss` next (scans
-the materialised `.templ` source for class names, writes the
-stylesheet); `go build` last (the `//go:embed` reads the stylesheet).
-You don't commit the generated `*_templ.go` or `views/static/app.css`
-— the Docker build regenerates both.
-
-If you want to use a different styling approach (no Tailwind, plain
-CSS, another framework), **record that decision in `NOTES.md`** so
-future upgrades don't half-revert it.
-
-> **Styling, design taste, and htmx polish guidance lives in a
-> separate file: `/libs/agentsdk/llms.web.md`. Read it before you
-> create or modify any `.templ`, edit `styles/app.css`, or otherwise
-> touch how the agent's pages look.** It covers Tailwind v4 `@theme`
-> tokens, palette/font decisions, the layout shapes that earn their
-> keep, swap-target nesting pitfalls, and the one-sentence self-check
-> that catches default-Tailwind output.
+> Templ + htmx + Tailwind + DaisyUI build chain, the MVC split,
+> view-model conventions, and design taste guidance all live in the
+> agent's own **`AGENTS.md`** at the repo root — that's the
+> scaffold-level "how to wire this together" doc. This file documents
+> only the SDK-side surface.
 
 ```go
-// Register a templ page
+// Registering a templ page (illustrative — the scaffold already
+// wires up `/` to handlers.Home).
 import (
     "github.com/a-h/templ"
-    "agent/views"
+    "agent/handlers"
 )
 
 agent.RegisterRoute(&agentsdk.Route{
-    Method: "GET", Path: "/",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        templ.Handler(views.Index()).ServeHTTP(w, r)
-    },
-    Access: agentsdk.AccessPublic, Description: "Homepage",
+    Method:  "GET",
+    Path:    "/",
+    Handler: handlers.Home,
+    Access:  agentsdk.AccessUser,
 })
 ```
-
-```
-// views/search.templ
-package views
-
-templ SearchForm() {
-    <form hx-get="/search" hx-target="#results">
-        <input type="text" name="q"/>
-        <button type="submit">Search</button>
-    </form>
-    <div id="results"></div>
-}
-
-templ SearchResults(items []string) {
-    <ul>
-        for _, item := range items {
-            <li>{ item }</li>
-        }
-    </ul>
-}
-```
-
-Returning a partial:
-
-```go
-agent.RegisterRoute(&agentsdk.Route{
-    Method: "GET", Path: "/search",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        results := doSearch(ctx, r.URL.Query().Get("q"))
-        views.SearchResults(results).Render(ctx, w)
-    },
-    Access: agentsdk.AccessUser, Description: "Search results partial",
-})
-```
-
-Full pages wrap content in `@Layout("Title") { ... }`; htmx requests get
-partial HTML (no layout).
 
 ## RegisterConnection
 
