@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/airlockrun/goai/message"
+	"github.com/airlockrun/sol/session"
+	"github.com/google/uuid"
 )
 
 // defaultTimeout is the default execution timeout for webhooks and crons.
@@ -73,34 +76,98 @@ type Route struct {
 // agent.RegisterConnection — an outgoing service Airlock proxies for the agent
 // with credentials it manages.
 type Connection struct {
-	Slug              string         // unique per agent; binds as conn_{slug} in run_js
-	Name              string
-	Description       string
-	BaseURL           string
-	AuthMode          ConnectionAuth
-	AuthURL           string
-	TokenURL          string
-	Scopes            []string
+	Slug        string // unique per agent; binds as conn_{slug} in run_js
+	Name        string
+	Description string
+	BaseURL     string
+	AuthMode    ConnectionAuth
+	AuthURL     string
+	TokenURL    string
+	Scopes      []string
+	// AuthParams are extra query parameters added to the OAuth
+	// authorization request, overriding the platform defaults per key.
+	// Optional escape hatch for providers whose refresh-token handshake
+	// differs from the default.
+	AuthParams        map[string]string
+	// Headers are static request headers Airlock sets on every proxied
+	// call for this connection (User-Agent, Accept, X-Foo, …). Merged
+	// per-key on top of the platform baseline (a real-browser UA); the
+	// caller's per-call ProxyRequest.Headers merge on top in turn. Set a
+	// value to the empty string to drop a baseline key entirely.
+	Headers           map[string]string
 	AuthInjection     AuthInjection
 	SetupInstructions string
 	LLMHint           string // appended to the connection block in the system prompt
 	Access            Access // who may invoke conn_{slug}; default AccessUser
 }
 
+// ConnectionResponse is the streaming primitive returned by
+// ConnectionHandle.RequestStream. Body is the upstream response body,
+// streamed through airlock's proxy with no airlock-side buffering. Caller
+// owns the lifetime — defer Body.Close() once you've finished reading.
+//
+// StatusCode and Headers carry the upstream values verbatim; airlock
+// removes only its own auth-injection headers. A 2xx from upstream comes
+// through as a 2xx here; auth-required surfaces as *AuthRequiredError on
+// the parent Request* call (not via this struct).
+type ConnectionResponse struct {
+	StatusCode int
+	Headers    http.Header
+	Body       io.ReadCloser
+}
+
+// RequestOpts is the call shape for ConnectionHandle.Request /
+// RequestStream / RequestJSON. Mirrors the options-dict pattern of
+// axios / fetch / python-requests so call sites read declaratively
+// instead of positionally — most calls only need Path, and adding
+// Body or Headers later is a structural edit instead of a shift of
+// every argument.
+//
+//	// Simple GET (Method defaults to "GET"):
+//	body, _ := conn.Request(ctx, agentsdk.RequestOpts{Path: "/v1/me"})
+//
+//	// POST with body:
+//	conn.Request(ctx, agentsdk.RequestOpts{
+//	    Method: "POST", Path: "/v1/playlists", Body: playlist,
+//	})
+//
+//	// With per-call headers:
+//	conn.Request(ctx, agentsdk.RequestOpts{
+//	    Path:    "/v1/me/player",
+//	    Headers: map[string]string{"If-None-Match": etag},
+//	})
+type RequestOpts struct {
+	// Method is the HTTP verb. Empty defaults to "GET" (the majority
+	// of calls).
+	Method string
+	// Path is appended to the connection's BaseURL. Required.
+	Path string
+	// Body is encoded by type when non-nil: []byte / string sent as-is,
+	// io.Reader fully read, anything else JSON-marshalled.
+	Body any
+	// Headers merge per-key on top of the platform baseline (real-browser
+	// User-Agent) and the connection's declared Headers. Set a value to
+	// the empty string to suppress a key set by a lower layer. Nil/empty
+	// map means no overrides.
+	Headers map[string]string
+}
+
 // ConnectionDef is the wire format used by PUT /api/agent/connections/{slug}.
 // Slug is sent in the URL, not the body.
 type ConnectionDef struct {
-	Name              string         `json:"name"`
-	Description       string         `json:"description"`
-	BaseURL           string         `json:"baseUrl,omitempty"`
-	AuthMode          ConnectionAuth `json:"authMode"`
-	AuthURL           string         `json:"authUrl,omitempty"`
-	TokenURL          string         `json:"tokenUrl,omitempty"`
-	Scopes            []string       `json:"scopes,omitempty"`
-	AuthInjection     AuthInjection  `json:"authInjection"`
-	SetupInstructions string         `json:"setupInstructions,omitempty"`
-	LLMHint           string         `json:"llmHint,omitempty"`
-	Access            Access         `json:"access,omitempty"`
+	Name              string            `json:"name"`
+	Description       string            `json:"description"`
+	BaseURL           string            `json:"baseUrl,omitempty"`
+	AuthMode          ConnectionAuth    `json:"authMode"`
+	AuthURL           string            `json:"authUrl,omitempty"`
+	TokenURL          string            `json:"tokenUrl,omitempty"`
+	Scopes            []string          `json:"scopes,omitempty"`
+	AuthParams        map[string]string `json:"authParams,omitempty"`
+	Headers           map[string]string `json:"headers,omitempty"`
+	AuthInjection     AuthInjection     `json:"authInjection"`
+	SetupInstructions string            `json:"setupInstructions,omitempty"`
+	LLMHint           string            `json:"llmHint,omitempty"`
+	Access            Access            `json:"access,omitempty"`
 }
 
 // AuthInjection defines how auth credentials are injected into proxied requests.
@@ -132,6 +199,97 @@ const (
 	AuthInjectQueryParam AuthInjectionType = "query_param"
 )
 
+// --- Exec endpoints ---
+
+// ExecEndpoint is the self-contained declaration registered via
+// agent.RegisterExecEndpoint — a remote target airlock executes commands
+// against on the agent's behalf. The transport (ssh today; telnet,
+// endpoint-binary later) and credentials are operator-configured via the
+// Airlock UI; the agent's main() only declares slug + description + access.
+type ExecEndpoint struct {
+	Slug        string // unique per agent; binds as exec_{slug} in run_js
+	Description string
+	LLMHint     string // appended to the endpoint block in the system prompt
+	Access      Access // who may invoke; default AccessAdmin; AccessPublic is silently demoted to AccessUser
+}
+
+// ExecEndpointDef is the wire format used by PUT /api/agent/exec-endpoints/{slug}.
+// Slug travels in the URL. Operator-configured fields stay airlock-side and
+// are not present here — the agent only declares its intent to use the slug.
+type ExecEndpointDef struct {
+	Description string `json:"description"`
+	LLMHint     string `json:"llmHint,omitempty"`
+	Access      Access `json:"access,omitempty"`
+}
+
+// ExecCommand is the input to ExecHandle.Run / ExecHandle.RunStream.
+//
+// Command is handed to the remote shell as a single command line: pipes,
+// redirection, and shell substitution in Command just work because the
+// remote sshd execs the user's login shell with it. Args are
+// POSIX-shell-quoted and space-joined onto Command before send, so
+// Run("ls", []string{"-la", "my dir"}) sends `ls -la 'my dir'` safely.
+//
+// Use Args for safe multi-arg commands; put any shell features (pipes,
+// redirection) in Command and leave Args empty.
+type ExecCommand struct {
+	Command   string        `json:"command"`
+	Args      []string      `json:"args,omitempty"`
+	Stdin     []byte        `json:"-"` // marshalled separately as base64
+	Timeout   time.Duration `json:"-"` // 0 = server default (60s); marshalled as timeoutMs
+}
+
+// ExecResult is what Run returns when the call fits in the 20 MiB buffer
+// cap. Overflow returns ErrOutputTooLarge with no partial result — use
+// RunStream for outputs that may exceed the cap.
+type ExecResult struct {
+	Stdout     []byte
+	Stderr     []byte
+	ExitCode   int
+	DurationMs int64
+}
+
+// ExecExit is the terminal status of a streaming exec call. Returned by
+// ExecStream.Wait once the remote has closed both stdout and stderr.
+type ExecExit struct {
+	ExitCode   int
+	DurationMs int64
+}
+
+// ExecStream is the streaming primitive returned by ExecHandle.RunStream.
+// Mirrors os/exec.Cmd's StdoutPipe / StderrPipe / Wait shape so Go users
+// get a familiar mental model:
+//
+//	s, _ := vps.RunStream(ctx, ExecCommand{Command: "tar -czf - /var/log"})
+//	defer s.Stdout.Close()
+//	defer s.Stderr.Close()
+//	info, _ := agent.WriteFile(ctx, "tmp/logs.tar.gz", s.Stdout, "application/gzip")
+//	exit, _ := s.Wait()
+//
+// Stdout and Stderr stay open until the remote closes its side; Wait
+// blocks until the exit envelope arrives. Always close both pipes — even
+// when you only care about one — to release the demux goroutines.
+type ExecStream struct {
+	Stdout io.ReadCloser
+	Stderr io.ReadCloser
+	Wait   func() (ExecExit, error)
+}
+
+// ExecError distinguishes transport-class problems (the command never
+// ran) from runtime failures (the command ran and reported a non-zero
+// exit code, which is just an ExecResult with a non-zero ExitCode).
+type ExecError struct {
+	Kind    string // "transport" | "timeout" | "config" | "denied"
+	Message string
+}
+
+func (e *ExecError) Error() string { return "exec " + e.Kind + ": " + e.Message }
+
+// ErrOutputTooLarge is returned by Run / Request when the response exceeds
+// the 20 MiB buffered cap. The error message points the caller at the
+// streaming variant as the resolution.
+var ErrOutputTooLarge = errors.New("agentsdk: response exceeded 20 MiB buffer cap; Run/Request are for structured small responses (JSON, HTML, CLI summaries) — use RunStream/RequestStream for any data download")
+
 // --- Run recording ---
 
 // Action records a single operation performed during a Run.
@@ -152,8 +310,8 @@ type Action struct {
 // metadata so the LLM can refer to "Q1 Report.pdf" while the path uses a
 // uuid-prefixed safe filename.
 type FileInfo struct {
-	Path         string    `json:"path"`         // S3-style storage path, e.g. "uploads/foo.png"
-	Filename     string    `json:"filename"`     // original upload name; S3 metadata
+	Path         FilePath  `json:"path"`     // S3-style storage path, e.g. "uploads/foo.png"
+	Filename     string    `json:"filename"` // original upload name; S3 metadata
 	ContentType  string    `json:"contentType"`
 	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
@@ -185,15 +343,15 @@ func IsAuthRequired(err error) (*AuthRequiredError, bool) {
 
 // PromptInput is the request body for POST /prompt.
 type PromptInput struct {
-	Messages        []message.Message `json:"messages"`
-	Message         string            `json:"message,omitempty"` // New user message text (used with SessionStore)
-	ConversationID  string            `json:"conversationId,omitempty"`
-	ProviderID      string            `json:"providerId,omitempty"`
-	ModelID         string            `json:"modelId,omitempty"`
-	Temperature     *float64          `json:"temperature,omitempty"`
-	MaxOutputTokens *int              `json:"maxOutputTokens,omitempty"`
-	ProviderOptions json.RawMessage   `json:"providerOptions,omitempty"`
-	Files           []FileInfo        `json:"files,omitempty"`
+	Messages            []message.Message `json:"messages"`
+	Message             string            `json:"message,omitempty"` // New user message text (used with SessionStore)
+	ConversationID      string            `json:"conversationId,omitempty"`
+	ProviderID          string            `json:"providerId,omitempty"`
+	ModelID             string            `json:"modelId,omitempty"`
+	Temperature         *float64          `json:"temperature,omitempty"`
+	MaxOutputTokens     *int              `json:"maxOutputTokens,omitempty"`
+	ProviderOptions     json.RawMessage   `json:"providerOptions,omitempty"`
+	Files               []FileInfo        `json:"files,omitempty"`
 	ResumeRunID         string            `json:"resumeRunId,omitempty"`
 	Approved            *bool             `json:"approved,omitempty"`
 	SupportedModalities []string          `json:"supportedModalities,omitempty"` // e.g. ["text", "image", "pdf", "audio", "video"]
@@ -211,12 +369,46 @@ type PromptInput struct {
 	// triggers (webhooks, crons) Airlock sends AccessAdmin.
 	CallerAccess Access `json:"callerAccess,omitempty"`
 
+	// VisibleSiblings are the sibling-agent IDs this run's user is
+	// authorized to A2A-call. UUIDs (not slugs) so a mid-run rename
+	// doesn't silently revoke or reassign bindings. Computed by Airlock
+	// at dispatch using the same access ladder that gates the MCP
+	// endpoint. agentsdk intersects this with the sync-cached
+	// PromptData.Siblings (matched on .ID) for both prompt rendering
+	// and VM bindings — so the prompt and the runtime agree about which
+	// agent_<slug> namespaces are reachable on this run.
+	VisibleSiblings []uuid.UUID `json:"visibleSiblings,omitempty"`
+
 	// ForceCompact tells the agent to skip the thinking loop and run a
 	// user-triggered compaction instead. Message is ignored when set. The
 	// agent loads conversation history, asks the model to summarize it,
 	// persists the summary via the SessionStore's Compact method, and emits
 	// a short text-delta describing the outcome.
 	ForceCompact bool `json:"forceCompact,omitempty"`
+
+	// AutoConfirm makes run_js skip the request_confirmation gate and
+	// execute directly. Airlock sets it for runs that have no interactive
+	// second turn in which to answer a confirmation — currently public
+	// one-shot bridge sessions. It governs only this run's own run_js; a
+	// suspension that still reaches the triggering surface by another path
+	// (e.g. an A2A-delegated confirmation) is auto-denied there instead.
+	AutoConfirm bool `json:"autoConfirm,omitempty"`
+
+	// DirectTools selects the per-run tool surface. When false (default),
+	// the LLM gets one `run_js` tool and capabilities are JS bindings inside
+	// the goja sandbox. When true, every capability is its own typed LLM
+	// tool — no JS sandbox, no TypeScript manifest in the prompt. Airlock
+	// sets this based on the resolved caller; today it's hardcoded to
+	// `callerAccess == AccessPublic`.
+	DirectTools bool `json:"directTools,omitempty"`
+
+	// Platform / UserDisplayName / UserEmail are per-turn context for the
+	// prompt's <env> block. Airlock sets Platform explicitly per dispatch
+	// path (web/telegram/discord/a2a — never inferred) and resolves the
+	// originating user's name/email; any may be empty (then omitted).
+	Platform        string `json:"platform,omitempty"`
+	UserDisplayName string `json:"userDisplayName,omitempty"`
+	UserEmail       string `json:"userEmail,omitempty"`
 }
 
 // --- Directories ---
@@ -252,10 +444,21 @@ type Directory struct {
 	// stay forever — that's the default for normal builder directories.
 	// The framework's /tmp registers with 72 to garbage-collect chat
 	// uploads and generated media; tools that produce throwaway artifacts
-	// (e.g. AI-generated images served via shareFileURL with a 1h URL
+	// (e.g. AI-generated images served via fileShareURL with a 1h URL
 	// expiry) should set a matching short TTL so the bytes go away when
 	// the URL does.
 	RetentionHours int
+
+	// Scope opts the directory into per-context isolation: WriteFile
+	// transparently inserts a scope segment (user-<id>/conv-<id>/run-<id>)
+	// between the directory prefix and the rest of the path, and reads
+	// only succeed when the scope key in the path matches one the
+	// current run owns. Use it for directories accessible to lower-trust
+	// callers (public-MCP, anon) where you need per-caller isolation
+	// without sacrificing usability — the LLM sees the scoped path,
+	// passes it around, and access just works for the caller who wrote
+	// it. Default ScopeNone preserves today's behaviour.
+	Scope DirectoryScope
 }
 
 // DirectoryOpts is the option struct accepted by RegisterDirectory.
@@ -270,18 +473,41 @@ type DirectoryOpts struct {
 
 	// RetentionHours: see Directory.RetentionHours. Zero = no sweep.
 	RetentionHours int
+
+	// Scope: see Directory.Scope. Default ScopeNone (no scoping).
+	Scope DirectoryScope
 }
 
 // DirectoryDef is the wire format sent in SyncRequest.
 type DirectoryDef struct {
-	Path           string `json:"path"`
-	Read           Access `json:"read"`
-	Write          Access `json:"write"`
-	List           Access `json:"list"`
-	Description    string `json:"description"`
-	LLMHint        string `json:"llmHint,omitempty"`
-	RetentionHours int    `json:"retentionHours,omitempty"`
+	Path           string         `json:"path"`
+	Read           Access         `json:"read"`
+	Write          Access         `json:"write"`
+	List           Access         `json:"list"`
+	Description    string         `json:"description"`
+	LLMHint        string         `json:"llmHint,omitempty"`
+	RetentionHours int            `json:"retentionHours,omitempty"`
+	Scope          DirectoryScope `json:"scope,omitempty"`
 }
+
+// DirectoryScope opts a directory into per-context path scoping. See
+// Directory.Scope. Empty string ("" / ScopeNone) keeps the legacy
+// unscoped behaviour: base ACL is the only access gate.
+//
+// The three values map to the three identities a run is naturally
+// anchored against: the calling user, the current conversation, and
+// this single call. WriteFile picks the strongest available key from
+// the run when scoping a path (user → conv → run); CheckFileAccess
+// accepts any of the three on read, so a path written at user-scope
+// remains readable from any run serving the same user.
+type DirectoryScope string
+
+const (
+	ScopeNone DirectoryScope = ""
+	ScopeRun  DirectoryScope = "run"
+	ScopeConv DirectoryScope = "conv"
+	ScopeUser DirectoryScope = "user"
+)
 
 // FileOp tags an operation passed to CheckFileAccess. Delete folds into
 // OpWrite (write on the parent governs unlink); there is no separate
@@ -314,20 +540,22 @@ type TopicDef struct {
 	Access      Access `json:"access"`
 }
 
-// --- Display parts (printToUser / topic publish) ---
+// --- Display parts (output / topic publish) ---
 
 // DisplayPart is a single piece of rich content for user-facing output.
-// Used by both printToUser (VM) and TopicHandle.Publish (Go).
+// The `output` JS binding accepts media-only parts
+// (image/file/audio/video); TopicHandle.Publish accepts text too,
+// since Go builder code has no separate prose channel to use instead.
 type DisplayPart struct {
-	Type     string  `json:"type"`                    // "text", "image", "file", "audio", "video"
-	Text     string  `json:"text,omitempty"`           // body text, or caption for media types
-	Source   string  `json:"source,omitempty"`          // S3 key
-	URL      string  `json:"url,omitempty"`             // external URL
-	Data     []byte  `json:"data,omitempty"`            // raw bytes (base64 in JSON)
+	Type     string  `json:"type"`             // "text", "image", "file", "audio", "video"
+	Text     string  `json:"text,omitempty"`   // body text, or caption for media types
+	Source   string  `json:"source,omitempty"` // S3 key
+	URL      string  `json:"url,omitempty"`    // external URL
+	Data     []byte  `json:"data,omitempty"`   // raw bytes (base64 in JSON)
 	Filename string  `json:"filename,omitempty"`
 	MimeType string  `json:"mimeType,omitempty"`
-	Alt      string  `json:"alt,omitempty"`             // accessibility text for images
-	Duration float64 `json:"duration,omitempty"`        // seconds, audio/video
+	Alt      string  `json:"alt,omitempty"`      // accessibility text for images
+	Duration float64 `json:"duration,omitempty"` // seconds, audio/video
 }
 
 // PrintRequest is the body for POST /api/agent/print.
@@ -367,14 +595,101 @@ func ResolveDisplayPart(p *DisplayPart) {
 		p.Type = "text"
 	}
 
-	// Generate filename for media parts without one.
+	// Generate filename for media parts without one. Priority:
+	//   1. Source path's basename — preserves the real filename the
+	//      caller picked ("red-square-16x16.png" stays a .png file
+	//      end-to-end, including in the presigned-URL tail clients
+	//      read to choose a Save-As name). Before this, the type+ext
+	//      generator would overwrite a Source-based part with
+	//      "image.png" / "image.bin", losing the original name.
+	//   2. URL's last path segment — same reasoning for external URLs.
+	//   3. Type + extension from MimeType — only when neither Source
+	//      nor URL gives us a real filename. mime.ExtensionsByType is
+	//      OS-dependent (reads /etc/mime.types), so we fall back to a
+	//      baked-in map (extForMimeOrType) so a missing mime DB doesn't
+	//      give every file ".bin".
 	if p.Filename == "" && p.Type != "" && p.Type != "text" {
-		ext := ".bin"
-		if exts, _ := mime.ExtensionsByType(p.MimeType); len(exts) > 0 {
-			ext = exts[0]
+		switch {
+		case p.Source != "":
+			p.Filename = filenameFromPath(p.Source)
+		case p.URL != "":
+			p.Filename = filenameFromPath(p.URL)
+		default:
+			p.Filename = p.Type + extForMimeOrType(p.MimeType, p.Type)
 		}
-		p.Filename = p.Type + ext
 	}
+}
+
+// filenameFromPath returns the last slash-segment of a path / URL,
+// stripped of any leading query string. Returns "" when the input has
+// no usable tail (caller falls through to a synthesized filename).
+func filenameFromPath(p string) string {
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	for strings.HasSuffix(p, "/") {
+		p = p[:len(p)-1]
+	}
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		p = p[i+1:]
+	}
+	return p
+}
+
+// extForMimeOrType returns a leading-dot extension for the given mime
+// type, falling back to the part type when mime is empty/unknown. The
+// baked-in map is small and covers what http.DetectContentType actually
+// emits — it doesn't try to be exhaustive.
+func extForMimeOrType(mimeType, partType string) string {
+	if exts, _ := mime.ExtensionsByType(mimeType); len(exts) > 0 {
+		return exts[0]
+	}
+	switch mimeType {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "image/svg+xml":
+		return ".svg"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav":
+		return ".wav"
+	case "audio/ogg":
+		return ".ogg"
+	case "audio/webm":
+		return ".weba"
+	case "video/mp4":
+		return ".mp4"
+	case "video/webm":
+		return ".webm"
+	case "application/pdf":
+		return ".pdf"
+	case "application/json":
+		return ".json"
+	case "text/plain":
+		return ".txt"
+	case "text/csv":
+		return ".csv"
+	case "text/html":
+		return ".html"
+	}
+	// Type-only fallback when mime is empty: pick a sensible default
+	// for each media category. Better than .bin in the common case
+	// where the agent passed bytes with no mime hint.
+	switch partType {
+	case "image":
+		return ".png"
+	case "audio":
+		return ".mp3"
+	case "video":
+		return ".mp4"
+	}
+	return ".bin"
 }
 
 // --- Access levels ---
@@ -461,6 +776,11 @@ type MCPAuthStatus struct {
 	AuthMode   MCPAuth `json:"authMode"`
 	Authorized bool    `json:"authorized"`
 	AuthURL    string  `json:"authUrl,omitempty"`
+	// Instructions is the server-level description the remote MCP server
+	// advertised in its initialize result (the spec's `instructions`
+	// field). Empty when the server set none. Rendered next to
+	// mcp_<slug> in the prompt so the model knows what the server is for.
+	Instructions string `json:"instructions,omitempty"`
 }
 
 // MCPToolCallRequest is the body for POST /api/agent/mcp/{slug}/tools/call.
@@ -476,9 +796,16 @@ type MCPToolCallResponse struct {
 }
 
 // MCPContent is a single content block in an MCP tool response.
+// MCP defines five content types; we keep the fields we surface to JS
+// callers. URI is set for resource_link; Data + MimeType for
+// image/audio; Name for resource_link display.
 type MCPContent struct {
-	Type string `json:"type"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	URI      string `json:"uri,omitempty"`
+	Name     string `json:"name,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+	Data     string `json:"data,omitempty"`
 }
 
 // --- Sync / wire types (shared between agentsdk client and airlock server) ---
@@ -487,6 +814,7 @@ type MCPContent struct {
 type SyncRequest struct {
 	Version      string           `json:"version"`
 	Description  string           `json:"description,omitempty"`
+	Emoji        string           `json:"emoji,omitempty"`
 	Tools        []ToolDef        `json:"tools,omitempty"`
 	Webhooks     []WebhookDef     `json:"webhooks"`
 	Crons        []CronDef        `json:"crons"`
@@ -508,6 +836,55 @@ type EnvVarDef struct {
 	Secret      bool   `json:"secret"`
 	Default     string `json:"default,omitempty"`
 	Pattern     string `json:"pattern,omitempty"`
+}
+
+// EnvVarValueResponse is the wire body of GET /api/agent/env-vars/{slug}
+// — the operator-supplied value for one declared env var (or 404 if no
+// value is configured).
+type EnvVarValueResponse struct {
+	Value string `json:"value"`
+}
+
+// ExecRequest is the wire body of POST /api/agent/exec/{slug}. Stdin
+// arrives base64-encoded because it can be raw bytes and JSON can't
+// carry those directly. TimeoutMs of 0 means "use the server default".
+type ExecRequest struct {
+	Command   string   `json:"command"`
+	Args      []string `json:"args,omitempty"`
+	StdinB64  string   `json:"stdinB64,omitempty"`
+	TimeoutMs int64    `json:"timeoutMs,omitempty"`
+}
+
+// SealRequest / SealResponse are the wire bodies of POST /api/agent/seal:
+// the agent posts plaintext it generated at runtime, airlock returns
+// an opaque sealed blob bound to this agent's ID.
+type SealRequest struct {
+	Plaintext string `json:"plaintext"`
+}
+
+type SealResponse struct {
+	Sealed string `json:"sealed"`
+}
+
+// UnsealRequest / UnsealResponse are the wire bodies of POST /api/agent/unseal:
+// the agent posts a previously-sealed blob, airlock returns the
+// plaintext (only if the blob was sealed for this same agent).
+type UnsealRequest struct {
+	Sealed string `json:"sealed"`
+}
+
+type UnsealResponse struct {
+	Plaintext string `json:"plaintext"`
+}
+
+// SessionCompactRequest is the wire body of
+// POST /api/agent/session/{convID}/compact: the agent posts the
+// summarized message tail it wants to keep, plus a count of tokens the
+// summarization freed, and airlock writes a checkpoint marker row
+// followed by the summary.
+type SessionCompactRequest struct {
+	Summary     []session.Message `json:"summary"`
+	TokensFreed int               `json:"tokensFreed"`
 }
 
 // ExtraPrompt is the self-contained declaration passed to agent.AddExtraPrompt.
@@ -545,18 +922,22 @@ type ModelSlot struct {
 
 // SyncResponse is the response from PUT /api/agent/sync.
 //
-// All three SystemPrompt* fields are required: SystemPrompt is the
-// unfiltered admin variant; SystemPromptUser and SystemPromptPublic are
-// pre-filtered for AccessUser and AccessPublic runs and omit any tool,
-// connection, MCP server, topic, or route the caller can't reach. A
-// public DM must never see the admin-tier surface listed in the prompt.
-// solagent.go picks the variant per run via run.callerAccess and does
-// not fall back across tiers.
+// The agent renders its own system prompt per run from PromptData
+// (platform-side data) plus its in-memory registrations. Airlock no
+// longer ships a pre-rendered SystemPrompt: per-run rendering is the
+// only way to express per-user sibling visibility without exploding
+// the wire payload into N variants.
 type SyncResponse struct {
-	SystemPrompt       string          `json:"systemPrompt"`
-	SystemPromptUser   string          `json:"systemPromptUser"`
-	SystemPromptPublic string          `json:"systemPromptPublic"`
-	MCPAuthStatus      []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
+	// PromptData carries the slice of system-prompt input the agent
+	// can't derive locally: dashboard / route URLs, the full sibling
+	// address book with their published tool schemas. Required. An
+	// older agentsdk that doesn't know about PromptData would have
+	// produced an empty system prompt; the new agentsdk's
+	// applySyncResponse panics on a zero-value PromptData with a
+	// clear "your airlock is newer than your agentsdk" message.
+	PromptData PromptData `json:"promptData"`
+
+	MCPAuthStatus []MCPAuthStatus `json:"mcpAuthStatus,omitempty"`
 	// MCPSchemas carries discovered tool schemas per MCP server slug.
 	// Airlock populates these from its server-side discovery cache so the
 	// agent's VM can install one typed JS method per tool on each
@@ -570,6 +951,73 @@ type SyncResponse struct {
 	// dirs serve unauthenticated, user/admin dirs require subdomain login
 	// (redirect-on-missing-cookie).
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
+}
+
+// PromptData is the platform-supplied slice of the prompt-render
+// input — everything the agent can't compute locally from its own
+// in-memory registrations.
+type PromptData struct {
+	// AgentDashboardURL points at the agent's settings page in the
+	// Airlock UI; the prompt tells the LLM to direct users there when
+	// a connection or MCP server needs OAuth.
+	AgentDashboardURL string `json:"agentDashboardUrl"`
+
+	// AgentRouteURL is the agent's public subdomain (scheme + host +
+	// optional port). The prompt embeds it for "share file at this
+	// URL" guidance. Derived server-side because the scheme/port
+	// logic lives in airlock's PUBLIC_URL parsing.
+	AgentRouteURL string `json:"agentRouteUrl"`
+
+	// Siblings is the FULL configured sibling list with each one's
+	// tool schemas. Static at sync time (changes when the operator
+	// edits the address book). Per-user visibility is layered on at
+	// dispatch via PromptInput.VisibleSiblings.
+	Siblings []SiblingInfo `json:"siblings,omitempty"`
+
+	// Capabilities are the model slots Airlock has bound for this
+	// agent (agent override → system default). Each bool is true iff
+	// some model is bound for that slot — the prompt branches on
+	// these to avoid recommending builtins that would 4xx at
+	// runtime (e.g. analyzeImage on an agent with no vision model).
+	Capabilities Capabilities `json:"capabilities,omitempty"`
+
+	// SupportedModalities is the chat model's declared input
+	// modality list ("text", "image", "pdf", "audio", "video") at
+	// sync time. PromptInput.SupportedModalities overrides per-run
+	// when set (the run-time value reflects the actual model that
+	// will serve THIS turn, which can differ from sync if the agent
+	// uses run.LLM(slug=...) elsewhere). The prompt template uses
+	// whichever the agent has on hand.
+	SupportedModalities []string `json:"supportedModalities,omitempty"`
+}
+
+// Capabilities is a one-bool-per-slot capability matrix. Field names
+// mirror ModelCapability constants (Vision/Transcription/Speech/
+// Embedding/Image) with one extra for the web-search service slot,
+// which is a non-LLM service but follows the same agent-override →
+// system-default resolution pattern.
+type Capabilities struct {
+	Vision        bool `json:"vision,omitempty"`        // chat with images — analyzeImage / multimodal attachToContext
+	Transcription bool `json:"transcription,omitempty"` // speech-to-text — voice-note auto-transcribe + transcribe()
+	Speech        bool `json:"speech,omitempty"`        // text-to-speech — speech()
+	Embedding     bool `json:"embedding,omitempty"`     // vector embeddings — embed()
+	Image         bool `json:"image,omitempty"`         // image generation — generateImage()
+	Search        bool `json:"search,omitempty"`        // web search — webSearch()
+}
+
+// SiblingInfo describes one sibling agent in the caller's address
+// book. Travels in PromptData.Siblings.
+type SiblingInfo struct {
+	// ID is the canonical, rename-safe identifier. MCP outbound calls
+	// use the UUID in the URL path so a sibling rename doesn't break
+	// in-flight bindings.
+	ID uuid.UUID `json:"id"`
+	// Slug is the human-readable binding name — appears in the prompt
+	// and as the `agent_<slug>` namespace on this agent's VM.
+	Slug        string          `json:"slug"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Tools       []MCPToolSchema `json:"tools,omitempty"`
 }
 
 // ToolDef describes a registered tool sent during sync. Carries the JSON
@@ -613,12 +1061,16 @@ type CronDef struct {
 // HTTPRequest is the body for POST /api/agent/http.
 type HTTPRequest struct {
 	URL     string            `json:"url"`
-	Method  string            `json:"method,omitempty"`  // default: GET
+	Method  string            `json:"method,omitempty"` // default: GET
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body,omitempty"`
 	Timeout int               `json:"timeout,omitempty"` // seconds, default: 30, max: 120
 	SaveAs  string            `json:"saveAs,omitempty"`  // save response body to S3 at this key (binary-safe)
 	Raw     bool              `json:"raw,omitempty"`     // skip HTML→markdown conversion for HTML responses
+	// AllHeaders returns every upstream response header. Default (false)
+	// returns only the curated few an agent reasons about; the rest
+	// (CSP, Via, Alt-Svc, telemetry) are noise that burns context.
+	AllHeaders bool `json:"allHeaders,omitempty"`
 }
 
 // HTTPResponse is returned from POST /api/agent/http.
@@ -627,16 +1079,31 @@ type HTTPResponse struct {
 	Headers     map[string]string `json:"headers"`
 	Body        string            `json:"body,omitempty"`
 	ContentType string            `json:"contentType"` // original upstream Content-Type
-	Size        int               `json:"size"`
-	SavedTo     string            `json:"savedTo,omitempty"` // S3 key if body was auto-saved
-	Note        string            `json:"note,omitempty"`    // human-readable note about transformations applied (e.g. HTML→markdown conversion)
+	// Size is the byte length of the content the agent can act on — the
+	// inline body, the converted markdown, or the object written to
+	// SavedTo. Always populated (never the upstream Content-Length,
+	// which is 0 for chunked/unknown).
+	Size int `json:"size"`
+	// BodyPreview is the head (~1 KB) of a saved text/markdown body so
+	// the result is legible without a second fileRead. Empty for binary
+	// or inline (Body carries the whole thing) responses.
+	BodyPreview string `json:"bodyPreview,omitempty"`
+	SavedTo     string `json:"savedTo,omitempty"` // S3 key if body was auto-saved
+	Note        string `json:"note,omitempty"`    // human-readable note about transformations applied (e.g. HTML→markdown conversion)
 }
 
 // ProxyRequest is the body for POST /api/agent/proxy/{slug}.
+//
+// Headers are per-call request headers, merged per-key on top of the
+// connection's declared Headers (which themselves sit on top of the
+// platform baseline). Set a value to the empty string to suppress a key
+// set by a lower layer. omitempty: a call that doesn't need custom
+// headers can simply omit the field.
 type ProxyRequest struct {
-	Method string `json:"method"`
-	Path   string `json:"path"`
-	Body   string `json:"body,omitempty"`
+	Method  string            `json:"method"`
+	Path    string            `json:"path"`
+	Body    string            `json:"body,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // ShareFileRequest is the body for POST /api/agent/storage/share.
@@ -661,12 +1128,12 @@ type ShareFileResponse struct {
 type ModelCapability string
 
 const (
-	CapText          ModelCapability = "text"           // any chat/language model
-	CapVision        ModelCapability = "vision"          // chat model that accepts images
-	CapEmbedding     ModelCapability = "embedding"       // vector embeddings
-	CapImage         ModelCapability = "image"            // image generation
-	CapSpeech        ModelCapability = "speech"           // text-to-speech
-	CapTranscription ModelCapability = "transcription"    // speech-to-text
+	CapText          ModelCapability = "text"          // any chat/language model
+	CapVision        ModelCapability = "vision"        // chat model that accepts images
+	CapEmbedding     ModelCapability = "embedding"     // vector embeddings
+	CapImage         ModelCapability = "image"         // image generation
+	CapSpeech        ModelCapability = "speech"        // text-to-speech
+	CapTranscription ModelCapability = "transcription" // speech-to-text
 )
 
 // ModelOpts configures a model request. Used with agent.LLM(), agent.ImageModel(), etc.
@@ -711,6 +1178,7 @@ type CreateRunResponse struct {
 type LogLevel string
 
 const (
+	LogLevelDebug LogLevel = "debug"
 	LogLevelInfo  LogLevel = "info"
 	LogLevelWarn  LogLevel = "warn"
 	LogLevelError LogLevel = "error"
@@ -754,4 +1222,3 @@ type RunCompleteRequest struct {
 	Logs       []LogEntry      `json:"logs,omitempty"`
 	Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
 }
-

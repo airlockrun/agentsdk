@@ -45,9 +45,35 @@ func (c *airlockClient) do(ctx context.Context, method, path string, body io.Rea
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	// Credit blocking backend time to the run's go-call accumulator so the
+	// L3 CPU guard doesn't mistake I/O wait for a JS spin. Nesting-safe.
+	if gw := goWallFrom(ctx); gw != nil {
+		gw.enter()
+		defer gw.exit()
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("agentsdk: %s %s: %w", method, path, err)
+	}
+	return resp, nil
+}
+
+// getRange issues a GET with a byte-range header for the inclusive range
+// [start, end] (HTTP Range semantics). Mirrors do's auth header and goWall
+// accounting; the caller closes resp.Body.
+func (c *airlockClient) getRange(ctx context.Context, path string, start, end int64) (*http.Response, error) {
+	req, err := c.newRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	if gw := goWallFrom(ctx); gw != nil {
+		gw.enter()
+		defer gw.exit()
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("agentsdk: GET %s (range): %w", path, err)
 	}
 	return resp, nil
 }
@@ -80,7 +106,7 @@ func (c *airlockClient) doJSON(ctx context.Context, method, path string, reqBody
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("agentsdk: %s %s: status %d: %s", method, path, resp.StatusCode, string(b))
+		return fmt.Errorf("%s %s: status %d: %s", method, path, resp.StatusCode, string(b))
 	}
 
 	if result != nil && resp.ContentLength != 0 {

@@ -6,6 +6,9 @@ import (
 
 	"github.com/airlockrun/goai/tool"
 	"github.com/dop251/goja"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 // run is an unexported per-request bookkeeping struct. Accumulates actions
@@ -16,27 +19,46 @@ type run struct {
 	id                  string
 	bridgeID            string
 	conversationID      string
+	parentRunID         string // for A2A/external MCP calls — the caller's run ID from X-Parent-Run-ID; gates __incoming/run-<id>/ reads
+	userID              string // the originating user (anchor for scoped dirs); empty for cron/webhook/anon
 	supportedModalities []string
-	callerAccess        Access // resolved per-turn access level (default AccessAdmin for trusted triggers)
+	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
+	autoConfirm         bool        // run_js skips the request_confirmation gate (set for non-interactive runs, e.g. public one-shot bridge sessions)
+	directTools         bool        // expose each capability as its own typed LLM tool instead of a single run_js binding; airlock sets this for public-tier runs today
+	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with PromptData.Siblings at render time
 	ctx                 context.Context
+	gw                  *goWall // go-call time accumulator (L3 CPU guard)
 	actions             []Action
 	logs                []LogEntry
+	logsBytes           int // running size of logs[].Message; drives the cap in logAppend
+	logger              *zap.Logger
+	loggerOnce          sync.Once
 	vm                  *goja.Runtime
 	vmOnce              sync.Once
-	mu                  sync.Mutex // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
-	convVM              *ConversationVM
+	mu                  sync.Mutex          // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
 	attachedKeys        map[string]struct{} // keys attached this run for idempotency
 	pendingLogs         []LogEntry          // logs from current executeJS call, drained after each execution
 	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result
+	fileCache           *fileCache          // per-run local-disk read cache (large-file reads spill here)
+	cleanupOnce         sync.Once           // guards cleanupScratch so run.complete can call it on every path
+	platform            string              // channel for the <env> block (web/telegram/discord/a2a); set explicitly per dispatch
+	userDisplayName     string              // originating user's display name for <env> (empty when none)
+	userEmail           string              // originating user's email for <env> (empty when none)
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {
+	// One go-call accumulator per run, carried in ctx so the central HTTP
+	// seam credits blocking time without wrapping every binding. It feeds
+	// the L3 CPU guard (JS time = wall − time parked in Go calls).
+	gw := &goWall{}
 	return &run{
 		agent:          agent,
 		id:             id,
 		bridgeID:       bridgeID,
 		conversationID: conversationID,
-		ctx:            ctx,
+		ctx:            withGoWall(ctx, gw),
+		gw:             gw,
+		fileCache:      newFileCache(),
 		// Default to admin — webhook/cron/route handlers and tests are
 		// trusted contexts. /prompt overrides this with the per-turn
 		// CallerAccess from PromptInput.
@@ -68,19 +90,52 @@ func (r *run) vmRuntime() *goja.Runtime {
 	return r.vm
 }
 
-// logAppend records a run-scoped log line. Flushed to Airlock on Complete.
+// maxRunLogBytes caps the in-memory run log buffer. Airlock keeps the
+// flushed buffer as the run's log record, so it must stay bounded —
+// once over the cap, oldest entries are dropped. ~64 KiB comfortably
+// holds a handler's worth of lines; anything chattier should be read
+// from container stdout / the operator's log pipeline, where nothing
+// is dropped.
+const maxRunLogBytes = 64 * 1024
+
+// logAppend records a run-scoped log line into the bounded buffer.
+// Flushed to Airlock on Complete as the run's log record. Reached from
+// Agent.Logger's capture core and from the JS log()/console bindings.
 func (r *run) logAppend(level LogLevel, msg string) {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.logs = append(r.logs, LogEntry{Level: level, Message: msg})
-	r.mu.Unlock()
+	r.logsBytes += len(msg)
+	for r.logsBytes > maxRunLogBytes && len(r.logs) > 1 {
+		r.logsBytes -= len(r.logs[0].Message)
+		r.logs = r.logs[1:]
+	}
+}
+
+// runLogger lazily builds the per-run *zap.Logger: the shared stdout
+// core tagged with run_id/agent_id, teed into a runLogCore that
+// captures entries into r.logs. Built once per run; safe for
+// concurrent handler goroutines.
+func (r *run) runLogger() *zap.Logger {
+	r.loggerOnce.Do(func() {
+		base := agentLogger().Core()
+		tagged := base.With([]zapcore.Field{
+			zap.String("run_id", r.id),
+			zap.String("agent_id", r.agent.agentID),
+		})
+		capture := &runLogCore{LevelEnabler: base, run: r}
+		r.logger = zap.New(zapcore.NewTee(tagged, capture))
+	})
+	return r.logger
 }
 
 // --- VM-only Airlock calls (only reachable from run_js JS bindings) ---
 
-// printToUser sends display parts to the run's bound conversation. If topic
+// output sends display parts to the run's bound conversation. If topic
 // is empty, delivers to the conversation directly; if set, Airlock routes
-// to all subscribed conversations (topic publish).
-func (r *run) printToUser(ctx context.Context, parts []DisplayPart, topic string) error {
+// to all subscribed conversations (topic publish). Backs the `output()`
+// JS binding (media-only) and TopicHandle.Publish (Go, may include text).
+func (r *run) output(ctx context.Context, parts []DisplayPart, topic string) error {
 	for i := range parts {
 		ResolveDisplayPart(&parts[i])
 	}

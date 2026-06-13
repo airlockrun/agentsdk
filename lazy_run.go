@@ -14,6 +14,15 @@ type lazyRun struct {
 	run        *run
 	agent      *Agent
 	triggerRef string
+
+	// Scope keys threaded in by the dispatching handler. CheckFileAccess
+	// consults these for tool bodies that read from scoped directories
+	// without materializing a run (run isn't created until something
+	// actually logs / calls the model). When the run is later
+	// materialized, these are copied into it.
+	parentRunID    string
+	conversationID string
+	userID         string
 }
 
 func (l *lazyRun) get(ctx context.Context) *run {
@@ -21,6 +30,12 @@ func (l *lazyRun) get(ctx context.Context) *run {
 	defer l.mu.Unlock()
 	if l.run == nil {
 		l.run = l.agent.newRunFromAirlock(ctx, "code", l.triggerRef)
+		// Carry the scope keys threaded in at dispatch time onto the
+		// freshly-materialized run so CheckFileAccess matches them
+		// consistently regardless of whether the run was lazy or eager.
+		l.run.parentRunID = l.parentRunID
+		l.run.conversationID = l.conversationID
+		l.run.userID = l.userID
 	}
 	return l.run
 }

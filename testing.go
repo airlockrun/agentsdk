@@ -76,7 +76,7 @@ func NewMockAirlock() (*MockAirlock, string) {
 		})
 	})
 
-	// Print endpoint (printToUser / topic publish).
+	// Print endpoint (output / topic publish).
 	mux.HandleFunc("POST /api/agent/print", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.WriteHeader(http.StatusNoContent)
@@ -163,7 +163,7 @@ func NewMockAirlock() (*MockAirlock, string) {
 	mux.HandleFunc("PUT /api/agent/sync", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(SyncResponse{SystemPrompt: "mock system prompt"})
+		json.NewEncoder(w).Encode(SyncResponse{PromptData: PromptData{AgentRouteURL: "https://mock-agent.test"}})
 	})
 
 	// Upgrade endpoint.

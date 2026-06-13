@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
+
+	"go.uber.org/zap"
 )
 
 // syncWithAirlock registers connections, MCP servers, webhooks, crons, topics, and event subscriptions with Airlock.
@@ -22,6 +23,8 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			AuthURL:           c.AuthURL,
 			TokenURL:          c.TokenURL,
 			Scopes:            c.Scopes,
+			AuthParams:        c.AuthParams,
+			Headers:           c.Headers,
 			AuthInjection:     c.AuthInjection,
 			SetupInstructions: c.SetupInstructions,
 			LLMHint:           c.LLMHint,
@@ -46,6 +49,20 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		}
 		if err := a.client.doJSON(ctx, "PUT", "/api/agent/mcp-servers/"+slug, def, nil); err != nil {
 			return fmt.Errorf("register MCP server %s: %w", slug, err)
+		}
+	}
+
+	// Register each exec endpoint declaration. Operators set transport,
+	// host, user, and credentials via the admin UI; we only declare the
+	// slug+description+access here.
+	for slug, e := range a.execEndpoints {
+		def := ExecEndpointDef{
+			Description: e.Description,
+			LLMHint:     e.LLMHint,
+			Access:      e.Access,
+		}
+		if err := a.client.doJSON(ctx, "PUT", "/api/agent/exec-endpoints/"+slug, def, nil); err != nil {
+			return fmt.Errorf("register exec endpoint %s: %w", slug, err)
 		}
 	}
 
@@ -165,6 +182,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description:    d.Description,
 			LLMHint:        d.LLMHint,
 			RetentionHours: d.RetentionHours,
+			Scope:          d.Scope,
 		})
 	}
 
@@ -180,6 +198,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	syncBody := SyncRequest{
 		Version:      Version,
 		Description:  a.description,
+		Emoji:        a.emoji,
 		Tools:        tools,
 		Webhooks:     webhooks,
 		Crons:        crons,
@@ -207,7 +226,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	// Log MCP auth issues.
 	for _, status := range syncResp.MCPAuthStatus {
 		if !status.Authorized {
-			log.Printf("MCP server %q: authorization required (%s)", status.Slug, status.AuthURL)
+			agentLogger().Warn("MCP server authorization required", zap.String("slug", status.Slug), zap.String("auth_url", status.AuthURL))
 		}
 	}
 	return nil

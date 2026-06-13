@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +12,8 @@ import (
 	"sort"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Serve starts the agent HTTP server. Blocks until SIGINT/SIGTERM.
@@ -32,9 +33,6 @@ func (a *Agent) Serve() {
 	// is also called from /refresh where errors propagate to Airlock.
 	a.syncOrPanic(ctx)
 
-	// Start conversation VM garbage collection.
-	a.startConvVMGC(a.convVMConfig)
-
 	// Start the background-run flusher. Closes any stale ambient run after
 	// the inactivity window elapses.
 	a.startBackgroundFlusher()
@@ -45,6 +43,12 @@ func (a *Agent) Serve() {
 	mux.HandleFunc("POST /cron/{name}", a.handleCron)
 	mux.HandleFunc("POST /refresh", a.handleRefresh)
 	mux.HandleFunc("GET /health", a.handleHealth)
+	// A2A: airlock's MCP server forwards user-registered tool calls
+	// here so sibling agents can invoke them directly (no LLM loop).
+	mux.HandleFunc("POST /__air/tool/{name}", a.handleDirectTool)
+	// Bundled frontend assets (htmx, pico.css) — same-origin so the
+	// scaffold layout doesn't depend on a CDN.
+	mux.HandleFunc("GET /__air/assets/{name}", a.handleAsset)
 
 	// Mount custom routes registered via RegisterRoute.
 	// Each route gets a lazy-run installed in ctx — a run is only created
@@ -68,7 +72,7 @@ func (a *Agent) Serve() {
 		a.stopBackgroundFlusher()
 	}()
 
-	log.Printf("agentsdk: version=%s serving on %s", Version, addr)
+	agentLogger().Info("serving", zap.String("version", Version), zap.String("addr", addr))
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		panic("agentsdk: server error: " + err.Error())
 	}
@@ -177,6 +181,87 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 	run.complete(ctx, "success", "", "", "")
 }
 
+// handleDirectTool dispatches a user-registered tool by name without
+// running the LLM loop. Used by Airlock's MCP server endpoint to expose
+// tools to sibling agents (A2A): the calling agent sees a typed
+// `agent_<slug>.toolName(...)` binding, the MCP server forwards the
+// call to airlock, and airlock forwards here with the resolved
+// caller access in X-Caller-Access.
+//
+// Access gating mirrors what the VM does at call time: the caller's
+// access must be >= the tool's registered Access (typically AccessUser).
+// Reject otherwise with 403 — the MCP server propagates that as a
+// JSON-RPC error to the caller.
+func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	tool, ok := a.tools[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	caller := Access(r.Header.Get("X-Caller-Access"))
+	if caller == "" {
+		caller = AccessUser
+	}
+	if !accessSatisfies(caller, tool.Access) {
+		http.Error(w, `{"error":"tool requires higher access"}`, http.StatusForbidden)
+		return
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 4*1024*1024))
+	if err != nil {
+		http.Error(w, `{"error":"read body"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Bind a lazyRun into ctx so anything the tool reaches for —
+	// GetDeps[T], conn_X.Request, agent.Storage, agent.LLM — can
+	// resolve the Agent (and materialize a real run if it actually
+	// performs an LLM call / log / action). Without this, the tool
+	// gets a bare http.Request ctx and any AgentFromContext lookup
+	// panics. Mirrors the lazyRun setup wrapRoute uses for custom
+	// HTTP routes.
+	//
+	// Scope keys (parentRun/user) ride on headers airlock sets for
+	// A2A and external MCP tool calls; CheckFileAccess consults them
+	// when gating reads on scoped directories.
+	lazy := &lazyRun{
+		agent:       a,
+		triggerRef:  "mcp-tool:" + name,
+		parentRunID: r.Header.Get("X-Parent-Run-ID"),
+		userID:      r.Header.Get("X-User-ID"),
+	}
+
+	timeout := defaultTimeout
+	baseCtx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	ctx := contextWithLazyRun(baseCtx, lazy)
+
+	defer func() {
+		if rec := recover(); rec != nil {
+			agentLogger().Error("tool panic", zap.String("tool", name), zap.Any("recover", rec), zap.ByteString("stack", debug.Stack()))
+			http.Error(w, `{"error":"tool panicked"}`, http.StatusInternalServerError)
+		}
+		// If the tool materialized a real run (made an LLM call,
+		// wrote actions, etc.) flush its terminal state so airlock
+		// records the run as success and the action timeline is
+		// persisted. Best-effort — failures here don't change the
+		// already-written response.
+		if run := lazy.materialized(); run != nil {
+			_ = run.complete(ctx, "success", "", "", "")
+		}
+	}()
+
+	out, err := tool.Execute(ctx, raw)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(out))
+}
+
 // wrapRoute converts a RouteHandlerFunc into http.HandlerFunc, installing
 // a lazy run into ctx and flushing the run on return if it was materialized.
 func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc {
@@ -197,7 +282,7 @@ func routeLogging(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("agentsdk: route panic: %s %s: %v\n%s", r.Method, r.URL.Path, rec, debug.Stack())
+				agentLogger().Error("route panic", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Any("recover", rec), zap.ByteString("stack", debug.Stack()))
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()
@@ -206,7 +291,7 @@ func routeLogging(next http.HandlerFunc) http.HandlerFunc {
 		next.ServeHTTP(sw, r)
 
 		if sw.status >= 500 {
-			log.Printf("agentsdk: route error: %s %s → %d", r.Method, r.URL.Path, sw.status)
+			agentLogger().Warn("route error", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", sw.status))
 		}
 	}
 }
@@ -239,7 +324,7 @@ func (sw *statusWriter) Write(b []byte) (int, error) {
 // callers (Airlock dispatcher) know the agent is in the new state on 200.
 func (a *Agent) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err := a.syncWithAirlock(r.Context()); err != nil {
-		log.Printf("agentsdk: /refresh sync failed: %v", err)
+		agentLogger().Error("/refresh sync failed", zap.Error(err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -3,11 +3,13 @@ package agentsdk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/airlockrun/goai/tool"
+	"github.com/dop251/goja"
 )
 
 type doubleIn struct {
@@ -112,11 +114,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("deleteFile calls backend", func(t *testing.T) {
+	t.Run("fileDelete calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `deleteFile("uploads/a.txt")`)
+		_, err := executeJS(run.vmRuntime(), `fileDelete("uploads/a.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -129,11 +131,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("listDir returns array", func(t *testing.T) {
+	t.Run("fileList returns array", func(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `JSON.stringify(listDir("uploads/"))`)
+		result, err := executeJS(run.vmRuntime(), `JSON.stringify(fileList("uploads/"))`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,11 +144,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("writeFile calls backend with absolute path", func(t *testing.T) {
+	t.Run("fileWrite calls backend with absolute path", func(t *testing.T) {
 		a, mock := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `writeFile("uploads/test.txt", "hello", "text/plain")`)
+		_, err := executeJS(run.vmRuntime(), `fileWrite("uploads/test.txt", "hello", "text/plain")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -156,11 +158,11 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("readFile calls backend with absolute path", func(t *testing.T) {
+	t.Run("fileRead calls backend with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `readFile("uploads/test.txt")`)
+		result, err := executeJS(run.vmRuntime(), `fileRead("uploads/test.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,8 +171,8 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("readBytes returns a usable Uint8Array", func(t *testing.T) {
-		// Regression: readBytes used to return a raw ArrayBuffer, which
+	t.Run("fileReadBytes returns a usable Uint8Array", func(t *testing.T) {
+		// Regression: fileReadBytes used to return a raw ArrayBuffer, which
 		// isn't iterable and has no .length, so `Array.from(b.slice(...))`
 		// silently produced []. The fix wraps in Uint8Array via the
 		// global TypedArray constructor — invoke as a constructor (not
@@ -184,7 +186,7 @@ func TestVM(t *testing.T) {
 		// .slice returns a typed array with the right bytes, and
 		// Array.from materializes a real number array.
 		result, err := executeJS(run.vmRuntime(), `
-			var b = readBytes("uploads/test.txt");
+			var b = fileReadBytes("uploads/test.txt");
 			JSON.stringify({
 				ctor: b.constructor.name,
 				length: b.length,
@@ -230,10 +232,10 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("printToUser calls backend", func(t *testing.T) {
+	t.Run("output calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
 		run := newRun(a, "run-1", "", "conv-1", context.Background())
-		_, err := executeJS(run.vmRuntime(), `printToUser({type: "text", text: "hello"})`)
+		_, err := executeJS(run.vmRuntime(), `output({type: "image", source: "img.png"})`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,10 +245,10 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("printToUser accepts array", func(t *testing.T) {
+	t.Run("output accepts array of media", func(t *testing.T) {
 		a, mock := testAgent(t)
 		run := newRun(a, "run-1", "", "conv-1", context.Background())
-		_, err := executeJS(run.vmRuntime(), `printToUser([{type: "text", text: "hi"}, {type: "image", source: "img.png"}])`)
+		_, err := executeJS(run.vmRuntime(), `output([{type: "file", source: "a.pdf"}, {type: "image", source: "img.png"}])`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -256,11 +258,26 @@ func TestVM(t *testing.T) {
 		}
 	})
 
-	t.Run("statFile returns FileInfo with absolute path", func(t *testing.T) {
+	t.Run("output rejects text", func(t *testing.T) {
+		a, mock := testAgent(t)
+		run := newRun(a, "run-1", "", "conv-1", context.Background())
+		_, err := executeJS(run.vmRuntime(), `output({type: "text", text: "hello"})`)
+		if err == nil {
+			t.Fatal("expected error for type=text, got nil")
+		}
+		if !strings.Contains(err.Error(), "media-only") {
+			t.Fatalf("error %q should mention media-only", err.Error())
+		}
+		if reqs := mock.RequestsByPath("/api/agent/print"); len(reqs) != 0 {
+			t.Fatalf("expected no print requests for rejected text, got %d", len(reqs))
+		}
+	})
+
+	t.Run("fileStat returns FileInfo with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `var fi = statFile("uploads/test.txt"); fi.path + ":" + fi.size`)
+		result, err := executeJS(run.vmRuntime(), `var fi = fileStat("uploads/test.txt"); fi.path + ":" + fi.size`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -268,6 +285,29 @@ func TestVM(t *testing.T) {
 		// server response, the test only verifies fields are surfaced.
 		if result != "tmp/test.txt:42" {
 			t.Fatalf("expected mock path:size, got %s", result)
+		}
+	})
+
+	t.Run("infinite recursion fails fast, not hang", func(t *testing.T) {
+		a, _ := testAgent(t)
+		run := newRun(a, "run-1", "", "", context.Background())
+		vm := run.vmRuntime()
+		done := make(chan error, 1)
+		go func() {
+			_, err := executeJS(vm, `function oops(x){return oops(x + 1)}oops(0)`)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("expected a stack overflow error, got nil")
+			}
+			var soe *goja.StackOverflowError
+			if !errors.As(err, &soe) {
+				t.Fatalf("expected *goja.StackOverflowError, got %T: %v", err, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("infinite recursion did not terminate — call stack is not capped")
 		}
 	})
 }
@@ -304,12 +344,80 @@ func TestRunJSInterruptOnCtxCancel(t *testing.T) {
 	select {
 	case r := <-resCh:
 		// run_js swallows the executeJS error into the Output string
-		// ("Error: ..."). Either an error returned OR an error-prefixed
-		// output is acceptable — both prove the loop was interrupted.
-		if r.err == nil && !strings.Contains(r.res.Output, "Error:") {
+		// ("Error: ..." or "Error (native): ..." for a platform abort).
+		// Either an error returned OR an error-prefixed output is
+		// acceptable — both prove the loop was interrupted.
+		if r.err == nil && !strings.HasPrefix(r.res.Output, "Error") {
 			t.Fatalf("expected interruption error, got Output=%q err=%v", r.res.Output, r.err)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("run_js did not return within 2s after ctx cancel — interrupt did not fire")
 	}
+}
+
+// TestJSErrorMessage locks in the structural native/JS split and that goja's
+// "GoError:" name and " at <gosymbol> (native)" stack never leak into the
+// rendered message.
+func TestJSErrorMessage(t *testing.T) {
+	t.Run("go native via NewGoError", func(t *testing.T) {
+		vm := goja.New()
+		vm.Set("boom", func(goja.FunctionCall) goja.Value {
+			panic(vm.NewGoError(errors.New("add_to_queue: proxy spotify: status 404")))
+		})
+		_, err := vm.RunString("boom()")
+		msg, native := jsErrorMessage(err)
+		if !native {
+			t.Fatalf("want native=true, got false (msg=%q)", msg)
+		}
+		if msg != "add_to_queue: proxy spotify: status 404" {
+			t.Fatalf("unexpected msg: %q", msg)
+		}
+		for _, leak := range []string{"GoError", "(native)", "github.com"} {
+			if strings.Contains(msg, leak) {
+				t.Fatalf("msg leaked %q: %s", leak, msg)
+			}
+		}
+	})
+
+	t.Run("plain JS throw is not native", func(t *testing.T) {
+		vm := goja.New()
+		_, err := vm.RunString(`throw new Error('boom')`)
+		msg, native := jsErrorMessage(err)
+		if native || msg != "Error: boom" {
+			t.Fatalf("got msg=%q native=%v, want \"Error: boom\" false", msg, native)
+		}
+	})
+
+	t.Run("TypeError is not native", func(t *testing.T) {
+		vm := goja.New()
+		_, err := vm.RunString(`null.x`)
+		msg, native := jsErrorMessage(err)
+		if native || !strings.HasPrefix(msg, "TypeError:") {
+			t.Fatalf("got msg=%q native=%v, want TypeError, false", msg, native)
+		}
+	})
+
+	t.Run("stack overflow is JS-origin", func(t *testing.T) {
+		vm := goja.New()
+		vm.SetMaxCallStackSize(2000)
+		_, err := vm.RunString(`function f(){return f()}f()`)
+		msg, native := jsErrorMessage(err)
+		if native || msg != "Maximum call stack size exceeded" {
+			t.Fatalf("got msg=%q native=%v", msg, native)
+		}
+	})
+
+	t.Run("interrupt carries reason and is native", func(t *testing.T) {
+		vm := goja.New()
+		sentinel := errors.New("run_js aborted: CPU time limit exceeded")
+		vm.Set("stop", func(goja.FunctionCall) goja.Value {
+			vm.Interrupt(sentinel)
+			return goja.Undefined()
+		})
+		_, err := vm.RunString(`stop(); while(true){}`)
+		msg, native := jsErrorMessage(err)
+		if !native || msg != sentinel.Error() {
+			t.Fatalf("got msg=%q native=%v, want %q true", msg, native, sentinel.Error())
+		}
+	})
 }

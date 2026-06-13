@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/websearch"
 	"github.com/dop251/goja"
+	"github.com/google/uuid"
 )
 
 // pathArg extracts a path string from a JS argument. Absolute unix paths
@@ -45,25 +48,97 @@ func fileInfoToJS(vm *goja.Runtime, info FileInfo) goja.Value {
 	return obj
 }
 
-// mediaResultToJS shapes a *mediaResult as the JS-facing
-// { file: FileInfo, mimeType, size } structure. The path inside the file
-// object is what the LLM passes to readBytes / printToUser / attachToContext.
+// mediaResultToJS is the goja-side projection of *mediaResult; the canonical
+// shape lives on mediaResult.toMap so vm.go and direct-mode produce identical
+// envelopes.
 func mediaResultToJS(vm *goja.Runtime, res *mediaResult) goja.Value {
-	file := vm.NewObject()
-	file.Set("path", res.Path)
-	file.Set("contentType", res.MimeType)
-	file.Set("size", res.Size)
-	out := vm.NewObject()
-	out.Set("file", file)
-	out.Set("mimeType", res.MimeType)
-	out.Set("size", res.Size)
-	return out
+	return vm.ToValue(res.toMap())
 }
 
 // newVM creates a fresh goja Runtime for a Run, binding all registered
 // Go functions and built-in bindings.
+// maxJSCallStackSize caps run_js recursion depth. goja's default is
+// math.MaxInt32 (effectively unbounded) and its call stack is heap-
+// allocated, so unbounded recursion (e.g. `function f(x){return f(x+1)}
+// f(0)`) doesn't hit a Go stack limit — it grows the heap until the run
+// times out. Capping it makes runaway recursion fail fast with a
+// *StackOverflowError that propagates out of RunString as a normal tool
+// error. 10000 is deep enough for legitimate recursive agent code while
+// catching infinite recursion in milliseconds.
+const maxJSCallStackSize = 10000
+
+// maxJSValueBytes caps how many bytes a single Go→JS boundary crossing may
+// pull into the goja heap (a tool return, fileRead, fileReadBytes, MCP/A2A
+// result). goja has no heap accounting, so a script that slurps a giant S3
+// object (`fileRead(huge)`) or accumulates large tool results would grow the
+// Go heap unbounded with near-zero instruction cost — invisible to any
+// CPU/recursion guard. Capping each crossing makes a single oversized slurp
+// fail fast with a clear, actionable error, and bounds per-iteration heap
+// growth. Legit large payloads must be processed via a storage path
+// (ranged/streamed), not loaded whole.
+const maxJSValueBytes = 64 << 20 // 64 MiB
+
+// maxReadFileBytes caps how much a whole-file read (fileRead/fileReadBytes)
+// may pull into the goja heap. Lower than maxJSValueBytes because these slurp
+// an entire object: over this, the binding errors and points the LLM at the
+// streaming alternatives (fileGrep/fileHead/fileTail/fileLines/
+// fileReadRangeBytes) or a file-to-file transform, none of which materialize
+// the whole file.
+const maxReadFileBytes = 16 << 20 // 16 MiB
+
+// readCappedForJS reads rc fully but fails (with a signpost to the streaming
+// alternatives) once it exceeds maxReadFileBytes. Always closes rc.
+func readCappedForJS(rc io.ReadCloser) ([]byte, error) {
+	defer rc.Close()
+	b, err := io.ReadAll(io.LimitReader(rc, maxReadFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxReadFileBytes {
+		return nil, fmt.Errorf(
+			"file exceeds the %d MiB in-memory cap — scan it with fileGrep/fileHead/fileTail/fileLines, read a byte window with fileReadRangeBytes, or transform it file-to-file (fileDecode/fileDecodeText) instead of loading it whole",
+			maxReadFileBytes>>20)
+	}
+	return b, nil
+}
+
+// bytesToUint8Array wraps b in a JS Uint8Array so the standard JS idioms work
+// (indexed access, .length, iteration, .slice, Array.from). A raw ArrayBuffer
+// would force the LLM to write `new Uint8Array(ab)` first, which it doesn't
+// reliably remember.
+func bytesToUint8Array(vm *goja.Runtime, b []byte) goja.Value {
+	ab := vm.NewArrayBuffer(b)
+	// Uint8Array is a TypedArray constructor — must be invoked with `new`.
+	// AssertFunction calls without `new` and TypedArrays reject that;
+	// AssertConstructor is the right tool here.
+	u8Ctor, ok := goja.AssertConstructor(vm.Get("Uint8Array"))
+	if !ok {
+		// Shouldn't happen — Uint8Array is a runtime built-in. Fall back to
+		// the raw buffer rather than silently returning nothing.
+		return vm.ToValue(ab)
+	}
+	u8, err := u8Ctor(nil, vm.ToValue(ab))
+	if err != nil {
+		panic(vm.NewGoError(fmt.Errorf("wrap as Uint8Array: %w", err)))
+	}
+	return u8
+}
+
+// capJSBytes aborts the in-flight JS call (as a thrown error) when a value
+// crossing the Go→JS boundary exceeds maxJSValueBytes. what names the source
+// for the error message (e.g. "fileRead", a tool name).
+func capJSBytes(vm *goja.Runtime, what string, n int) {
+	if n > maxJSValueBytes {
+		panic(vm.NewGoError(fmt.Errorf(
+			"%s: result too large for run_js: %d bytes exceeds the %d MiB in-memory cap — process it via a storage path (read in ranges / stream) instead of loading it whole",
+			what, n, maxJSValueBytes>>20)))
+	}
+}
+
 func newVM(run *run, agent *Agent) *goja.Runtime {
 	vm := goja.New()
+	vm.SetMaxCallStackSize(maxJSCallStackSize)
+	installAmplifierGuards(vm)
 
 	// Bind registered tools. Each RegisterTool(&Tool[In, Out]{...}) becomes
 	// a typed JS global: JS input → json.Marshal → decode into In → typed
@@ -84,10 +159,13 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("%s: marshal args: %w", t.Name, err)))
 			}
+			run.gw.enter()
 			outJSON, err := t.Execute(run.checkedCtx(), raw)
+			run.gw.exit()
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
+			capJSBytes(vm, t.Name, len(outJSON))
 			if outJSON == "" {
 				return goja.Undefined()
 			}
@@ -97,33 +175,6 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			}
 			return vm.ToValue(parsed)
 		})
-	}
-
-	// Inject persistent store for conversation-scoped runs.
-	// Uses a native goja Object (not a Go map proxy) so JS function source
-	// is preserved by toString() for serialization in teardownStore().
-	if cvm := agent.getOrCreateConvVM(run.conversationID); cvm != nil {
-		run.convVM = cvm
-		cvm.mu.Lock()
-
-		storeObj := vm.NewObject()
-
-		// Populate from Go map (plain values).
-		for key, val := range cvm.store {
-			storeObj.Set(key, val)
-		}
-
-		// Re-evaluate serialized functions in the fresh VM.
-		for key, src := range cvm.serializedFuncs {
-			val, err := vm.RunString("(" + src + ")")
-			if err == nil {
-				storeObj.Set(key, val)
-			}
-			// If eval fails (e.g. closure referencing dead scope), silently drop.
-		}
-
-		vm.Set("store", storeObj)
-		cvm.mu.Unlock()
 	}
 
 	// Register conn_{slug} objects for each registered connection.
@@ -144,18 +195,25 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) {
 				body = call.Arguments[2].String()
 			}
-			result, err := handle.Request(run.ctx, method, path, body)
+			headers := headersFromJSArg(call.Argument(3))
+			res, err := connRequestExec(run.ctx, run.agent, handle, connSlug, RequestOpts{
+				Method: method, Path: path, Body: body, Headers: headers,
+			})
 			if err != nil {
-				if ae, ok := IsAuthRequired(err); ok {
-					errObj := vm.NewObject()
-					errObj.Set("authRequired", true)
-					errObj.Set("slug", ae.Slug)
-					errObj.Set("connName", ae.ConnName)
-					panic(vm.ToValue(errObj))
-				}
-				panic(vm.NewGoError(err))
+				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			return vm.ToValue(string(result))
+			out := vm.NewObject()
+			out.Set("status", res.Status)
+			out.Set("contentType", res.ContentType)
+			out.Set("size", res.Size)
+			if !res.Spilled {
+				out.Set("body", string(res.Inline))
+				return out
+			}
+			out.Set("bodyPreview", string(res.BodyPreview))
+			out.Set("bodySavedTo", res.SavedTo)
+			out.Set("note", connSpilledNote(res.Size, res.SavedTo, "raw"))
+			return out
 		})
 
 		obj.Set("requestJSON", func(call goja.FunctionCall) goja.Value {
@@ -165,28 +223,130 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) {
 				body = call.Arguments[2].Export()
 			}
-			raw, err := handle.Request(run.ctx, method, path, body)
+			headers := headersFromJSArg(call.Argument(3))
+			res, err := connRequestExec(run.ctx, run.agent, handle, connSlug, RequestOpts{
+				Method: method, Path: path, Body: body, Headers: headers,
+			})
 			if err != nil {
-				if ae, ok := IsAuthRequired(err); ok {
-					errObj := vm.NewObject()
-					errObj.Set("authRequired", true)
-					errObj.Set("slug", ae.Slug)
-					errObj.Set("connName", ae.ConnName)
-					panic(vm.ToValue(errObj))
-				}
-				panic(vm.NewGoError(err))
+				panic(vm.NewGoError(connectionErrorForJS(connSlug, err)))
 			}
-			var result any
-			if len(raw) > 0 {
-				if err := json.Unmarshal(raw, &result); err != nil {
-					panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
-				}
+			out := vm.NewObject()
+			out.Set("status", res.Status)
+			out.Set("contentType", res.ContentType)
+			out.Set("size", res.Size)
+			if res.Spilled {
+				out.Set("bodyPreview", string(res.BodyPreview))
+				out.Set("bodySavedTo", res.SavedTo)
+				out.Set("note", connSpilledNote(res.Size, res.SavedTo, "json"))
+				return out
 			}
-			return vm.ToValue(result)
+			if len(res.Inline) == 0 {
+				out.Set("data", goja.Null())
+				return out
+			}
+			// Round-trip through the runtime's own JSON.parse so the resulting
+			// value is a native JS object (not a Go-reflected map). Native
+			// objects stringify cleanly via JSON.stringify and behave like
+			// real objects under Object.keys / spread / in checks;
+			// Go-reflected wrappers don't, and toString them as
+			// "[object Object]".
+			parseFn, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("parse"))
+			if !ok {
+				panic(vm.NewGoError(fmt.Errorf("requestJSON: JSON.parse not available")))
+			}
+			val, err := parseFn(goja.Undefined(), vm.ToValue(string(res.Inline)))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("decode JSON response: %w", err)))
+			}
+			out.Set("data", val)
+			return out
 		})
 
-		_ = connSlug // used for future error messages if needed
 		vm.Set("conn_"+slug, obj)
+	}
+
+	// Register exec_{slug}.run for each registered exec endpoint. Bind-time
+	// gated by Access so non-admin runs never see admin-only exec endpoints
+	// (AccessPublic is already demoted to AccessUser at registration).
+	// JS bindings use RunStream so stdout/stderr above spillInlineThreshold
+	// spill to tmp/ storage rather than blowing the tool-output cap.
+	for slug, ep := range run.agent.execEndpoints {
+		if !accessSatisfies(run.callerAccess, ep.Access) {
+			continue
+		}
+		handle := &ExecHandle{slug: slug, agent: run.agent}
+		obj := vm.NewObject()
+		epSlug := slug // capture for closures
+
+		obj.Set("run", func(call goja.FunctionCall) goja.Value {
+			cmd := ExecCommand{}
+			if len(call.Arguments) > 0 && !goja.IsUndefined(call.Arguments[0]) {
+				cmd.Command = call.Argument(0).String()
+			}
+			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
+				if exported, ok := call.Arguments[1].Export().([]any); ok {
+					cmd.Args = make([]string, 0, len(exported))
+					for _, a := range exported {
+						cmd.Args = append(cmd.Args, fmt.Sprintf("%v", a))
+					}
+				} else {
+					panic(vm.NewGoError(fmt.Errorf("exec_%s.run: args must be an array of strings", epSlug)))
+				}
+			}
+			if len(call.Arguments) > 2 && !goja.IsUndefined(call.Arguments[2]) && !goja.IsNull(call.Arguments[2]) {
+				opts, ok := call.Arguments[2].Export().(map[string]any)
+				if !ok {
+					panic(vm.NewGoError(fmt.Errorf("exec_%s.run: opts must be an object", epSlug)))
+				}
+				if v, ok := opts["stdin"]; ok && v != nil {
+					cmd.Stdin = []byte(fmt.Sprintf("%v", v))
+				}
+				if v, ok := opts["timeoutMs"]; ok && v != nil {
+					switch t := v.(type) {
+					case int64:
+						cmd.Timeout = time.Duration(t) * time.Millisecond
+					case float64:
+						cmd.Timeout = time.Duration(int64(t)) * time.Millisecond
+					}
+				}
+			}
+
+			stream, err := handle.RunStream(run.ctx, cmd)
+			if err != nil {
+				panic(vm.NewGoError(err))
+			}
+			defer stream.Stdout.Close()
+			defer stream.Stderr.Close()
+
+			// Both pipes must drain in parallel — sequential reads deadlock
+			// because back-pressure on the unread pipe stalls airlock's
+			// session-output goroutine.
+			callID := newCallID()
+			prefix := fmt.Sprintf("tmp/exec-%s-%s", epSlug, callID)
+			outCh := make(chan spillFields, 1)
+			errCh := make(chan spillFields, 1)
+			go func() {
+				outCh <- spillFor(run.ctx, run.agent, stream.Stdout, prefix+"-stdout.bin")
+			}()
+			go func() {
+				errCh <- spillFor(run.ctx, run.agent, stream.Stderr, prefix+"-stderr.bin")
+			}()
+			outR := <-outCh
+			errR := <-errCh
+			exit, waitErr := stream.Wait()
+
+			switch {
+			case outR.err != nil:
+				panic(vm.NewGoError(outR.err))
+			case errR.err != nil:
+				panic(vm.NewGoError(errR.err))
+			case waitErr != nil:
+				panic(vm.NewGoError(waitErr))
+			}
+			return vm.ToValue(buildExecRunOutput(outR, errR, exit))
+		})
+
+		vm.Set("exec_"+slug, obj)
 	}
 
 	// queryDB / execDB are admin-only. AccessUser / AccessPublic callers
@@ -259,74 +419,284 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	publicListOK := agent.hasPublicDirCap(OpList)
 	authedFile := accessSatisfies(run.callerAccess, AccessUser)
 
-	// readFile(path) → string — UTF-8 text. Most-common case. The
+	// fileRead(path) → string — UTF-8 text. Most-common case. The
 	// underlying bytes are decoded as UTF-8; non-text content surfaces
-	// silently as a possibly-mangled string. For binary, use readBytes.
+	// silently as a possibly-mangled string. For binary, use fileReadBytes.
 	if authedFile || publicReadOK {
-		vm.Set("readFile", func(call goja.FunctionCall) goja.Value {
+		vm.Set("fileRead", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("readFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileRead: %w", err)))
 			}
 			ctx := run.checkedCtx()
 			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("readFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileRead: %w", err)))
 			}
-			b, err := agent.ReadFile(ctx, path)
+			rc, err := run.openCached(ctx, path)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("readFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileRead: %w", err)))
+			}
+			b, err := readCappedForJS(rc)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileRead: %w", err)))
 			}
 			return vm.ToValue(string(b))
 		})
 
-		// readBytes(path) → Uint8Array — binary content (images, PDFs, etc.).
+		// fileReadBytes(path) → Uint8Array — binary content (images, PDFs, etc.).
 		// We wrap the underlying ArrayBuffer in a Uint8Array so the standard
 		// JS idioms work: indexed access, .length, iteration, .slice() that
 		// returns a typed array, Array.from() to materialize a plain array.
 		// A raw ArrayBuffer would force the LLM to write `new Uint8Array(ab)`
 		// before doing anything useful, which it doesn't reliably remember.
-		vm.Set("readBytes", func(call goja.FunctionCall) goja.Value {
+		vm.Set("fileReadBytes", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("readBytes: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileReadBytes: %w", err)))
 			}
 			ctx := run.checkedCtx()
 			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("readBytes: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileReadBytes: %w", err)))
 			}
-			b, err := agent.ReadFile(ctx, path)
+			rc, err := run.openCached(ctx, path)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("readBytes: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileReadBytes: %w", err)))
 			}
-			ab := vm.NewArrayBuffer(b)
-			// Uint8Array is a TypedArray constructor — must be invoked with
-			// `new`. AssertFunction calls without `new` and TypedArrays
-			// reject that; AssertConstructor is the right tool here.
-			u8Ctor, ok := goja.AssertConstructor(vm.Get("Uint8Array"))
-			if !ok {
-				// Shouldn't happen — Uint8Array is a runtime built-in. Fall
-				// back to the raw buffer rather than silently returning
-				// nothing.
-				return vm.ToValue(ab)
-			}
-			u8, err := u8Ctor(nil, vm.ToValue(ab))
+			b, err := readCappedForJS(rc)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("readBytes: wrap as Uint8Array: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileReadBytes: %w", err)))
 			}
-			return u8
+			return bytesToUint8Array(vm, b)
+		})
+
+		// fileReadRangeBytes(path, start, length) → Uint8Array. Reads an exact
+		// byte window without materializing the whole file (no charset
+		// assumption — text random-access goes through the line ops instead).
+		// Cache-aware: a locally-cached file is seeked; an uncached one is
+		// fetched with a true S3 Range request. Capped at the fileRead limit.
+		vm.Set("fileReadRangeBytes", func(call goja.FunctionCall) goja.Value {
+			path, err := pathArg(call.Argument(0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileReadRangeBytes: %w", err)))
+			}
+			ctx := run.checkedCtx()
+			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileReadRangeBytes: %w", err)))
+			}
+			b, err := run.readRange(ctx, path, call.Argument(1).ToInteger(), call.Argument(2).ToInteger())
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileReadRangeBytes: %w", err)))
+			}
+			return bytesToUint8Array(vm, b)
+		})
+
+		// grep(path, pattern, opts?) → string of matching lines. opts:
+		// { ignoreCase?, invert?, lineNumbers?, max? }. Streams the file line
+		// by line; output is bounded and reports how many matches were
+		// dropped past the cap.
+		vm.Set("fileGrep", func(call goja.FunctionCall) goja.Value {
+			path, err := pathArg(call.Argument(0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileGrep: %w", err)))
+			}
+			patArg := call.Argument(1)
+			if goja.IsUndefined(patArg) || goja.IsNull(patArg) {
+				panic(vm.NewGoError(errors.New("fileGrep: pattern is required")))
+			}
+			opts := grepOpts{}
+			if o := call.Argument(2); !goja.IsUndefined(o) && !goja.IsNull(o) {
+				obj := o.ToObject(vm)
+				if v := obj.Get("ignoreCase"); v != nil && !goja.IsUndefined(v) {
+					opts.ignoreCase = v.ToBoolean()
+				}
+				if v := obj.Get("invert"); v != nil && !goja.IsUndefined(v) {
+					opts.invert = v.ToBoolean()
+				}
+				if v := obj.Get("lineNumbers"); v != nil && !goja.IsUndefined(v) {
+					opts.lineNumbers = v.ToBoolean()
+				}
+				if v := obj.Get("max"); v != nil && !goja.IsUndefined(v) {
+					opts.max = int(v.ToInteger())
+				}
+			}
+			ctx := run.checkedCtx()
+			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileGrep: %w", err)))
+			}
+			out, err := run.grepFile(ctx, path, patArg.String(), opts)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileGrep: %w", err)))
+			}
+			return vm.ToValue(out)
+		})
+
+		// head(path, n?) / tail(path, n?) → string (first / last n lines,
+		// default 10). tail fetches only the trailing window of the file.
+		vm.Set("fileHead", func(call goja.FunctionCall) goja.Value {
+			path, err := pathArg(call.Argument(0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileHead: %w", err)))
+			}
+			ctx := run.checkedCtx()
+			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileHead: %w", err)))
+			}
+			out, err := run.headLines(ctx, path, int(call.Argument(1).ToInteger()))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileHead: %w", err)))
+			}
+			return vm.ToValue(out)
+		})
+
+		vm.Set("fileTail", func(call goja.FunctionCall) goja.Value {
+			path, err := pathArg(call.Argument(0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileTail: %w", err)))
+			}
+			ctx := run.checkedCtx()
+			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileTail: %w", err)))
+			}
+			out, err := run.tailLines(ctx, path, int(call.Argument(1).ToInteger()))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileTail: %w", err)))
+			}
+			return vm.ToValue(out)
+		})
+
+		// fileLines(path, start, count) → string — a line window starting at
+		// the 1-based line `start` (default 1) for `count` lines (default 10).
+		vm.Set("fileLines", func(call goja.FunctionCall) goja.Value {
+			path, err := pathArg(call.Argument(0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileLines: %w", err)))
+			}
+			ctx := run.checkedCtx()
+			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileLines: %w", err)))
+			}
+			out, err := run.readLineWindow(ctx, path, int(call.Argument(1).ToInteger()), int(call.Argument(2).ToInteger()))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileLines: %w", err)))
+			}
+			return vm.ToValue(out)
 		})
 	}
 
-	// writeFile(path, data, contentType?) → FileInfo
+	// File→file transforms (authed only — a compound read+write power tool).
+	// All run cache-aware and stream src→codec→output. `dst` is optional: omit
+	// it for an auto scratch path (small text result rides back inline as
+	// `content`, otherwise `savedTo`+`preview`+`size`); give it to write a
+	// specific path (returns `savedTo`+`size`). dst must differ from src.
+	if authedFile {
+		// encodeFile(src, codec, dst?) / decodeFile(src, codec, dst?) — codec
+		// is base64 | base64url | hex | gzip.
+		vm.Set("fileEncode", func(call goja.FunctionCall) goja.Value {
+			src, codecName, dst := transformArgs(vm, call, "fileEncode")
+			fn, ok := encoders[codecName]
+			if !ok {
+				panic(vm.NewGoError(fmt.Errorf("fileEncode: unknown codec %q (base64, base64url, hex, gzip)", codecName)))
+			}
+			ctx := run.checkedCtx()
+			checkTransformAccess(ctx, agent, vm, "fileEncode", src, dst)
+			res, err := run.transformFile(ctx, src, codecName, dst, encodeContentType(codecName), codecSuffix[codecName], textCodecs[codecName], fn)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileEncode: %w", err)))
+			}
+			return transformResultToJS(vm, res)
+		})
+
+		vm.Set("fileDecode", func(call goja.FunctionCall) goja.Value {
+			src, codecName, dst := transformArgs(vm, call, "fileDecode")
+			fn, ok := decoders[codecName]
+			if !ok {
+				panic(vm.NewGoError(fmt.Errorf("fileDecode: unknown codec %q (base64, base64url, hex, gzip)", codecName)))
+			}
+			ctx := run.checkedCtx()
+			checkTransformAccess(ctx, agent, vm, "fileDecode", src, dst)
+			res, err := run.transformFile(ctx, src, codecName, dst, "application/octet-stream", ".bin", false, fn)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileDecode: %w", err)))
+			}
+			return transformResultToJS(vm, res)
+		})
+
+		// decodeTextFile(src, charset, dst?) — decode charset bytes (latin1,
+		// utf-16, …) to UTF-8 text.
+		vm.Set("fileDecodeText", func(call goja.FunctionCall) goja.Value {
+			src, charset, dst := transformArgs(vm, call, "fileDecodeText")
+			fn, err := lookupCharset(charset)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileDecodeText: %w", err)))
+			}
+			ctx := run.checkedCtx()
+			checkTransformAccess(ctx, agent, vm, "fileDecodeText", src, dst)
+			res, err := run.transformFile(ctx, src, charset, dst, "text/plain; charset=utf-8", ".txt", true, fn)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileDecodeText: %w", err)))
+			}
+			return transformResultToJS(vm, res)
+		})
+
+		// Streaming editors — big-file-safe (rewrite only the changed region).
+		// `dst` optional: omit → new scratch path (src untouched); pass a path
+		// (may equal src for in-place) to write there.
+
+		// fileEditLines(src, edits, dst?) — structured, 1-based line-addressed
+		// edits: {from,count,text} (replace) · {from,count} (delete) ·
+		// {from,count:0,text} (insert before) · {append:text}.
+		vm.Set("fileEditLines", func(call goja.FunctionCall) goja.Value {
+			src, err := pathArg(call.Argument(0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileEditLines: %w", err)))
+			}
+			edits, err := parseLineEdits(vm, call.Argument(1))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileEditLines: %w", err)))
+			}
+			dst := optPathArg(vm, call.Argument(2), "fileEditLines")
+			ctx := run.checkedCtx()
+			checkTransformAccess(ctx, agent, vm, "fileEditLines", src, dst)
+			res, err := run.editLines(ctx, src, dst, edits)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileEditLines: %w", err)))
+			}
+			return transformResultToJS(vm, res)
+		})
+
+		// fileSed(src, script, dst?) — a sed subset: addresses N · N,M ·
+		// /regex/ · $; commands s/re/repl/[gi] · d · c\text · i\text · a\text.
+		// Replacement backrefs use Go syntax ($1).
+		vm.Set("fileSed", func(call goja.FunctionCall) goja.Value {
+			src, err := pathArg(call.Argument(0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileSed: %w", err)))
+			}
+			scriptArg := call.Argument(1)
+			if goja.IsUndefined(scriptArg) || goja.IsNull(scriptArg) {
+				panic(vm.NewGoError(errors.New("fileSed: script is required")))
+			}
+			dst := optPathArg(vm, call.Argument(2), "fileSed")
+			ctx := run.checkedCtx()
+			checkTransformAccess(ctx, agent, vm, "fileSed", src, dst)
+			res, err := run.sed(ctx, src, scriptArg.String(), dst)
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("fileSed: %w", err)))
+			}
+			return transformResultToJS(vm, res)
+		})
+	}
+
+	// fileWrite(path, data, contentType?) → FileInfo
 	if authedFile || publicWriteOK {
-		vm.Set("writeFile", func(call goja.FunctionCall) goja.Value {
+		vm.Set("fileWrite", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("writeFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileWrite: %w", err)))
 			}
 			dataVal := call.Argument(1)
 			if dataVal == nil || goja.IsUndefined(dataVal) || goja.IsNull(dataVal) {
-				panic(vm.NewGoError(fmt.Errorf("writeFile: data is required")))
+				panic(vm.NewGoError(fmt.Errorf("fileWrite: data is required")))
 			}
 			var data []byte
 			switch v := dataVal.Export().(type) {
@@ -345,38 +715,42 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			}
 			ctx := run.checkedCtx()
 			if err := agent.CheckFileAccess(ctx, path, OpWrite); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("writeFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileWrite: %w", err)))
 			}
 			info, err := agent.WriteFile(ctx, path, strings.NewReader(string(data)), contentType)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("writeFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileWrite: %w", err)))
 			}
+			// Drop any cached copy under the path actually written (scoped
+			// dirs rewrite the key) so a later read re-fetches fresh content.
+			run.invalidateCache(string(info.Path))
 			return fileInfoToJS(vm, info)
 		})
 
-		// deleteFile(path) — folds into Write cap (write on the parent governs unlink).
-		vm.Set("deleteFile", func(call goja.FunctionCall) goja.Value {
+		// fileDelete(path) — folds into Write cap (write on the parent governs unlink).
+		vm.Set("fileDelete", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("deleteFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileDelete: %w", err)))
 			}
 			ctx := run.checkedCtx()
 			if err := agent.CheckFileAccess(ctx, path, OpWrite); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("deleteFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileDelete: %w", err)))
 			}
 			if err := agent.DeleteFile(ctx, path); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("deleteFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileDelete: %w", err)))
 			}
+			run.invalidateCache(path)
 			return goja.Undefined()
 		})
 	}
 
-	// listDir(path, opts?) → FileInfo[] — non-recursive by default.
+	// fileList(path, opts?) → FileInfo[] — non-recursive by default.
 	if authedFile || publicListOK {
-		vm.Set("listDir", func(call goja.FunctionCall) goja.Value {
+		vm.Set("fileList", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("listDir: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileList: %w", err)))
 			}
 			opts := ListOpts{}
 			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
@@ -393,11 +767,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				checkPath = path
 			}
 			if err := agent.CheckFileAccess(ctx, checkPath, OpList); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("listDir: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileList: %w", err)))
 			}
 			files, err := agent.ListDir(ctx, path, opts)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("listDir: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileList: %w", err)))
 			}
 			out := make([]goja.Value, len(files))
 			for i, f := range files {
@@ -407,25 +781,25 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 	}
 
-	// statFile + fileExists + shareFileURL all gate on Read.
+	// fileStat + fileExists + fileShareURL all gate on Read.
 	if authedFile || publicReadOK {
-		vm.Set("statFile", func(call goja.FunctionCall) goja.Value {
+		vm.Set("fileStat", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("statFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileStat: %w", err)))
 			}
 			ctx := run.checkedCtx()
 			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("statFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileStat: %w", err)))
 			}
 			info, err := agent.StatFile(ctx, path)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("statFile: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileStat: %w", err)))
 			}
 			return fileInfoToJS(vm, info)
 		})
 
-		// fileExists(path) → bool — sugar around statFile.
+		// fileExists(path) → bool — sugar around fileStat.
 		vm.Set("fileExists", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
@@ -440,20 +814,20 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			return vm.ToValue(err == nil)
 		})
 
-		// shareFileURL(path, opts?) → { url, expiresAtMs }
+		// fileShareURL(path, opts?) → { url, expiresAtMs }
 		// Returns a presigned, unauthenticated, time-limited URL for the
 		// stored file. opts: { expiresInMinutes? } — server defaults to 1h
 		// and caps at 24h. For embedding files in markdown links or sharing
 		// outside the agent's auth boundary. To show a file in chat, prefer
-		// printToUser({type:"file", source:path}) instead.
-		vm.Set("shareFileURL", func(call goja.FunctionCall) goja.Value {
+		// output({type:"file", source:path}) instead.
+		vm.Set("fileShareURL", func(call goja.FunctionCall) goja.Value {
 			path, err := pathArg(call.Argument(0))
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("shareFileURL: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileShareURL: %w", err)))
 			}
 			ctx := run.checkedCtx()
 			if err := agent.CheckFileAccess(ctx, path, OpRead); err != nil {
-				panic(vm.NewGoError(fmt.Errorf("shareFileURL: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileShareURL: %w", err)))
 			}
 			ttl := time.Duration(0)
 			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
@@ -464,7 +838,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			}
 			resp, err := agent.ShareFileURL(ctx, path, ttl)
 			if err != nil {
-				panic(vm.NewGoError(fmt.Errorf("shareFileURL: %w", err)))
+				panic(vm.NewGoError(fmt.Errorf("fileShareURL: %w", err)))
 			}
 			out := vm.NewObject()
 			out.Set("url", resp.URL)
@@ -473,11 +847,21 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		})
 	}
 
-	// printToUser(parts) — send rich content to the user's conversation.
-	// Accepts a single DisplayPart object or an array of DisplayPart objects.
-	vm.Set("printToUser", func(call goja.FunctionCall) goja.Value {
+	// output(parts) — share media with the user / channel / calling
+	// sibling. Accepts a single DisplayPart object or an array. Type
+	// must be image/file/audio/video; prose goes in the LLM's normal
+	// reply. Captions live on the media part's `text` field.
+	vm.Set("output", func(call goja.FunctionCall) goja.Value {
 		parts := parseDisplayParts(vm, call.Argument(0))
-		if err := run.printToUser(run.ctx, parts, ""); err != nil {
+		for i, p := range parts {
+			if p.Type == "text" {
+				panic(vm.NewGoError(fmt.Errorf("output: part %d is type=\"text\"; output is media-only — put prose in your normal reply, or set the `text` field on an image/file/audio/video part to use it as a caption", i)))
+			}
+			if p.Type != "image" && p.Type != "file" && p.Type != "audio" && p.Type != "video" {
+				panic(vm.NewGoError(fmt.Errorf("output: part %d has unsupported type %q; expected image, file, audio, or video", i, p.Type)))
+			}
+		}
+		if err := run.output(run.ctx, parts, ""); err != nil {
 			panic(vm.NewGoError(err))
 		}
 		return goja.Undefined()
@@ -612,39 +996,18 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 					// raw: skip HTML→markdown conversion (default is to convert HTML).
 					req.Raw = v.ToBoolean()
 				}
+				if v := opts.Get("allHeaders"); v != nil && !goja.IsUndefined(v) {
+					// allHeaders: return every upstream header (default is a
+					// curated few — the rest is context-burning noise).
+					req.AllHeaders = v.ToBoolean()
+				}
 			}
 
 			resp, err := httpClient.Do(run.ctx, req)
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("httpRequest: %w", err)))
 			}
-
-			result := vm.NewObject()
-			result.Set("status", resp.Status)
-			result.Set("headers", resp.Headers)
-			result.Set("contentType", resp.ContentType)
-			result.Set("size", resp.Size)
-			if resp.SavedTo != "" {
-				// Airlock returns the storage path; expose it as a string so
-				// the LLM can pass it directly to readFile/readBytes/
-				// attachToContext/etc.
-				result.Set("savedTo", resp.SavedTo)
-			}
-			if resp.Note != "" {
-				result.Set("note", resp.Note)
-			}
-
-			// Auto-parse JSON responses.
-			if strings.Contains(resp.ContentType, "application/json") && resp.Body != "" {
-				var parsed any
-				if jsonErr := json.Unmarshal([]byte(resp.Body), &parsed); jsonErr == nil {
-					result.Set("body", parsed)
-					return result
-				}
-			}
-
-			result.Set("body", resp.Body)
-			return result
+			return vm.ToValue(httpResponseToMap(resp))
 		})
 
 		// Web search via Airlock proxy (no API keys in container).
@@ -698,7 +1061,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 
 			if len(run.supportedModalities) > 0 && !mimeMatchesModalities(info.ContentType, run.supportedModalities) {
 				panic(vm.NewGoError(fmt.Errorf(
-					"attachToContext: %s files are not supported by the current model. Supported types: %s. Use readFile(path) for text-based files",
+					"attachToContext: %s files are not supported by the current model. Supported types: %s. Use fileRead(path) for text-based files",
 					info.ContentType, strings.Join(run.supportedModalities, ", "))))
 			}
 
@@ -953,7 +1316,67 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		vm.Set("mcp_"+slug, obj)
 	}
 
+	// Sibling agent (A2A) bindings: agent_<slug>.toolName(args). Each
+	// sibling's tool schemas were synced into promptData.Siblings by
+	// airlock; the per-user visibility filter (run.visibleSiblings)
+	// mirrors what the prompt-render path uses, so the LLM only gets
+	// JS bindings for siblings the prompt actually advertised.
+	//
+	// File arguments and returns are translated at the airlock MCP
+	// boundary (cross-bucket S3 copies) — the JS caller just sees path
+	// strings the same way same-bucket tools do.
+	if len(run.visibleSiblings) > 0 {
+		visible := make(map[uuid.UUID]struct{}, len(run.visibleSiblings))
+		for _, id := range run.visibleSiblings {
+			visible[id] = struct{}{}
+		}
+		run.agent.syncMu.RLock()
+		siblings := run.agent.promptData.Siblings
+		run.agent.syncMu.RUnlock()
+		for _, s := range siblings {
+			if _, ok := visible[s.ID]; !ok {
+				continue
+			}
+			handle := &SiblingHandle{slug: s.Slug, agentID: s.ID, agent: run.agent}
+			obj := vm.NewObject()
+			siblingSlug := s.Slug
+			names := make([]string, len(s.Tools))
+			for i, t := range s.Tools {
+				names[i] = t.Name
+			}
+			jsNames := tsrender.JSToolNames(names)
+			for _, t := range s.Tools {
+				toolName := t.Name
+				obj.Set(jsNames[toolName], func(call goja.FunctionCall) goja.Value {
+					return invokeSiblingTool(vm, run.ctx, handle, run.id, siblingSlug, toolName, call.Argument(0))
+				})
+			}
+			// NB: open-ended delegation is the top-level `promptAgent`
+			// tool (tools.go), not a run_js binding — a suspendable
+			// LLM-loop round-trip has no business inside the JS sandbox
+			// and must be a first-class pending tool call so Sol's
+			// suspend/resume handles it natively. Only the sibling's
+			// typed tools stay as run_js bindings here.
+			vm.Set("agent_"+siblingSlug, obj)
+		}
+	}
+
 	return vm
+}
+
+// invokeSiblingTool runs an A2A tool call from a JS binding and
+// translates the result back to a JS value. Wraps SiblingHandle.CallTool
+// with goja error / panic semantics so JS code can try/catch normally.
+func invokeSiblingTool(vm *goja.Runtime, ctx context.Context, handle *SiblingHandle, callerRunID, siblingSlug, toolName string, argsArg goja.Value) goja.Value {
+	var args any
+	if argsArg != nil && !goja.IsUndefined(argsArg) && !goja.IsNull(argsArg) {
+		args = argsArg.Export()
+	}
+	result, err := handle.CallTool(ctx, callerRunID, toolName, args)
+	if err != nil {
+		panic(vm.NewGoError(fmt.Errorf("agent_%s.%s: %w", siblingSlug, toolName, err)))
+	}
+	return vm.ToValue(result)
 }
 
 // invokeMCPTool runs an MCP tool call from a JS binding and translates the
@@ -975,13 +1398,31 @@ func invokeMCPTool(vm *goja.Runtime, ctx context.Context, handle *MCPHandle, mcp
 		}
 		panic(vm.NewGoError(fmt.Errorf("mcp_%s.%s: %w", mcpSlug, toolName, err)))
 	}
+	// Collect text content blocks. Non-text shapes (resource_link, image,
+	// audio) get a best-effort surfacing so a third-party MCP server
+	// that returns them doesn't appear silent to the LLM. The A2A path
+	// never emits these — airlock's materializer rewrites file paths
+	// in-place inside the text block and skips resource_link for agent
+	// callers — but we shouldn't rely on that for non-airlock servers.
 	var out strings.Builder
 	for _, c := range resp.Content {
-		if c.Type == "text" {
+		switch c.Type {
+		case "text":
 			out.WriteString(c.Text)
+		case "resource_link":
+			out.WriteString(c.URI)
+		case "image":
+			out.WriteString("[image ")
+			out.WriteString(c.MimeType)
+			out.WriteString("]")
+		case "audio":
+			out.WriteString("[audio ")
+			out.WriteString(c.MimeType)
+			out.WriteString("]")
 		}
 	}
 	raw := out.String()
+	capJSBytes(vm, "mcp_"+mcpSlug+"."+toolName, len(raw))
 	var content any = raw
 	var parsed any
 	if jsonErr := json.Unmarshal([]byte(raw), &parsed); jsonErr == nil {
@@ -1141,4 +1582,144 @@ func formatJSValue(vm *goja.Runtime, v goja.Value) string {
 		}
 	}
 	return v.String()
+}
+
+// headersFromJSArg coerces an optional `headers` argument from a JS-side
+// conn.request*/ call into the map[string]string the proxy expects. An
+// undefined / null / missing arg returns nil — the SDK and proxy both
+// treat that as "no per-call overrides". Non-string values are
+// stringified via goja's default coercion so the caller doesn't have to
+// remember to quote everything.
+func headersFromJSArg(v goja.Value) map[string]string {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return nil
+	}
+	raw, ok := v.Export().(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for k, val := range raw {
+		if val == nil {
+			out[k] = ""
+			continue
+		}
+		out[k] = fmt.Sprint(val)
+	}
+	return out
+}
+
+// connectionErrorForJS rewrites a ConnectionHandle.Request error into the
+// shape we want surfaced as a JS throw. AuthRequiredError gets a stable,
+// LLM-actionable message (no OAuth URL — that belongs in the UI, not the
+// LLM's reply); everything else passes through. Going through NewGoError at
+// the call site means goja's *Exception.Unwrap returns this error directly,
+// so jsErrorMessage renders its message instead of `[object Object]`.
+func connectionErrorForJS(slug string, err error) error {
+	if ae, ok := IsAuthRequired(err); ok {
+		name := ae.ConnName
+		if name == "" {
+			name = slug
+		}
+		return fmt.Errorf("connection %q needs authorization — ask the user to open the agent's Connections tab and set it up", name)
+	}
+	return err
+}
+
+// jsRunError carries the agent/UI-facing message for a run_js failure while
+// keeping the original goja error reachable via Unwrap, so errors.Is checks
+// (context.Canceled, errJSCPU) still work downstream.
+type jsRunError struct {
+	msg   string
+	cause error
+}
+
+func (e *jsRunError) Error() string { return e.msg }
+func (e *jsRunError) Unwrap() error { return e.cause }
+
+// jsErrorMessage renders a run_js failure without goja's internal Go stack
+// frames (" at github.com/airlockrun/... (native)") or the "GoError:" wrapper
+// name, and reports whether the failure originated in Go-native code (a tool,
+// proxy, fileRead, or a platform interrupt) versus the agent's own JS.
+//
+// The native/JS split is structural, not a string heuristic: goja's
+// *Exception.Unwrap() returns a non-nil Go error exactly when the thrown
+// value is a GoError minted by vm.NewGoError, and *InterruptedError is always
+// a platform-side abort. A plain JS throw, a stack overflow, or a syntax
+// error carries no Go cause and is the script's own fault.
+//
+// goja appends its Go call stack to *Exception.Error() and
+// *InterruptedError.Error() unconditionally, so going through the typed
+// value is the only way to drop it.
+func jsErrorMessage(err error) (msg string, native bool) {
+	var ie *goja.InterruptedError
+	if errors.As(err, &ie) {
+		if u := ie.Unwrap(); u != nil { // CPU limit / ctx cancel reason
+			return u.Error(), true
+		}
+		return "run_js interrupted", true
+	}
+	var soe *goja.StackOverflowError
+	if errors.As(err, &soe) {
+		return "Maximum call stack size exceeded", false
+	}
+	var ex *goja.Exception
+	if errors.As(err, &ex) {
+		if u := ex.Unwrap(); u != nil { // GoError wrapping a Go error
+			return u.Error(), true
+		}
+		if v := ex.Value(); v != nil { // plain JS throw
+			return renderJSThrownValue(nil, v), false
+		}
+	}
+	return err.Error(), false // compiler/syntax error and the like
+}
+
+// renderJSThrownValue turns a JS-thrown value into a string useful to the
+// LLM. The hazard is plain `throw {something}` — the default `.String()` on
+// a JS object is "[object Object]", which is worse than useless. We prefer
+// (in order): an Error's stringification, a `.message` property, a
+// JSON.stringify of the object, and only as a last resort `.String()`.
+// vm may be nil — JSON.stringify fallback is skipped in that case (an
+// *Exception doesn't carry its runtime, so callers off the hot path pass
+// nil; the binding-site panics that we control all go through NewGoError
+// and never reach this branch).
+func renderJSThrownValue(vm *goja.Runtime, v goja.Value) string {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return "undefined"
+	}
+	obj, ok := v.(*goja.Object)
+	if !ok {
+		return v.String()
+	}
+	// Errors and any other value whose ClassName is "Error" stringify
+	// cleanly via the default toString (e.g. "TypeError: ...").
+	if obj.ClassName() == "Error" {
+		return v.String()
+	}
+	// Honour a .message property if it's a non-empty string — that's the
+	// convention for "throw {message, ...}" style.
+	if msg := obj.Get("message"); msg != nil && !goja.IsUndefined(msg) && !goja.IsNull(msg) {
+		if s := msg.String(); s != "" && s != "[object Object]" {
+			return s
+		}
+	}
+	// Otherwise dump the whole object as JSON so the LLM can read the
+	// fields. This is also what `console.log({...})` would have shown.
+	if vm != nil {
+		if stringify, ok := goja.AssertFunction(vm.Get("JSON").ToObject(vm).Get("stringify")); ok {
+			if result, err := stringify(goja.Undefined(), obj); err == nil && result != nil && !goja.IsUndefined(result) && !goja.IsNull(result) {
+				if s := result.String(); s != "" && s != "undefined" {
+					return s
+				}
+			}
+		}
+	}
+	// Final fallback. Defensive: never leak "[object Object]" — at least
+	// say what the value's class was.
+	s := v.String()
+	if s == "[object Object]" {
+		return "<unserializable " + obj.ClassName() + " thrown>"
+	}
+	return s
 }

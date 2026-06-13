@@ -1,7 +1,6 @@
 package agentsdk
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/airlockrun/sol/agent"
@@ -13,13 +12,19 @@ func newSolAgent(a *Agent, run *run, supportedModalities []string) *agent.Agent 
 	// Stash modalities on the Run so the lazy-created VM can read them when
 	// attachToContext() validates a key's MIME against what the model supports.
 	run.supportedModalities = supportedModalities
+	env := promptEnv{
+		Date:         time.Now().Format("2006-01-02"),
+		Platform:     run.platform,
+		UserName:     run.userDisplayName,
+		UserEmail:    run.userEmail,
+		Conversation: run.conversationID,
+	}
 	return &agent.Agent{
-		Name:              "agentsdk",
-		Model:             "", // caller sets model or passes Model override
-		Tools:             buildSolTools(a, run, supportedModalities),
-		MaxSteps:          maxToolSteps,
-		SystemPrompt:      a.systemPromptSnapshot(run.callerAccess), // access-filtered variant rendered by Airlock during sync; mutex-guarded so /refresh updates are visible
-		EnvironmentPrompt: buildEnvironmentPrompt(run),
+		Name:         "agentsdk",
+		Model:        "", // caller sets model or passes Model override
+		Tools:        buildSolTools(a, run, supportedModalities),
+		MaxSteps:     maxToolSteps,
+		SystemPrompt: a.renderSystemPrompt(run.callerAccess, run.visibleSiblings, supportedModalities, env, run.directTools), // rendered per-run from live registrations + synced PromptData; the <env> block carries per-turn date/platform/user/conversation
 		// Redactor closes over a's live sensitive set so values
 		// registered after Run start (via secret.Get inside a tool) are
 		// stripped from the next-step LLM input.
@@ -41,25 +46,4 @@ func newSolAgent(a *Agent, run *run, supportedModalities []string) *agent.Agent 
 			FilesRetainTurns: 0,
 		},
 	}
-}
-
-// buildEnvironmentPrompt creates the per-request environment context.
-// Semi-static: changes rarely (date rollover, different platform), so
-// LLM provider caching still works for most sequential requests.
-func buildEnvironmentPrompt(run *run) string {
-	platform := "web"
-	if run.bridgeID != "" {
-		platform = "bridge"
-	}
-
-	env := fmt.Sprintf(`<env>
-Date: %s
-Platform: %s`, time.Now().Format("2006-01-02"), platform)
-
-	if run.conversationID != "" {
-		env += fmt.Sprintf("\nConversation: %s", run.conversationID)
-	}
-
-	env += "\n</env>"
-	return env
 }

@@ -108,7 +108,13 @@ func (t *Tool[In, Out]) toRegistered() *registeredTool {
 		}
 		out, err := userFn(ctx, in)
 		if err != nil {
-			return "", err
+			// Prefix the tool name so empty-body / parse failures inside
+			// the tool's Go code surface as "get_playback_state: unexpected
+			// end of JSON input" in the LLM stack trace, not the bare
+			// stdlib message — which otherwise points only at
+			// agentsdk.newVM.func1 (the dispatch closure) with no clue
+			// which tool failed.
+			return "", fmt.Errorf("%s: %w", name, err)
 		}
 		buf, err := json.Marshal(out)
 		if err != nil {

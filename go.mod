@@ -6,6 +6,7 @@ require (
 	github.com/airlockrun/goai v0.1.2
 	github.com/airlockrun/sol v0.1.0
 	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c
+	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/pressly/goose/v3 v3.27.0
 	go.uber.org/zap v1.27.1

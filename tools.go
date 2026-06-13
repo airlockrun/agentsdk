@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/bus"
+	"github.com/google/uuid"
 )
 
 type runJSInput struct {
@@ -18,13 +20,32 @@ type runJSInput struct {
 	RequestConfirmation bool   `json:"request_confirmation,omitempty" jsonschema:"description=Set to true if this code modifies external data or has side effects the user should review first. The code will NOT execute — instead the user will be shown the code and asked to approve."`
 }
 
-// buildSolTools creates the tool.Set for Sol's Runner. All agent capabilities
-// are exposed as JS functions inside the run_js VM — see vm.go. This keeps the
-// LLM's tool surface minimal (one escape hatch) while still giving agents full
-// composability (loops, data-flow chains, conditionals) in a single tool call.
+// buildSolTools creates the tool.Set for Sol's Runner. In the default
+// (JS) surface every capability is a goja binding inside one `run_js`
+// tool — minimal LLM surface, maximal composability. In direct-tools
+// mode (run.directTools, set by airlock for public-tier callers today)
+// each capability is its own typed LLM tool and run_js is absent —
+// narrower attack surface and predictable single-call exchanges. See
+// buildDirectTools in directtools.go for the direct-tools shape.
 func buildSolTools(agent *Agent, run *run, supportedModalities []string) tool.Set {
-	ts := tool.Set{
-		"run_js": buildRunJSTool(agent, run),
+	var ts tool.Set
+	if run.directTools {
+		ts = buildDirectTools(agent, run, supportedModalities)
+	} else {
+		ts = tool.Set{
+			"run_js": buildRunJSTool(agent, run),
+		}
+	}
+
+	// promptAgent: open-ended A2A delegation as a first-class tool (not
+	// a run_js binding). A suspendable sibling LLM-loop round-trip must
+	// be its own pending tool call so Sol's suspend/resume handles it
+	// natively (no JS-sandbox re-run / idempotency problem). Only
+	// registered when this run can see at least one sibling. Surfaces
+	// identically in both modes — the JS/direct split governs the
+	// per-capability surface, not the open-ended delegation primitive.
+	if t, ok := buildPromptAgentTool(agent, run); ok {
+		ts["promptAgent"] = t
 	}
 
 	// Wrap all tool Execute functions with output truncation.
@@ -35,22 +56,41 @@ func buildSolTools(agent *Agent, run *run, supportedModalities []string) tool.Se
 	return ts
 }
 
+// runJSDescription is the LLM-facing description of the run_js tool. Tool
+// descriptions ride with every tool call envelope, so this stays short:
+// the system prompt's "JavaScript environment" and "Built-in functions"
+// sections carry the runtime rules, the var/let guidance, the
+// request_confirmation policy, and every binding's signature — there's no
+// need to repeat them per-tool.
+const runJSDescription = `Execute JavaScript in the agent's sandboxed runtime.
+
+The system prompt's "JavaScript environment" and "Built-in functions" sections describe the runtime semantics (ES5.1 + select ES6, no async/await, ` + "`var`" + ` for top-level names, last-expression-returned), every built-in binding, and the request_confirmation policy. Read those first.
+
+Parameters:
+- code: JS source to execute. The value of the last expression is the result; do NOT use a top-level ` + "`return`" + ` statement.
+- request_confirmation: set true ONLY for code that modifies external data (sending messages, deleting records, spending money). Read-only operations and lookups must NEVER set this. When set, the user sees the commented code and decides whether to approve — comment every line so they can understand exactly what will happen.`
+
 // buildRunJSTool creates the run_js tool for a given agent and run.
 func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 	return tool.New("run_js").
-		Description(buildToolDescription(agent, run.callerAccess)).
+		Description(runJSDescription).
 		SchemaFromStruct(runJSInput{}).
 		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
 			var args runJSInput
 			if err := json.Unmarshal(input, &args); err != nil {
-				return tool.Result{Output: "Error: invalid input: " + err.Error()}, nil
+				return tool.Result{}, fmt.Errorf("invalid run_js input: %w", err)
 			}
 
 			// If confirmation requested, ask the permission manager.
 			// This triggers Sol's suspension mechanism (ErrPermissionNeeded)
 			// if no rule allows it. The run suspends, the user is asked
 			// to confirm, and on resume the permission rule is added.
-			if args.RequestConfirmation {
+			//
+			// autoConfirm runs have no interactive second turn in which to
+			// answer a confirmation (public one-shot bridge sessions), so the
+			// gate is skipped and the code executes — the LLM's
+			// request_confirmation intent is honored as "just run it".
+			if args.RequestConfirmation && !run.autoConfirm {
 				pm := bus.PermissionManagerFromContext(ctx)
 				err := pm.Ask(ctx, bus.PermissionRequest{
 					Permission: "run_js",
@@ -70,7 +110,7 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 					// PermissionDeniedError → tool returns denial to LLM
 					if _, ok := err.(*bus.PermissionDeniedError); ok {
 						run.recordAction("run_js_denied", map[string]string{"code": args.Code}, "denied", nil, 0)
-						return tool.Result{Output: "Code execution was denied by the user."}, nil
+						return tool.Result{}, tool.DeniedError{Reason: "Code execution was denied by the user."}
 					}
 					return tool.Result{}, err
 				}
@@ -81,25 +121,18 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			run.pendingLogs = nil
 			run.mu.Unlock()
 
-			// Cancel the VM if the run's ctx fires (handlePrompt's WithTimeout,
-			// or Airlock disconnecting). Without this, an infinite-loop or
-			// runaway algorithm in LLM-generated JS spins at 100% CPU forever
-			// — the goroutine outlives the request and bleeds into subsequent
-			// prompts. goja.Interrupt aborts the in-flight RunString with an
-			// *InterruptedError that propagates out as a regular error.
+			// Guard the JS execution: relays run.ctx cancellation
+			// (handlePrompt's WithTimeout / disconnect) AND enforces the L3
+			// ceilings — process heap growth and JS-attributable CPU time
+			// (wall minus time parked in Go calls, so a long legit download
+			// is never charged as a spin). goja.Interrupt aborts the
+			// in-flight run with an error that propagates out normally.
 			vm := run.vmRuntime()
-			done := make(chan struct{})
-			go func() {
-				select {
-				case <-run.ctx.Done():
-					vm.Interrupt(run.ctx.Err())
-				case <-done:
-				}
-			}()
+			stopGuard := startJSGuard(run.ctx, vm, run.gw)
 
 			start := time.Now()
 			result, err := executeJS(vm, args.Code)
-			close(done)
+			stopGuard()
 			duration := time.Since(start)
 
 			// Drain logs from this execution.
@@ -108,11 +141,23 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			run.pendingLogs = nil
 			run.mu.Unlock()
 
+			if err != nil {
+				msg, native := jsErrorMessage(err)
+				if native {
+					msg = "(native) " + msg
+				}
+				err = &jsRunError{msg: msg, cause: err}
+			}
+
 			// Record action.
 			run.recordAction("run_js", map[string]string{"code": args.Code}, result, err, duration)
 
 			if err != nil {
-				return tool.Result{Output: "Error: " + err.Error()}, nil
+				// Return the error so the executor classifies the outcome
+				// as a tool error (red), not a successful text result that
+				// merely starts with "Error:". The executor feeds it back
+				// to the model (non-fatal) and prepends its own "Error: ".
+				return tool.Result{}, err
 			}
 
 			// Combine console output + return value.
@@ -128,6 +173,133 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 			return tool.Result{Output: output, Attachments: attachments}, nil
 		}).
 		Build()
+}
+
+type promptAgentInput struct {
+	Agent     string     `json:"agent" jsonschema:"description=Slug of the sibling agent to delegate to (see the Sibling agents section of the system prompt)."`
+	Message   string     `json:"message" jsonschema:"description=The task / message to send. When resuming an input-required task, put the answer here."`
+	ContextID string     `json:"contextId,omitempty" jsonschema:"description=Opaque thread handle, minted by the target agent. OMIT on the first call to an agent. Only ever pass a contextId you got back from THIS agent's own prior promptAgent result — never your own run/conversation id, never a fabricated value."`
+	TaskID    string     `json:"taskId,omitempty" jsonschema:"description=Opaque task handle. Only set when resuming a task that returned state=input-required: pass that result's taskId verbatim and put the answer in message. Never invent one."`
+	Files     []FilePath `json:"files,omitempty" jsonschema:"description=Paths in YOUR storage to attach. Each is copied into the target agent's storage and surfaced to it as an attached file (with content-type/size/filename derived from S3 — you only supply the path)."`
+}
+
+// buildPromptAgentTool builds the single top-level `promptAgent` tool —
+// open-ended natural-language delegation to a visible sibling. ok=false
+// (don't register) when this run sees no siblings. The visible set is
+// frozen at run start, same as the vm.go sibling bindings.
+func buildPromptAgentTool(agent *Agent, run *run) (tool.Tool, bool) {
+	if len(run.visibleSiblings) == 0 {
+		return tool.Tool{}, false
+	}
+	visible := make(map[uuid.UUID]struct{}, len(run.visibleSiblings))
+	for _, id := range run.visibleSiblings {
+		visible[id] = struct{}{}
+	}
+	run.agent.syncMu.RLock()
+	allSibs := run.agent.promptData.Siblings
+	run.agent.syncMu.RUnlock()
+
+	type sib struct {
+		id   uuid.UUID
+		slug string
+	}
+	bySlug := make(map[string]sib)
+	var listing strings.Builder
+	for _, s := range allSibs {
+		if _, ok := visible[s.ID]; !ok {
+			continue
+		}
+		bySlug[s.Slug] = sib{id: s.ID, slug: s.Slug}
+		fmt.Fprintf(&listing, "\n- %s — %s", s.Slug, s.Description)
+	}
+	if len(bySlug) == 0 {
+		return tool.Tool{}, false
+	}
+
+	desc := "Delegate a natural-language task to a sibling agent; it runs its own LLM loop and returns " +
+		"{text, taskId, contextId, state, artifacts}. `state` is completed or input-required " +
+		"(if input-required, call again with the same taskId and the answer in message). " +
+		"artifacts are files the sibling produced, copied into your storage. Available agents:" + listing.String()
+
+	built := tool.New("promptAgent").
+		Description(desc).
+		SchemaFromStruct(promptAgentInput{}).
+		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
+			var in promptAgentInput
+			if err := json.Unmarshal(input, &in); err != nil {
+				return tool.Result{}, fmt.Errorf("invalid promptAgent input: %w", err)
+			}
+			if in.Agent == "" || in.Message == "" {
+				return tool.Result{}, errors.New("`agent` and `message` are required")
+			}
+			target, ok := bySlug[in.Agent]
+			if !ok {
+				return tool.Result{}, fmt.Errorf("unknown or unavailable agent: %s", in.Agent)
+			}
+
+			handle := &SiblingHandle{slug: target.slug, agentID: target.id, agent: agent}
+			childArgs := map[string]any{"message": in.Message}
+			if in.ContextID != "" {
+				childArgs["contextId"] = in.ContextID
+			}
+			if in.TaskID != "" {
+				childArgs["taskId"] = in.TaskID
+			}
+			if len(in.Files) > 0 {
+				// Wire shape for A2A: [{path: "..."}]. Other FileInfo fields
+				// (filename, contentType, size) get filled callee-side by
+				// HeadObject during the cross-bucket copy — no point making
+				// the caller LLM transcribe them.
+				files := make([]map[string]string, len(in.Files))
+				for i, p := range in.Files {
+					files[i] = map[string]string{"path": string(p)}
+				}
+				childArgs["files"] = files
+			}
+
+			res, err := handle.CallTool(ctx, run.id, "prompt", childArgs)
+			if err != nil {
+				// failed / canceled surface as a normal tool error the
+				// LLM can react to (matches the A2A error-channel design).
+				// Returning the error (rather than burying it in a
+				// success Output) is what the executor classifies as a
+				// tool-error outcome — it still feeds the message back to
+				// the model non-fatally.
+				return tool.Result{}, err
+			}
+
+			// res is the structured {text,taskId,contextId,state,artifacts}.
+			// On input-required, suspend this pending tool call as a
+			// delegated suspension so it bubbles up the run tree and the
+			// decision cascades back in on resume.
+			if m, ok := res.(map[string]any); ok {
+				if st, _ := m["state"].(string); st == "input-required" {
+					child := map[string]any{
+						"agentId": target.id.String(),
+						"slug":    target.slug,
+						"taskId":  m["taskId"],
+					}
+					// Leaf gate detail so the root confirmation the
+					// human sees says WHAT this sibling wants to do.
+					if c, ok := m["confirmation"]; ok && c != nil {
+						child["confirmation"] = c
+					}
+					return tool.Result{}, &bus.ErrDelegatedSuspend{
+						ToolCallID: opts.ToolCallID,
+						Transport:  "a2a",
+						Child:      child,
+					}
+				}
+			}
+
+			out, mErr := json.Marshal(res)
+			if mErr != nil {
+				return tool.Result{Output: fmt.Sprintf("%v", res)}, nil
+			}
+			return tool.Result{Output: string(out)}, nil
+		}).
+		Build()
+	return built, true
 }
 
 // mimeMatchesModalities checks if a MIME type is supported by the given modalities.
@@ -187,7 +359,7 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 	}
 
 	// Save full output to the framework-owned /tmp directory. The LLM reads
-	// it back via readFile(path) inside run_js.
+	// it back via fileRead(path) inside run_js.
 	path := reservedTmpPath + "/output-" + randomHex(4) + ".txt"
 	if _, err := run.agent.WriteFile(ctx, path, strings.NewReader(output), "text/plain"); err != nil {
 		// If save fails, just truncate without a path.
@@ -199,7 +371,7 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 	return output[:truncatePreviewLen] + fmt.Sprintf(
 		"\n\n[Output truncated (%dKB → %dKB shown). Full result saved at %q.\n"+
 			"Process it inside run_js without returning the full content:\n"+
-			"  var data = readFile(%q)\n"+
+			"  var data = fileRead(%q)\n"+
 			"  var parsed = JSON.parse(data) // or process as text\n"+
 			"  parsed.slice(0, 10)           // last expression = return value; only what you need\n"+
 			"]",
@@ -238,118 +410,3 @@ func randomHex(n int) string {
 	return fmt.Sprintf("%x", b)
 }
 
-// buildToolDescription generates the run_js tool description including the
-// function manifest. callerAccess gates admin-only bindings (queryDB,
-// execDB, requestUpgrade) so they're not advertised to AccessUser /
-// AccessPublic runs. Whoever sees a binding here can call it — we never
-// surface "this binding is admin-only, ask your admin" framing because
-// the LLM doesn't know its own access level and surfacing the gate just
-// confuses non-admin runs into recommending things their user can't do.
-func buildToolDescription(agent *Agent, callerAccess Access) string {
-	var b strings.Builder
-	b.WriteString("Execute JavaScript code. The runtime is ES5.1 with select ES6 features (let/const, arrow functions, classes, destructuring, template literals, Map/Set) — there is NO `async`/`await` and NO Promises; using `await` is a syntax error. All bindings below are synchronous: call them directly, e.g. `var r = httpRequest(url)` not `await httpRequest(url)`.\n\n")
-	b.WriteString("The value of the last expression is returned — do NOT use a top-level `return` statement (it's a syntax error outside a function). Write the value you want as the final expression. Example: `var r = httpRequest(url); r` returns `r`. `return r;` does NOT work.\n\n")
-	b.WriteString("Variables declared in one run_js call persist into the next call within the same turn (the VM resets only on the next user message). **ALWAYS use `var` for top-level names — NEVER `let` or `const`.** Redeclaring a `let` or `const` with a name that already exists from a previous run_js call throws `SyntaxError: Identifier has already been declared` and aborts the call — and you can't tell if a name is taken without trying it. `var` redeclarations are silently fine. Reach for `let`/`const` only inside a function body, a `for`-loop header, or a `{ ... }` block whose name won't be reused. This is the single most common cause of run_js failures across multi-step turns; treat `var` at the top level as a hard rule.\n\n")
-	b.WriteString("Prefer ONE run_js call over many when it's safe. If a sequence is read-only or strictly additive (list → filter → look up one item → format), do it in a single call: fewer turns, less chance of stale state between calls, cheaper for the user. Split into multiple calls only when an earlier result must be inspected before deciding what to do next, or when an action is destructive enough that you want a confirmation gate between steps. Example: `var items = listX(); var target = items.find(i => i.name === 'foo'); if (!target.enabled) { updateX(target.id, {enabled: true}); } target` — one call, not three.\n\n")
-	b.WriteString("IMPORTANT: request_confirmation parameter usage:\n")
-	b.WriteString("- Set request_confirmation=true ONLY for code that modifies external data (sending messages, deleting records, spending money).\n")
-	b.WriteString("- Read-only operations, data lookups, and computations must NEVER use request_confirmation — just execute them.\n")
-	b.WriteString("- When requesting confirmation, add comments to the code explaining what it does so the user can make an informed decision.\n")
-	b.WriteString("\nTools registered via `agent.RegisterTool` are declared as typed JS globals in the system prompt (not repeated here). Call them by name with a single object argument matching the declared input type.\n")
-
-	// Built-in bindings.
-	b.WriteString("\nBuilt-in bindings:\n")
-	b.WriteString("- conn_{slug}.request(method, path, body?) → string — raw HTTP via connection\n")
-	b.WriteString("- conn_{slug}.requestJSON(method, path, body?) → object — JSON HTTP via connection\n")
-	b.WriteString("- mcp_{slug}.<tool_name>(args?) — call MCP tool. The per-tool typed methods are declared in the run-env prompt; one method per tool the server advertised at sync time.\n")
-	if accessSatisfies(callerAccess, AccessAdmin) {
-		b.WriteString("- queryDB(sql, ...params) → [{...}, ...] — read-only SQL against the agent's Postgres schema.\n")
-		b.WriteString("- execDB(sql, ...params) → {rowsAffected: N} — write SQL (INSERT/UPDATE/DELETE) against the agent's Postgres schema.\n")
-	}
-	b.WriteString("- readFile(path) → string — read a file as UTF-8 text (most common case). `path` is an S3-style storage path with no leading slash, e.g. \"uploads/orders.csv\".\n")
-	b.WriteString("- readBytes(path) → Uint8Array — read a file as binary bytes. Use for images, PDFs, anything not text.\n")
-	b.WriteString("- writeFile(path, data, contentType?) → FileInfo — write a file. `data` is a string or Uint8Array. `contentType` is optional (auto-detected from extension when absent). Returns {path, filename, contentType, size, lastModified}.\n")
-	b.WriteString("- listDir(path, opts?) → FileInfo[] — list files. Non-recursive by default (one level only); pass {recursive: true} to walk the subtree. `path` may end with `/`.\n")
-	b.WriteString("- statFile(path) → FileInfo — metadata for a single file.\n")
-	b.WriteString("- fileExists(path) → boolean — sugar around statFile.\n")
-	b.WriteString("- deleteFile(path) — remove a file. Idempotent.\n")
-	b.WriteString("- printToUser(parts) — send rich content to user; parts is a single object or array of {type, text, source, url, data, filename, mimeType, alt, duration}. `source` accepts a storage path.\n")
-	b.WriteString("- log(message) — emit a log line visible in the run timeline.\n")
-	b.WriteString("- webSearch(query, count?) → {results: [{title, url, snippet}], synthesis?, provider}\n")
-	b.WriteString("- httpRequest(url, opts?) → {status, headers, body, contentType, size, savedTo?} — HTML responses are converted to markdown by default; binary and large responses auto-saved to storage. `savedTo` is a storage path; pass it to readFile(...) or attachToContext(...). Opts: {method, headers, body, timeout, saveAs, raw}; `saveAs` is a storage path with no leading slash.\n")
-	b.WriteString("- attachToContext(path) → string — load a stored file as an image/file part so you can actually see it on the NEXT turn. Idempotent per run. For text files use readFile(path) instead.\n")
-	b.WriteString("- analyzeImage(path, question?) → string — sends a stored image to the platform's vision model and returns its reply. `question` defaults to \"Describe this image.\" Use this when the current chat model lacks vision; it routes to the configured vision_model regardless of which exec model is running.\n")
-	b.WriteString("- transcribeAudio(path, opts?) → {text, language?, duration?} — speech-to-text on a stored audio file. opts: {language?, prompt?, mimeType?}.\n")
-	b.WriteString("- generateImage(prompt, opts?) → {file: FileInfo, mimeType, size} — text-to-image; result auto-saved. Pass `file.path` to printToUser({source: file.path, ...}) or readBytes(...). opts: {saveAs?, size?, aspectRatio?, seed?}.\n")
-	b.WriteString("- speak(text, opts?) → {file: FileInfo, mimeType, size} — text-to-speech; result auto-saved. Pass `file.path` to printToUser({source: file.path, type: 'audio'}). opts: {saveAs?, voice?, outputFormat?, speed?}.\n")
-	b.WriteString("- embed(texts) → number[][] — text embeddings; accepts a string or array of strings.\n")
-	if accessSatisfies(callerAccess, AccessAdmin) {
-		b.WriteString("- requestUpgrade(description) → string — ask Airlock to regenerate this agent with new capabilities. The current agent keeps running until the new build finishes; the description should specify what to add or change. The builder writes the agent's Go code to expose new tools, add routes, crons, webhooks etc. It is constrained by agent's SDK and platform limitations: it has access to DB, file system, and network, and can add container dependencies (e.g. a CLI utility), but cannot start new services (e.g. redis), or create React apps, or install DB extensions.\n")
-	}
-
-	// Directory inventory — which paths the LLM can read/write/list, and
-	// at what access level the current run satisfies each cap. Builders
-	// who want to steer the model away from a directory (without breaking
-	// admin reachability) set Directory.LLMHint, appended in parentheses
-	// after the description.
-	if len(agent.directories) > 0 {
-		b.WriteString("\nDirectories registered for this agent (paths your code can use):\n")
-		for _, d := range agent.directories {
-			caps := []string{}
-			if accessSatisfies(callerAccess, d.Read) {
-				caps = append(caps, "read")
-			}
-			if accessSatisfies(callerAccess, d.Write) {
-				caps = append(caps, "write")
-			}
-			if accessSatisfies(callerAccess, d.List) {
-				caps = append(caps, "list")
-			}
-			capsStr := "no access"
-			if len(caps) > 0 {
-				capsStr = strings.Join(caps, "+")
-			}
-			desc := d.Description
-			if desc == "" && d.Path == reservedTmpPath {
-				desc = "framework scratch (truncated tool output, generated media)"
-			}
-			line := fmt.Sprintf("- %s (%s)", d.Path, capsStr)
-			if desc != "" {
-				line += " — " + desc
-			}
-			if d.LLMHint != "" {
-				line += " [" + d.LLMHint + "]"
-			}
-			b.WriteString(line + "\n")
-		}
-	}
-
-	// Topic bindings.
-	if len(agent.topics) > 0 {
-		b.WriteString("\nNotification topics (subscribe the current conversation to receive notifications):\n")
-		for slug, def := range agent.topics {
-			line := fmt.Sprintf("- topic_%s.subscribe() / topic_%s.unsubscribe() — %s", slug, slug, def.Description)
-			if def.LLMHint != "" {
-				line += " [" + def.LLMHint + "]"
-			}
-			b.WriteString(line + "\n")
-		}
-	}
-
-	// Connection LLM instructions.
-	for slug, def := range agent.auths {
-		if def.LLMHint == "" && len(def.Scopes) == 0 {
-			continue
-		}
-		b.WriteString(fmt.Sprintf("\nConnection %q (%s):\n", slug, def.Name))
-		if def.AuthMode == "oauth" && len(def.Scopes) > 0 {
-			b.WriteString(fmt.Sprintf("OAuth scopes: %s\n", strings.Join(def.Scopes, ", ")))
-		}
-		if def.LLMHint != "" {
-			b.WriteString(def.LLMHint)
-			b.WriteString("\n")
-		}
-	}
-
-	return b.String()
-}

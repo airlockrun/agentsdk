@@ -72,11 +72,18 @@ func TestResolveDisplayPart(t *testing.T) {
 			wantFile: "report.pdf",
 		},
 		{
-			name:     "source with explicit type generates filename",
+			name:     "source-based part preserves the original filename",
 			input:    DisplayPart{Type: "image", Source: "charts/rev.png", MimeType: "image/png"},
 			wantType: "image",
 			wantMime: "image/png",
-			wantFile: "image.png",
+			wantFile: "rev.png",
+		},
+		{
+			name:     "url-based part preserves the URL's last segment",
+			input:    DisplayPart{Type: "image", URL: "https://example.com/path/cat.jpg?token=abc", MimeType: "image/jpeg"},
+			wantType: "image",
+			wantMime: "image/jpeg",
+			wantFile: "cat.jpg",
 		},
 		{
 			name:     "data with explicit mimeType skips detection",
