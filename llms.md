@@ -1293,7 +1293,8 @@ result invisible to the rest of the agent:
 > **Use ctx-aware primitives in tool Execute.** The `ctx` in `Execute(ctx, in)`
 > cancels when the user cancels or the run timeout fires.
 > `exec.CommandContext`, `http.NewRequestWithContext`,
-> `pgx.Pool().Query(ctx, ...)`, and
+> `agent.DB().QueryContext(ctx, ...)` (and sqlc query methods, which take
+> `ctx`), and
 > `select { case <-ctx.Done(): ...; case <-time.After(d): }` honor it;
 > `time.Sleep`, `io.ReadAll` without ctx, and blocking syscalls don't. A
 > non-cooperative tool keeps running until it returns naturally — the run row
@@ -1843,7 +1844,8 @@ goose -dir db/migrations postgres "$TEST_DB_URL" up
 psql "$TEST_DB_PSQL" -c "SET search_path TO $TEST_DB_SCHEMA; SELECT table_name FROM information_schema.tables WHERE table_schema = '$TEST_DB_SCHEMA'"
 ```
 
-The agent gets its own Postgres schema. Generated code uses pgx/v5.
+The agent gets its own Postgres schema. `agent.DB()` returns an `*AgentDB`
+wrapping `*sql.DB` — pass it straight to the generated `New()`.
 
 **Using sqlc in Go:**
 
@@ -1866,5 +1868,9 @@ go tool templ generate
 go build ./...
 ```
 
-Run `sqlc generate` only if you created `.sql` files in `db/queries/`. The
-Docker image build re-runs `templ generate`; you don't commit generated files.
+Run `sqlc generate` only if you created or changed `.sql` files in
+`db/queries/`. The Docker build re-runs `templ generate` and `tailwindcss`, so
+`*_templ.go` and `views/static/app.css` are regenerated there and not
+committed. It does **not** run sqlc, so the generated `internal/db/` **is**
+committed (and updated whenever you change a query) — otherwise a fresh-clone
+`docker build` would fail to find the package.
