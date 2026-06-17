@@ -180,6 +180,7 @@ type RequestOpts struct {
 // ConnectionDef is the wire format used by PUT /api/agent/connections/{slug}.
 // Slug is sent in the URL, not the body.
 type ConnectionDef struct {
+	Slug              string            `json:"slug,omitempty"`
 	Name              string            `json:"name"`
 	Description       string            `json:"description"`
 	BaseURL           string            `json:"baseUrl,omitempty"`
@@ -242,6 +243,7 @@ type ExecEndpoint struct {
 // Slug travels in the URL. Operator-configured fields stay airlock-side and
 // are not present here — the agent only declares its intent to use the slug.
 type ExecEndpointDef struct {
+	Slug        string `json:"slug,omitempty"`
 	Description string `json:"description"`
 	LLMHint     string `json:"llmHint,omitempty"`
 	Access      Access `json:"access,omitempty"`
@@ -852,6 +854,8 @@ type SyncRequest struct {
 	Routes           []RouteDef           `json:"routes,omitempty"`
 	Topics           []TopicDef           `json:"topics,omitempty"`
 	MCPServers       []MCPDef             `json:"mcpServers,omitempty"`
+	Connections      []ConnectionDef      `json:"connections,omitempty"`
+	ExecEndpoints    []ExecEndpointDef    `json:"execEndpoints,omitempty"`
 	EnvVars          []EnvVarDef          `json:"envVars,omitempty"`
 	Directories      []DirectoryDef       `json:"directories,omitempty"`
 	Instructions     []InstructionDef     `json:"instructions,omitempty"`

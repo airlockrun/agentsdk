@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -27,13 +28,20 @@ func TestSyncWithAirlock(t *testing.T) {
 
 	a.syncWithAirlock(context.Background())
 
-	connReqs := mock.RequestsByPath("/api/agent/connections/")
-	if len(connReqs) != 1 {
-		t.Fatalf("expected 1 connection registration, got %d", len(connReqs))
+	// Connections ride the sync batch now, not a per-slug PUT.
+	if connReqs := mock.RequestsByPath("/api/agent/connections/"); len(connReqs) != 0 {
+		t.Fatalf("expected 0 connection PUTs, got %d", len(connReqs))
 	}
 
 	syncReqs := mock.RequestsByPath("/api/agent/sync")
 	if len(syncReqs) != 1 {
 		t.Fatalf("expected 1 sync request, got %d", len(syncReqs))
+	}
+	var body SyncRequest
+	if err := json.Unmarshal(syncReqs[0].Body, &body); err != nil {
+		t.Fatalf("decode sync body: %v", err)
+	}
+	if len(body.Connections) != 1 || body.Connections[0].Slug != "gmail" {
+		t.Fatalf("expected gmail connection in sync batch, got %+v", body.Connections)
 	}
 }
