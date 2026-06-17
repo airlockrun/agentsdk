@@ -136,7 +136,7 @@ func addExecTools(ts tool.Set, agent *Agent, run *run) {
 			desc = "Run a command on " + slug
 		}
 		desc += " — returns {stdout, stderr, exitCode, durationMs}. Non-zero exitCode is not an error; inspect it yourself. Stdout/stderr over 20 MiB spill to tmp/."
-		ts["exec_"+slug+"_run"] = tool.New("exec_"+slug+"_run").
+		ts["exec_"+slug+"_run"] = tool.New("exec_" + slug + "_run").
 			Description(desc).
 			SchemaFromStruct(execRunInput{}).
 			Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
@@ -325,4 +325,3 @@ func buildSiblingTool(toolName string, schema MCPToolSchema, handle *SiblingHand
 	})
 	return def.Build()
 }
-

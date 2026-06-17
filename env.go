@@ -81,18 +81,18 @@ type EnvVarHandle struct {
 //
 // Return shape:
 //   - (s, nil)        — the stored value (or Default if no value was set,
-//                        or "" if neither). Empty string IS a valid
-//                        successful return when no Pattern is declared.
+//     or "" if neither). Empty string IS a valid
+//     successful return when no Pattern is declared.
 //   - ("", non-nil)   — transport / decrypt error, or the value does not
-//                        match the declared Pattern. Pattern is checked
-//                        unconditionally, including against empty
-//                        strings — declare Pattern="^.+$" to enforce
-//                        non-empty, or any tighter regex for a known
-//                        shape. Operators are blocked from saving a
-//                        non-matching value at the UI, so a mismatch
-//                        here usually means nothing has been configured
-//                        yet (or the Pattern was tightened after a
-//                        save).
+//     match the declared Pattern. Pattern is checked
+//     unconditionally, including against empty
+//     strings — declare Pattern="^.+$" to enforce
+//     non-empty, or any tighter regex for a known
+//     shape. Operators are blocked from saving a
+//     non-matching value at the UI, so a mismatch
+//     here usually means nothing has been configured
+//     yet (or the Pattern was tightened after a
+//     save).
 //
 // Subsequent calls return the cached value until Refresh() is invoked.
 func (h *EnvVarHandle) Get(ctx context.Context) (string, error) {

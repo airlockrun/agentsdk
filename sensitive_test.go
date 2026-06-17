@@ -40,25 +40,25 @@ func TestIsLikelySecret(t *testing.T) {
 		want bool
 	}{
 		// Real-shaped credentials (random-looking, ≥16 chars) must pass.
-		{"sk-proj-AbCdEf1234567890GhIjKlMnOpQrSt", true}, // openai-style
-		{"bb_live_mBeGGVZIlQ5CdAHBKCqIgWSbk0Y", true},   // browserbase (real shape)
-		{"AKIAIOSFODNN7EXAMPLE", true},                   // AWS access key id
+		{"sk-proj-AbCdEf1234567890GhIjKlMnOpQrSt", true},         // openai-style
+		{"bb_live_mBeGGVZIlQ5CdAHBKCqIgWSbk0Y", true},            // browserbase (real shape)
+		{"AKIAIOSFODNN7EXAMPLE", true},                           // AWS access key id
 		{"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.signature", true}, // JWT-shaped
-		{"123456:AAH-x7lCqK9aZmNbVcXyQwErTyUiOpAsDfGh", true},     // telegram bot
-		{"ghp_AbC3xY7zKlMn2pQrStUvWxYz0123456789", true},          // github PAT
+		{"123456:AAH-x7lCqK9aZmNbVcXyQwErTyUiOpAsDfGh", true},    // telegram bot
+		{"ghp_AbC3xY7zKlMn2pQrStUvWxYz0123456789", true},         // github PAT
 
 		// Common words / placeholders / phrases must NOT pass.
 		{"", false},
 		{"a", false},
-		{"password", false},        // 8 chars
-		{"password1234", false},    // 12 chars — under min length
-		{"hello world!", false},    // 12 chars — under min length
+		{"password", false},     // 8 chars
+		{"password1234", false}, // 12 chars — under min length
+		{"hello world!", false}, // 12 chars — under min length
 		{"changeme", false},
 		{"true", false},
 		{"false", false},
 		{"null", false},
-		{"1234567890123456", false}, // 16 digits — isAllDigits filter
-		{"                ", false}, // whitespace
+		{"1234567890123456", false},     // 16 digits — isAllDigits filter
+		{"                ", false},     // whitespace
 		{"aaaaaaaaaaaaaaaaaaaa", false}, // 20 of 'a' — low entropy
 	}
 
