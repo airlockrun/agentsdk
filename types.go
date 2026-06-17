@@ -19,14 +19,27 @@ import (
 // defaultTimeout is the default execution timeout for webhooks and crons.
 const defaultTimeout = 2 * time.Minute
 
+// User identifies the human a run is acting for, exposed to handler code via
+// UserFromContext and to run_js as the `user` global. ID is the stable
+// internal-user uuid (the key to scope agent-owned data by); Email/DisplayName
+// are display claims. All fields are empty for cron/schedule/webhook and
+// anonymous runs.
+type User struct {
+	ID          string
+	Email       string
+	DisplayName string
+}
+
 // --- Handler types ---
 
 // WebhookHandlerFunc handles incoming webhook requests. Pass ctx to any
 // agent.X(ctx, ...) call the body makes.
 type WebhookHandlerFunc func(ctx context.Context, data []byte, ew *EventWriter) error
 
-// CronHandlerFunc handles cron-triggered requests.
-type CronHandlerFunc func(ctx context.Context, ew *EventWriter) error
+// ScheduleHandlerFunc handles a timed fire of a registered cron or schedule.
+// It carries no payload — per-instance data lives in the agent's own DB,
+// keyed by the fire id (see ScheduleFromContext).
+type ScheduleHandlerFunc func(ctx context.Context, ew *EventWriter) error
 
 // RouteHandlerFunc handles custom HTTP routes registered via RegisterRoute.
 type RouteHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request)
@@ -38,8 +51,8 @@ type RouteHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.R
 type Webhook struct {
 	Path        string             // unique per agent
 	Handler     WebhookHandlerFunc // required
-	Verify      string             // "hmac" | "token" | "none" (default: "none")
-	Header      string             // header carrying the signature/token (hmac/token modes)
+	Verify      string             // "none" | "hmac" | "token" | "bearer" | "ed25519" (default: "none")
+	Header      string             // header carrying the signature/token (hmac/ed25519 modes)
 	Timeout     time.Duration      // max execution time (default: 2 min)
 	Description string
 	Access      Access // who may invoke; default AccessUser
@@ -47,13 +60,25 @@ type Webhook struct {
 
 // --- Cron ---
 
-// Cron is the self-contained declaration registered via agent.RegisterCron.
-// Crons fire by schedule, never by user action — no Access field.
+// Cron is a recurring, code-declared schedule registered via agent.RegisterCron.
+// It fires by schedule, never by user action — no Access field. The slug shares
+// one namespace with RegisterSchedule (unique per agent).
 type Cron struct {
-	Name        string          // unique per agent
-	Schedule    string          // standard cron expression, e.g. "0 9 * * *"
-	Handler     CronHandlerFunc // required
-	Timeout     time.Duration   // max execution time (default: 2 min)
+	Slug        string              // unique per agent (across crons + schedules)
+	Schedule    string              // standard cron expression, e.g. "0 9 * * *"
+	Handler     ScheduleHandlerFunc // required
+	Timeout     time.Duration       // max execution time (default: 2 min)
+	Description string
+}
+
+// Schedule is a code-declared handler for runtime-armed one-shot fires
+// registered via agent.RegisterSchedule. Arm an instance with agent.ScheduleAt;
+// per-instance data lives in the agent's own DB (keyed by the returned fire id),
+// not in the platform. No Access field — fires are trusted/system.
+type Schedule struct {
+	Slug        string              // unique per agent (across crons + schedules)
+	Handler     ScheduleHandlerFunc // required
+	Timeout     time.Duration       // max execution time (default: 2 min)
 	Description string
 }
 
@@ -88,7 +113,7 @@ type Connection struct {
 	// authorization request, overriding the platform defaults per key.
 	// Optional escape hatch for providers whose refresh-token handshake
 	// differs from the default.
-	AuthParams        map[string]string
+	AuthParams map[string]string
 	// Headers are static request headers Airlock sets on every proxied
 	// call for this connection (User-Agent, Accept, X-Foo, …). Merged
 	// per-key on top of the platform baseline (a real-browser UA); the
@@ -233,10 +258,10 @@ type ExecEndpointDef struct {
 // Use Args for safe multi-arg commands; put any shell features (pipes,
 // redirection) in Command and leave Args empty.
 type ExecCommand struct {
-	Command   string        `json:"command"`
-	Args      []string      `json:"args,omitempty"`
-	Stdin     []byte        `json:"-"` // marshalled separately as base64
-	Timeout   time.Duration `json:"-"` // 0 = server default (60s); marshalled as timeoutMs
+	Command string        `json:"command"`
+	Args    []string      `json:"args,omitempty"`
+	Stdin   []byte        `json:"-"` // marshalled separately as base64
+	Timeout time.Duration `json:"-"` // 0 = server default (60s); marshalled as timeoutMs
 }
 
 // ExecResult is what Run returns when the call fits in the 20 MiB buffer
@@ -357,10 +382,10 @@ type PromptInput struct {
 	SupportedModalities []string          `json:"supportedModalities,omitempty"` // e.g. ["text", "image", "pdf", "audio", "video"]
 	Source              string            `json:"source,omitempty"`              // "user" (default), "system" (injected by Airlock)
 
-	// ExtraSystemPrompt is an access-filtered concatenation of the agent's
-	// registered AddExtraPrompt fragments, composed by Airlock at run
+	// Instructions is an access-filtered concatenation of the agent's
+	// registered AddInstruction fragments, composed by Airlock at run
 	// dispatch. The agent appends this to its sync-cached system prompt.
-	ExtraSystemPrompt string `json:"extraSystemPrompt,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
 
 	// CallerAccess is the resolved per-(agent, user) access level for the
 	// triggering caller. agentsdk uses it to gate which conn_/mcp_/topic_/
@@ -530,6 +555,10 @@ type Topic struct {
 	Description string
 	LLMHint     string // optional model-only guidance — see Directory.LLMHint
 	Access      Access // who may subscribe via topic_{slug}.subscribe(); default AccessUser
+	// PerUser forbids broadcast: Publish panics, only PublishToUser delivers
+	// (to the named user's subscribed conversations). Use for personal feeds
+	// (reminders, alerts) where a broadcast would leak across users.
+	PerUser bool
 }
 
 // TopicDef is the wire format sent in SyncRequest.
@@ -538,6 +567,7 @@ type TopicDef struct {
 	Description string `json:"description"`
 	LLMHint     string `json:"llmHint,omitempty"`
 	Access      Access `json:"access"`
+	PerUser     bool   `json:"perUser,omitempty"`
 }
 
 // --- Display parts (output / topic publish) ---
@@ -564,6 +594,7 @@ type PrintRequest struct {
 	Topic          string        `json:"topic,omitempty"`          // empty = direct to conversation
 	ConversationID string        `json:"conversationId,omitempty"` // set for direct prints
 	RunID          string        `json:"runId,omitempty"`          // originating run, used to sort ephemerals after their run's assistant messages
+	UserID         string        `json:"userId,omitempty"`         // topic publish scoped to this user's subscribed conversations (PublishToUser)
 }
 
 // resolveDisplayPart infers missing fields on a DisplayPart from available data.
@@ -812,19 +843,19 @@ type MCPContent struct {
 
 // SyncRequest is the body for PUT /api/agent/sync.
 type SyncRequest struct {
-	Version      string           `json:"version"`
-	Description  string           `json:"description,omitempty"`
-	Emoji        string           `json:"emoji,omitempty"`
-	Tools        []ToolDef        `json:"tools,omitempty"`
-	Webhooks     []WebhookDef     `json:"webhooks"`
-	Crons        []CronDef        `json:"crons"`
-	Routes       []RouteDef       `json:"routes,omitempty"`
-	Topics       []TopicDef       `json:"topics,omitempty"`
-	MCPServers   []MCPDef         `json:"mcpServers,omitempty"`
-	EnvVars      []EnvVarDef      `json:"envVars,omitempty"`
-	Directories  []DirectoryDef   `json:"directories,omitempty"`
-	ExtraPrompts []ExtraPromptDef `json:"extraPrompts,omitempty"`
-	ModelSlots   []ModelSlotDef   `json:"modelSlots,omitempty"`
+	Version          string               `json:"version"`
+	Description      string               `json:"description,omitempty"`
+	Emoji            string               `json:"emoji,omitempty"`
+	Tools            []ToolDef            `json:"tools,omitempty"`
+	Webhooks         []WebhookDef         `json:"webhooks"`
+	ScheduleHandlers []ScheduleHandlerDef `json:"scheduleHandlers"`
+	Routes           []RouteDef           `json:"routes,omitempty"`
+	Topics           []TopicDef           `json:"topics,omitempty"`
+	MCPServers       []MCPDef             `json:"mcpServers,omitempty"`
+	EnvVars          []EnvVarDef          `json:"envVars,omitempty"`
+	Directories      []DirectoryDef       `json:"directories,omitempty"`
+	Instructions     []InstructionDef     `json:"instructions,omitempty"`
+	ModelSlots       []ModelSlotDef       `json:"modelSlots,omitempty"`
 }
 
 // EnvVarDef is the wire format used by PUT /api/agent/env-vars/{slug}
@@ -887,17 +918,17 @@ type SessionCompactRequest struct {
 	TokensFreed int               `json:"tokensFreed"`
 }
 
-// ExtraPrompt is the self-contained declaration passed to agent.AddExtraPrompt.
+// Instruction is the self-contained declaration passed to agent.AddInstruction.
 // The Text fragment is appended to the system prompt for runs whose caller
 // access matches one of the listed Access levels. Empty Access slice means
 // "applies to every access level."
-type ExtraPrompt struct {
+type Instruction struct {
 	Text   string
 	Access []Access
 }
 
-// ExtraPromptDef is the wire format sent in SyncRequest.
-type ExtraPromptDef struct {
+// InstructionDef is the wire format sent in SyncRequest.
+type InstructionDef struct {
 	Text   string   `json:"text"`
 	Access []Access `json:"access,omitempty"`
 }
@@ -1050,12 +1081,40 @@ type WebhookDef struct {
 	Description string `json:"description,omitempty"`
 }
 
-// CronDef is a cron job definition sent during sync.
-type CronDef struct {
-	Name        string `json:"name"`
-	Schedule    string `json:"schedule"`
+// ScheduleHandlerDef is one registered cron/schedule handler sent during sync.
+// Kind is "cron" or "schedule"; Recurrence is the cron expression for crons,
+// empty for schedules.
+type ScheduleHandlerDef struct {
+	Slug        string `json:"slug"`
+	Kind        string `json:"kind"`
+	Recurrence  string `json:"recurrence,omitempty"`
 	TimeoutMs   int64  `json:"timeoutMs"`
 	Description string `json:"description,omitempty"`
+}
+
+// ScheduleAtRequest arms a one-shot fire of a registered handler. Body of
+// POST /api/agent/schedules; the response carries the new fire id.
+type ScheduleAtRequest struct {
+	Slug   string    `json:"slug"`
+	FireAt time.Time `json:"fireAt"`
+}
+
+// ScheduledFire is one pending/recorded fire row, returned by ListSchedules.
+type ScheduledFire struct {
+	ID         string    `json:"id"`
+	Slug       string    `json:"slug"`
+	Kind       string    `json:"kind"` // "cron" | "schedule"
+	FireAt     time.Time `json:"fireAt"`
+	Status     string    `json:"status"` // pending|fired|error|orphaned|cancelled
+	Recurrence string    `json:"recurrence,omitempty"`
+}
+
+// ScheduledFireRef identifies the fire that triggered the current handler run.
+// Read it with ScheduleFromContext to look up the per-instance data the agent
+// stored in its own DB at ScheduleAt time.
+type ScheduledFireRef struct {
+	FireID string
+	Slug   string
 }
 
 // HTTPRequest is the body for POST /api/agent/http.

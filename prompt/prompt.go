@@ -22,9 +22,9 @@ import (
 var agentPromptTmpl string
 
 var agentTmpl = template.Must(template.New("agent").Funcs(template.FuncMap{
-	"renderTools":             renderToolsFunc,
-	"renderMCPNamespace":      renderMCPNamespaceFunc,
-	"renderSiblingNamespace":  renderSiblingNamespaceFunc,
+	"renderTools":            renderToolsFunc,
+	"renderMCPNamespace":     renderMCPNamespaceFunc,
+	"renderSiblingNamespace": renderSiblingNamespaceFunc,
 }).Parse(agentPromptTmpl))
 
 // AgentData is the template input. Lists are pre-filtered for the
@@ -44,7 +44,6 @@ type AgentData struct {
 	Connections         []ConnInfo
 	Topics              []TopicInfo
 	Webhooks            []WebhookInfo
-	Crons               []CronInfo
 	Routes              []RouteInfo
 	MCPServers          []MCPServerStatus
 	Siblings            []SiblingInfo
@@ -138,9 +137,9 @@ type ToolInfo struct {
 	OutputSchema json.RawMessage
 }
 
-// ConnInfo / TopicInfo / WebhookInfo / CronInfo / RouteInfo are the
-// flat shapes the template iterates. agent.RenderSystemPrompt builds
-// them from the agent's in-memory registrations.
+// ConnInfo / TopicInfo / WebhookInfo / RouteInfo are the flat shapes the
+// template iterates. agent.RenderSystemPrompt builds them from the agent's
+// in-memory registrations.
 
 type ConnInfo struct {
 	Slug        string
@@ -160,12 +159,6 @@ type TopicInfo struct {
 
 type WebhookInfo struct {
 	Path        string
-	Description string
-}
-
-type CronInfo struct {
-	Name        string
-	Schedule    string
 	Description string
 }
 

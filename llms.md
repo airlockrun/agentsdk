@@ -361,12 +361,12 @@ alongside the signature.
 `vm.ToValue`, or `vm.NewGoError` — the SDK handles the VM boundary. You write
 plain typed Go.
 
-## AddExtraPrompt — access-scoped system prompt fragments
+## AddInstruction — access-scoped system prompt fragments
 
 Airlock already renders a base system prompt covering `run_js`, registered
 tools (with TS signatures), MCP tools, connection helpers, public-caller safety
 guards, and environment context (date, platform, conversation id). **Do not
-re-declare any of that.** `AddExtraPrompt` is only for content the baseline
+re-declare any of that.** `AddInstruction` is only for content the baseline
 can't infer:
 
 - The agent's persona, tone, voice
@@ -374,10 +374,10 @@ can't infer:
 - Per-access behavior differences the user explicitly asked for
 
 ```go
-agent.AddExtraPrompt(&agentsdk.ExtraPrompt{
+agent.AddInstruction(&agentsdk.Instruction{
     Text: "You are a concise events assistant for the Berlin meetup. Answer in English.",
 })
-agent.AddExtraPrompt(&agentsdk.ExtraPrompt{
+agent.AddInstruction(&agentsdk.Instruction{
     Text:   "Public callers: only answer questions about event times and location.",
     Access: []agentsdk.Access{agentsdk.AccessPublic},
 })
@@ -395,25 +395,60 @@ agent.RegisterWebhook(&agentsdk.Webhook{
     Handler: func(ctx context.Context, data []byte, ew *agentsdk.EventWriter) error {
         return nil
     },
-    Verify:      "hmac",                // "hmac" | "token" | "none" (default "none")
-    Header:      "X-Hub-Signature-256", // header for verification
+    Verify:      "hmac",                // "none" | "hmac" | "token" | "bearer" | "ed25519" (default "none")
+    Header:      "X-Hub-Signature-256", // signature/token header (hmac/ed25519)
     Description: "GitHub push events",
     Access:      agentsdk.AccessUser,
 })
 ```
 
-## RegisterCron
+Airlock verifies the request before the handler runs (the per-webhook secret it
+manages): `hmac` (HMAC-SHA256 of the body, GitHub `sha256=` prefix tolerated),
+`token` (`?token=`), `bearer` (`Authorization: Bearer`), `ed25519` (Discord-style
+asymmetric over `timestamp‖body`, ±5-min skew). So the handler is trusted.
+
+## RegisterCron / RegisterSchedule — timed handlers
+
+Crons (recurring) and schedules (runtime-armed one-shots) share one handler type
+`func(ctx, *EventWriter) error`, one `/fire/{slug}` dispatch, and one slug
+namespace (unique per agent). Handlers carry **no payload** — they fire by
+schedule and survive container suspension, so anything they need (which user,
+what reminder) lives in the **agent's own DB**, keyed by the fire id.
 
 ```go
 agent.RegisterCron(&agentsdk.Cron{
-    Name:     "daily-report",
-    Schedule: "0 9 * * *",
+    Slug:     "daily-report",
+    Schedule: "0 9 * * *", // standard cron expression
+    Handler:  func(ctx context.Context, ew *agentsdk.EventWriter) error { return nil },
+    Description: "Generate and send the daily report",
+})
+
+agent.RegisterSchedule(&agentsdk.Schedule{
+    Slug:    "remind",
     Handler: func(ctx context.Context, ew *agentsdk.EventWriter) error {
+        ref, _ := agentsdk.ScheduleFromContext(ctx) // ref.FireID
+        // look up the reminder row your tool stored under ref.FireID, then deliver
         return nil
     },
-    Description: "Generate and send daily report",
+    Description: "Fire one user reminder",
 })
 ```
+
+**Reminder idiom** (per-user, suspension-safe). A tool, not the LLM directly,
+drives scheduling — schedules have no built-in user surface:
+
+```go
+// in a setReminder tool handler:
+u, _ := agentsdk.UserFromContext(ctx)
+id, _ := agent.ScheduleAt(ctx, agentsdk.ScheduleAtRequest{Slug: "remind", FireAt: when})
+// store (id → u.ID, text) in the agent's own DB
+```
+
+On fire, the `remind` handler reads `ScheduleFromContext`, looks up the row, and
+delivers via a `PerUser` topic's `PublishToUser(ctx, u.ID, parts)`. Cancel/list
+are your own tools over `agent.CancelSchedule(id)` / `agent.ListSchedules(...)`,
+scoped against your DB. Never use an in-process timer — the container suspends
+and the timer dies.
 
 ## RegisterRoute — custom HTTP routes
 

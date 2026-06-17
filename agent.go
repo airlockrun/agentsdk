@@ -44,18 +44,18 @@ type Agent struct {
 	sensitiveSet map[string]struct{}
 	sensitiveM   sync.RWMutex
 
-	tools         map[string]*registeredTool
-	webhooks      map[string]*Webhook
-	crons         map[string]*Cron
-	routes        map[string]*Route
-	auths         map[string]*Connection
-	mcps          map[string]*MCP
-	envVars       map[string]*EnvVar
-	topics        map[string]*Topic
-	execEndpoints map[string]*ExecEndpoint
-	directories   []*Directory // registration order; longest-prefix wins at lookup
+	tools            map[string]*registeredTool
+	webhooks         map[string]*Webhook
+	scheduleHandlers map[string]*scheduleHandler
+	routes           map[string]*Route
+	auths            map[string]*Connection
+	mcps             map[string]*MCP
+	envVars          map[string]*EnvVar
+	topics           map[string]*Topic
+	execEndpoints    map[string]*ExecEndpoint
+	directories      []*Directory // registration order; longest-prefix wins at lookup
 
-	extraPrompts []*ExtraPrompt // access-scoped system prompt fragments; see AddExtraPrompt
+	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
 
 	// Airlock-owned state: discovered server-side at sync time and pushed
@@ -108,6 +108,27 @@ func AgentFromContext(ctx context.Context) *Agent {
 	return nil
 }
 
+// UserFromContext returns the human a run is acting for. The second return is
+// false for runs with no originating user — cron/schedule/webhook triggers and
+// anonymous/public prompt runs. ID is the stable internal-user uuid and is the
+// key to scope agent-owned data by; Email/DisplayName are display claims and
+// are only populated on /prompt runs (the lazy route/A2A path carries id only).
+func UserFromContext(ctx context.Context) (User, bool) {
+	if r := runFromContext(ctx); r != nil {
+		if r.userID == "" {
+			return User{}, false
+		}
+		return User{ID: r.userID, Email: r.userEmail, DisplayName: r.userDisplayName}, true
+	}
+	if l := lazyRunFromContext(ctx); l != nil {
+		if l.userID == "" {
+			return User{}, false
+		}
+		return User{ID: l.userID}, true
+	}
+	return User{}, false
+}
+
 // New creates an Agent by reading required environment variables.
 // Panics if AIRLOCK_AGENT_ID, AIRLOCK_API_URL, or AIRLOCK_AGENT_TOKEN is missing.
 // Panics if Config.Description is empty.
@@ -121,22 +142,22 @@ func New(cfg Config) *Agent {
 	token := requireEnv("AIRLOCK_AGENT_TOKEN")
 
 	a := &Agent{
-		agentID:       agentID,
-		apiURL:        apiURL,
-		token:         token,
-		description:   cfg.Description,
-		emoji:         cfg.Emoji,
-		httpClient:    &http.Client{},
-		sensitiveSet:  make(map[string]struct{}),
-		tools:         make(map[string]*registeredTool),
-		webhooks:      make(map[string]*Webhook),
-		crons:         make(map[string]*Cron),
-		routes:        make(map[string]*Route),
-		auths:         make(map[string]*Connection),
-		mcps:          make(map[string]*MCP),
-		envVars:       make(map[string]*EnvVar),
-		topics:        make(map[string]*Topic),
-		execEndpoints: make(map[string]*ExecEndpoint),
+		agentID:          agentID,
+		apiURL:           apiURL,
+		token:            token,
+		description:      cfg.Description,
+		emoji:            cfg.Emoji,
+		httpClient:       &http.Client{},
+		sensitiveSet:     make(map[string]struct{}),
+		tools:            make(map[string]*registeredTool),
+		webhooks:         make(map[string]*Webhook),
+		scheduleHandlers: make(map[string]*scheduleHandler),
+		routes:           make(map[string]*Route),
+		auths:            make(map[string]*Connection),
+		mcps:             make(map[string]*MCP),
+		envVars:          make(map[string]*EnvVar),
+		topics:           make(map[string]*Topic),
+		execEndpoints:    make(map[string]*ExecEndpoint),
 	}
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
@@ -400,15 +421,6 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 		})
 	}
 
-	crons := make([]prompt.CronInfo, 0, len(a.crons))
-	for _, c := range a.crons {
-		crons = append(crons, prompt.CronInfo{
-			Name:        c.Name,
-			Schedule:    c.Schedule,
-			Description: c.Description,
-		})
-	}
-
 	routes := make([]prompt.RouteInfo, 0, len(a.routes))
 	for _, r := range a.routes {
 		routes = append(routes, prompt.RouteInfo{
@@ -519,7 +531,6 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 		Connections:         conns,
 		Topics:              topics,
 		Webhooks:            webhooks,
-		Crons:               crons,
 		Routes:              routes,
 		MCPServers:          mcpServers,
 		Siblings:            siblings,

@@ -20,7 +20,7 @@ func TestSyncWithAirlock(t *testing.T) {
 		Header:  "X-Hub-Signature-256",
 	})
 	a.RegisterCron(&Cron{
-		Name:     "daily",
+		Slug:     "daily",
 		Schedule: "0 9 * * *",
 		Handler:  func(ctx context.Context, ew *EventWriter) error { return nil },
 	})

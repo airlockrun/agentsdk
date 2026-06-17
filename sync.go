@@ -95,17 +95,18 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: w.Description,
 		})
 	}
-	crons := make([]CronDef, 0, len(a.crons))
-	for _, c := range a.crons {
-		timeout := c.Timeout
+	scheduleHandlers := make([]ScheduleHandlerDef, 0, len(a.scheduleHandlers))
+	for _, h := range a.scheduleHandlers {
+		timeout := h.timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
-		crons = append(crons, CronDef{
-			Name:        c.Name,
-			Schedule:    c.Schedule,
+		scheduleHandlers = append(scheduleHandlers, ScheduleHandlerDef{
+			Slug:        h.slug,
+			Kind:        h.kind,
+			Recurrence:  h.recurrence,
 			TimeoutMs:   timeout.Milliseconds(),
-			Description: c.Description,
+			Description: h.description,
 		})
 	}
 	routes := make([]RouteDef, 0, len(a.routes))
@@ -125,6 +126,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: t.Description,
 			LLMHint:     t.LLMHint,
 			Access:      t.Access,
+			PerUser:     t.PerUser,
 		})
 	}
 
@@ -164,9 +166,9 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		})
 	}
 
-	extraPrompts := make([]ExtraPromptDef, 0, len(a.extraPrompts))
-	for _, ep := range a.extraPrompts {
-		extraPrompts = append(extraPrompts, ExtraPromptDef{
+	instructions := make([]InstructionDef, 0, len(a.instructions))
+	for _, ep := range a.instructions {
+		instructions = append(instructions, InstructionDef{
 			Text:   ep.Text,
 			Access: ep.Access,
 		})
@@ -196,18 +198,18 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	}
 
 	syncBody := SyncRequest{
-		Version:      Version,
-		Description:  a.description,
-		Emoji:        a.emoji,
-		Tools:        tools,
-		Webhooks:     webhooks,
-		Crons:        crons,
-		Routes:       routes,
-		Topics:       topics,
-		MCPServers:   mcpServers,
-		Directories:  directories,
-		ExtraPrompts: extraPrompts,
-		ModelSlots:   modelSlots,
+		Version:          Version,
+		Description:      a.description,
+		Emoji:            a.emoji,
+		Tools:            tools,
+		Webhooks:         webhooks,
+		ScheduleHandlers: scheduleHandlers,
+		Routes:           routes,
+		Topics:           topics,
+		MCPServers:       mcpServers,
+		Directories:      directories,
+		Instructions:     instructions,
+		ModelSlots:       modelSlots,
 	}
 
 	var syncResp SyncResponse
