@@ -140,6 +140,15 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	vm.SetMaxCallStackSize(maxJSCallStackSize)
 	installAmplifierGuards(vm)
 
+	// Expose the originating user as the `user` global so run_js can scope its
+	// own data (reminders, todos) by user.id. Fields are empty for anonymous /
+	// public runs; id is the stable internal-user uuid (see UserFromContext).
+	userObj := vm.NewObject()
+	userObj.Set("id", run.userID)
+	userObj.Set("email", run.userEmail)
+	userObj.Set("displayName", run.userDisplayName)
+	vm.Set("user", userObj)
+
 	// Bind registered tools. Each RegisterTool(&Tool[In, Out]{...}) becomes
 	// a typed JS global: JS input → json.Marshal → decode into In → typed
 	// Execute → Out → json.Marshal → JSON.parse → JS value. Errors surface

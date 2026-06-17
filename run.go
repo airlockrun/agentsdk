@@ -44,6 +44,8 @@ type run struct {
 	platform            string              // channel for the <env> block (web/telegram/discord/a2a); set explicitly per dispatch
 	userDisplayName     string              // originating user's display name for <env> (empty when none)
 	userEmail           string              // originating user's email for <env> (empty when none)
+	fireID              string              // scheduler fire row id (X-Fire-ID); set only on /fire runs — see ScheduleFromContext
+	fireSlug            string              // the cron/schedule slug that fired
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {

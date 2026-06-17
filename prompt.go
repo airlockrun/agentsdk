@@ -115,11 +115,11 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		// Airlock composes access-filtered extras at run dispatch; append to
 		// the sync-cached base prompt so the LLM sees everything in one
 		// system message.
-		if input.ExtraSystemPrompt != "" {
+		if input.Instructions != "" {
 			if solAgent.SystemPrompt != "" {
 				solAgent.SystemPrompt += "\n\n"
 			}
-			solAgent.SystemPrompt += input.ExtraSystemPrompt
+			solAgent.SystemPrompt += input.Instructions
 		}
 
 		// Create scoped bus for this run.

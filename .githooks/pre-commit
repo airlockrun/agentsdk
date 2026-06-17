@@ -45,3 +45,23 @@ if [ -n "$latest" ] && { [ "${const#v}" = "${latest#v}" ] || ! semver_ge "$const
 fi
 
 echo "agentsdk version invariants: OK"
+
+# gofmt on staged Go files — block, don't auto-rewrite (explicit, no surprise
+# edits to the working tree). Only files staged in this commit, so an unrelated
+# unformatted file elsewhere doesn't block you.
+staged_go=$(git diff --cached --name-only --diff-filter=ACMR -- '*.go')
+if [ -n "$staged_go" ]; then
+	unformatted=$(gofmt -l $staged_go)
+	if [ -n "$unformatted" ]; then
+		echo "ERROR: these staged Go files are not gofmt-formatted:" >&2
+		echo "$unformatted" | sed 's/^/  /' >&2
+		echo "Fix with: gofmt -w <files>, then re-stage and commit." >&2
+		exit 1
+	fi
+fi
+
+# Build / correctness gates. go.work overlays the sibling libs, so vet and test
+# resolve in-tree just like a local build.
+go vet ./... || { echo "ERROR: go vet failed" >&2; exit 1; }
+go test ./... || { echo "ERROR: go test failed" >&2; exit 1; }
+echo "agentsdk gofmt/vet/test: OK"

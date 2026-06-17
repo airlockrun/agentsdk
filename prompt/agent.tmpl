@@ -354,14 +354,6 @@ This agent receives incoming webhooks on these paths:
 {{ range .Webhooks }}- `{{ .Path }}`{{ if .Description }} — {{ .Description }}{{ end }}
 {{ end }}
 {{- end }}
-{{- if .Crons }}
-
-## Scheduled tasks
-
-These cron jobs run automatically:
-{{ range .Crons }}- `{{ .Name }}` — schedule: `{{ .Schedule }}`{{ if .Description }} — {{ .Description }}{{ end }}
-{{ end }}
-{{- end }}
 {{- if .Routes }}
 
 ## Web routes

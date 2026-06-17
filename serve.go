@@ -40,7 +40,7 @@ func (a *Agent) Serve() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /prompt", handlePrompt(a))
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
-	mux.HandleFunc("POST /cron/{name}", a.handleCron)
+	mux.HandleFunc("POST /fire/{slug}", a.handleFire)
 	mux.HandleFunc("POST /refresh", a.handleRefresh)
 	mux.HandleFunc("GET /health", a.handleHealth)
 	// A2A: airlock's MCP server forwards user-registered tool calls
@@ -133,15 +133,18 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	run.complete(ctx, "success", "", "", "")
 }
 
-func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	cr, ok := a.crons[name]
+// handleFire serves a scheduler-driven fire of a registered cron or schedule
+// handler. The X-Fire-ID header identifies the fire row so a schedule handler
+// can look up its per-instance data in the agent's own DB (ScheduleFromContext).
+func (a *Agent) handleFire(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	h, ok := a.scheduleHandlers[slug]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	timeout := cr.Timeout
+	timeout := h.timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
@@ -155,7 +158,9 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 	bridgeID := r.Header.Get("X-Bridge-ID")
 
 	run := newRun(a, runID, bridgeID, "", ctx)
-	run.callerAccess = AccessAdmin // cron is a trusted scheduled trigger
+	run.callerAccess = AccessAdmin // a timed fire is a trusted scheduled trigger
+	run.fireID = r.Header.Get("X-Fire-ID")
+	run.fireSlug = slug
 	ctx = contextWithRun(ctx, run)
 	ew := newEventWriter(w)
 
@@ -169,7 +174,7 @@ func (a *Agent) handleCron(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	if err := cr.Handler(ctx, ew); err != nil {
+	if err := h.handler(ctx, ew); err != nil {
 		status := "error"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"
@@ -332,9 +337,9 @@ func (a *Agent) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
-	type cronInfo struct {
-		Name     string `json:"name"`
-		Schedule string `json:"schedule"`
+	type scheduleInfo struct {
+		Slug string `json:"slug"`
+		Kind string `json:"kind"`
 	}
 
 	webhooks := make([]string, 0, len(a.webhooks))
@@ -343,9 +348,9 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(webhooks)
 
-	crons := make([]cronInfo, 0, len(a.crons))
-	for name, cr := range a.crons {
-		crons = append(crons, cronInfo{Name: name, Schedule: cr.Schedule})
+	schedules := make([]scheduleInfo, 0, len(a.scheduleHandlers))
+	for slug, h := range a.scheduleHandlers {
+		schedules = append(schedules, scheduleInfo{Slug: slug, Kind: h.kind})
 	}
 
 	tools := make([]string, 0, len(a.tools))
@@ -355,11 +360,11 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	sort.Strings(tools)
 
 	resp := struct {
-		Status   string     `json:"status"`
-		Webhooks []string   `json:"webhooks"`
-		Crons    []cronInfo `json:"crons"`
-		Tools    []string   `json:"tools"`
-	}{"ok", webhooks, crons, tools}
+		Status    string         `json:"status"`
+		Webhooks  []string       `json:"webhooks"`
+		Schedules []scheduleInfo `json:"schedules"`
+		Tools     []string       `json:"tools"`
+	}{"ok", webhooks, schedules, tools}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
