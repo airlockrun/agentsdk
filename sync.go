@@ -13,9 +13,12 @@ import (
 // Called by Serve() at startup (via syncOrPanic) and by the /refresh handler.
 // Returns the error so /refresh can propagate it; startup panics via the wrapper.
 func (a *Agent) syncWithAirlock(ctx context.Context) error {
-	// Register each connection.
+	// Declare each connection as a need in the sync batch. The agent declares
+	// the shape; operators create + bind the backing resource.
+	connections := make([]ConnectionDef, 0, len(a.auths))
 	for slug, c := range a.auths {
-		def := ConnectionDef{
+		connections = append(connections, ConnectionDef{
+			Slug:              slug,
 			Name:              c.Name,
 			Description:       c.Description,
 			BaseURL:           c.BaseURL,
@@ -29,10 +32,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			SetupInstructions: c.SetupInstructions,
 			LLMHint:           c.LLMHint,
 			Access:            c.Access,
-		}
-		if err := a.client.doJSON(ctx, "PUT", "/api/agent/connections/"+slug, def, nil); err != nil {
-			return fmt.Errorf("register connection %s: %w", slug, err)
-		}
+		})
 	}
 
 	// Register each MCP server.
@@ -52,18 +52,17 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		}
 	}
 
-	// Register each exec endpoint declaration. Operators set transport,
-	// host, user, and credentials via the admin UI; we only declare the
-	// slug+description+access here.
+	// Declare each exec endpoint as a need in the sync batch. Operators set
+	// transport, host, user, and credentials on the backing resource via the
+	// admin UI; we only declare the slug+description+access here.
+	execEndpoints := make([]ExecEndpointDef, 0, len(a.execEndpoints))
 	for slug, e := range a.execEndpoints {
-		def := ExecEndpointDef{
+		execEndpoints = append(execEndpoints, ExecEndpointDef{
+			Slug:        slug,
 			Description: e.Description,
 			LLMHint:     e.LLMHint,
 			Access:      e.Access,
-		}
-		if err := a.client.doJSON(ctx, "PUT", "/api/agent/exec-endpoints/"+slug, def, nil); err != nil {
-			return fmt.Errorf("register exec endpoint %s: %w", slug, err)
-		}
+		})
 	}
 
 	// Register each env var slot. Operators set values separately via the
@@ -207,6 +206,8 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		Routes:           routes,
 		Topics:           topics,
 		MCPServers:       mcpServers,
+		Connections:      connections,
+		ExecEndpoints:    execEndpoints,
 		Directories:      directories,
 		Instructions:     instructions,
 		ModelSlots:       modelSlots,
