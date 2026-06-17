@@ -69,4 +69,3 @@ func encodeMCPArgs(args any) (json.RawMessage, error) {
 		return json.Marshal(v)
 	}
 }
-

@@ -107,7 +107,6 @@ func connSpilledNote(size int64, savedTo, mode string) string {
 	return fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Use fileRead(bodySavedTo) to read the full body.", size, savedTo)
 }
 
-
 // execRunOutput is the LLM-facing return shape for exec_{slug}.run /
 // exec_{slug}_run. JS and direct adapters both marshal this struct — JS
 // via vm.ToValue (which honours the json tags), direct via json.Marshal.

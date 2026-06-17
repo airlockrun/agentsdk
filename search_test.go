@@ -35,9 +35,9 @@ func TestProxySearchClient(t *testing.T) {
 
 	client := &proxySearchClient{
 		client: &airlockClient{
-			baseURL:    server.URL,
-			token:      "test-token",
-			http: server.Client(),
+			baseURL: server.URL,
+			token:   "test-token",
+			http:    server.Client(),
 		},
 	}
 
@@ -65,9 +65,9 @@ func TestProxySearchClientNotConfigured(t *testing.T) {
 
 	client := &proxySearchClient{
 		client: &airlockClient{
-			baseURL:    server.URL,
-			token:      "test-token",
-			http: server.Client(),
+			baseURL: server.URL,
+			token:   "test-token",
+			http:    server.Client(),
 		},
 	}
 

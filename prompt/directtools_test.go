@@ -65,9 +65,9 @@ func TestRender_DirectTools_Shape(t *testing.T) {
 		"<env>",
 		"Date: 2026-06-08",
 		"Platform: telegram",
-		"## Files",                 // S3-like storage conventions
-		"## File attachments",      // attachment conventions
-		"## Sharing files",         // delivery options
+		"## Files",            // S3-like storage conventions
+		"## File attachments", // attachment conventions
+		"## Sharing files",    // delivery options
 		"Call tools to get real answers",
 	}
 	for _, s := range mustContain {

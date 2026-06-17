@@ -64,7 +64,6 @@ func directToolRaw[I any](name, desc string, fn func(context.Context, I) (string
 		}).Build()
 }
 
-
 // buildDirectTools builds the tool.Set served when run.directTools is true.
 // Each capability the goja VM exposes as a JS binding becomes its own typed
 // LLM tool here, filtered by the run's caller access. Names mirror the
@@ -130,4 +129,3 @@ func buildRegisteredTool(rt *registeredTool, run *run) tool.Tool {
 	}
 	return def.Build()
 }
-

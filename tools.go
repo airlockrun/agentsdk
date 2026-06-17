@@ -409,4 +409,3 @@ func randomHex(n int) string {
 	io.ReadFull(rand.Reader, b)
 	return fmt.Sprintf("%x", b)
 }
-

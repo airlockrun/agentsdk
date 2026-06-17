@@ -36,8 +36,8 @@ func TestDirectTools_RegisteredToolSurface_AccessGated(t *testing.T) {
 	})
 
 	cases := []struct {
-		access     Access
-		mustHave   []string
+		access      Access
+		mustHave    []string
 		mustNotHave []string
 	}{
 		{AccessPublic, []string{"pub_hello"}, []string{"user_hello", "admin_hello", "run_js", "httpRequest", "queryDB"}},
