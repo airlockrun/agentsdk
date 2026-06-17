@@ -35,23 +35,6 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		})
 	}
 
-	// Register each MCP server.
-	for slug, m := range a.mcps {
-		def := MCPDef{
-			Name:          m.Name,
-			URL:           m.URL,
-			AuthMode:      m.AuthMode,
-			AuthURL:       m.AuthURL,
-			TokenURL:      m.TokenURL,
-			Scopes:        m.Scopes,
-			AuthInjection: m.AuthInjection,
-			Access:        m.Access,
-		}
-		if err := a.client.doJSON(ctx, "PUT", "/api/agent/mcp-servers/"+slug, def, nil); err != nil {
-			return fmt.Errorf("register MCP server %s: %w", slug, err)
-		}
-	}
-
 	// Declare each exec endpoint as a need in the sync batch. Operators set
 	// transport, host, user, and credentials on the backing resource via the
 	// admin UI; we only declare the slug+description+access here.
