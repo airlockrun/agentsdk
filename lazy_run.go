@@ -20,9 +20,11 @@ type lazyRun struct {
 	// without materializing a run (run isn't created until something
 	// actually logs / calls the model). When the run is later
 	// materialized, these are copied into it.
-	parentRunID    string
-	conversationID string
-	userID         string
+	parentRunID     string
+	conversationID  string
+	userID          string
+	userEmail       string
+	userDisplayName string
 }
 
 func (l *lazyRun) get(ctx context.Context) *run {
@@ -36,6 +38,8 @@ func (l *lazyRun) get(ctx context.Context) *run {
 		l.run.parentRunID = l.parentRunID
 		l.run.conversationID = l.conversationID
 		l.run.userID = l.userID
+		l.run.userEmail = l.userEmail
+		l.run.userDisplayName = l.userDisplayName
 	}
 	return l.run
 }
