@@ -1037,11 +1037,16 @@ you identify whose it is, changes.
 
 ## RegisterModel — named model slots
 
-Declare a named slot for every distinct runtime LLM use case. The admin picks a
-specific model per slot in the Airlock UI. At runtime the slug resolves: slot
-binding → per-agent capability override → system default. Undeclared slugs
-still work (fall through to the capability default), but they're not listed in
-the admin UI, so you can't rebind them.
+Declare a named slot for every distinct runtime model use case. The admin picks
+a specific model per slot in the Airlock UI. At runtime the slug resolves: slot
+binding → per-agent default for the slot's capability → system default for that
+capability. The slot's `Capability` is the single source of truth for the model
+type — the getters take only a slug and read the capability from the slot.
+
+Registration is required: every slug you pass to a model getter must be declared
+with `RegisterModel` first. Calling a getter with an unregistered (or empty)
+slug panics — a missing declaration is a programmer error, not a silent
+fall-through to some default model.
 
 ```go
 agent.RegisterModel(&agentsdk.ModelSlot{
@@ -1050,18 +1055,19 @@ agent.RegisterModel(&agentsdk.ModelSlot{
     Description: "Short summaries for weekly reports",
 })
 
-model := agent.LLM(ctx, "summarize", agentsdk.ModelOpts{})
+model := agent.LLM(ctx, "summarize")
 ```
 
-**Capabilities:**
-- `CapText` / `CapVision` → `agent.LLM(ctx, slug, ModelOpts{Capability: ...})`
-- `CapImage` → `agent.ImageModel(ctx, slug, ModelOpts{})`
-- `CapSpeech` → `agent.SpeechModel(ctx, slug, ModelOpts{})` (TTS)
-- `CapTranscription` → `agent.TranscriptionModel(ctx, slug, ModelOpts{})` (STT)
-- `CapEmbedding` → `agent.EmbeddingModel(ctx, slug, ModelOpts{})`
+**Capabilities** (declared once on the slot; the getter just names the slug):
+- `CapText` / `CapVision` → `agent.LLM(ctx, slug)`
+- `CapImage` → `agent.ImageModel(ctx, slug)`
+- `CapSpeech` → `agent.SpeechModel(ctx, slug)` (TTS)
+- `CapTranscription` → `agent.TranscriptionModel(ctx, slug)` (STT)
+- `CapEmbedding` → `agent.EmbeddingModel(ctx, slug)`
 
-The built-in VM media helpers use empty slugs intentionally — they resolve via
-the per-agent capability default.
+The built-in VM media helpers (analyze_image, generate_image, etc.) resolve the
+system-default model by capability internally — that capability-routed path is
+not exposed to agent code, which always goes through a registered slug.
 
 ## RegisterTopic
 
@@ -1353,12 +1359,12 @@ Pass it through. Model calls and logging are tracked in the Runs UI for the
 invoking handler; you never construct a Run yourself.
 
 ```go
-// Models — all ctx-first
-agent.LLM(ctx, slug, agentsdk.ModelOpts{})                 // streaming language model
-agent.ImageModel(ctx, slug, agentsdk.ModelOpts{})
-agent.SpeechModel(ctx, slug, agentsdk.ModelOpts{})         // TTS
-agent.TranscriptionModel(ctx, slug, agentsdk.ModelOpts{})  // STT
-agent.EmbeddingModel(ctx, slug, agentsdk.ModelOpts{})
+// Models — all ctx-first; slug must be declared with RegisterModel
+agent.LLM(ctx, slug)                 // streaming chat model (CapText/CapVision)
+agent.ImageModel(ctx, slug)
+agent.SpeechModel(ctx, slug)         // TTS
+agent.TranscriptionModel(ctx, slug)  // STT
+agent.EmbeddingModel(ctx, slug)
 
 // Logging — agent.Logger(ctx) returns a *zap.Logger. Bind it once at
 // handler entry; the ctx is consumed there to resolve the run. Lines go
@@ -1394,8 +1400,10 @@ if err != nil {
 ## Calling LLMs from agent code (goai)
 
 Crons, webhooks, and tool handlers can call language models via
-`agent.LLM(ctx, slug, ModelOpts)` and the `goai` package. Calls are proxied
-through Airlock so token usage is tracked.
+`agent.LLM(ctx, slug)` and the `goai` package. Calls are proxied
+through Airlock so token usage is tracked. Each `slug` below
+(`"summarize"`, `"sentiment"`) must be declared once with `RegisterModel`
+(see above) — the getter reads the model type from the slot.
 
 **Plain text:**
 
@@ -1408,7 +1416,7 @@ import (
 
 func Summarize(ctx context.Context, in SummarizeIn) (SummarizeOut, error) {
     a := agentsdk.AgentFromContext(ctx)
-    model := a.LLM(ctx, "summarize", agentsdk.ModelOpts{})
+    model := a.LLM(ctx, "summarize")
 
     result, err := goai.GenerateText(ctx, stream.Input{
         Model: model,
@@ -1439,7 +1447,7 @@ type SentimentResult struct {
 
 func AnalyzeSentiment(ctx context.Context, in SentimentIn) (SentimentResult, error) {
     a := agentsdk.AgentFromContext(ctx)
-    model := a.LLM(ctx, "sentiment", agentsdk.ModelOpts{})
+    model := a.LLM(ctx, "sentiment")
 
     result, err := goai.GenerateText(ctx, stream.Input{
         Model: model,
@@ -1775,7 +1783,7 @@ LLM-facing prompt's directory inventory reads cleanly.
 You have a full Postgres database available (well, a single schema, but you can
 create as many tables in it as you like). Usually the database has pgvector
 enabled, so you can create vector columns and use them together with
-`agent.EmbeddingModel(ctx, slug, ModelOpts{})`.
+`agent.EmbeddingModel(ctx, slug)`.
 
 If the agent needs its own database tables:
 

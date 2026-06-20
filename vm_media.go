@@ -59,7 +59,7 @@ func (r *run) transcribeAudio(ctx context.Context, path string, opts model.Trans
 		}
 	}
 
-	stt := r.agent.TranscriptionModel(ctx, "", ModelOpts{Capability: CapTranscription})
+	stt := r.agent.proxyTranscription(ctx, "", CapTranscription)
 	return goai.Transcribe(ctx, goai.TranscribeInput{
 		Model:           stt,
 		Audio:           audio,
@@ -94,7 +94,7 @@ func (r *run) analyzeImage(ctx context.Context, path, question string) (string, 
 		question = "Describe this image."
 	}
 
-	m := r.agent.LLM(ctx, "", ModelOpts{Capability: CapVision})
+	m := r.agent.proxyLLM(ctx, "", CapVision)
 	res, err := goai.GenerateText(ctx, stream.Input{
 		Model: m,
 		Messages: []goai.Message{
@@ -125,7 +125,7 @@ func (r *run) analyzeImage(ctx context.Context, path, question string) (string, 
 // when empty). Returns the path + metadata for downstream output /
 // attachToContext calls.
 func (r *run) generateImage(ctx context.Context, prompt, saveAs string, opts model.ImageCallOptions) (*mediaResult, error) {
-	m := r.agent.ImageModel(ctx, "", ModelOpts{Capability: CapImage})
+	m := r.agent.proxyImage(ctx, "", CapImage)
 	res, err := goai.GenerateImage(ctx, goai.ImageInput{
 		Model:           m,
 		Prompt:          prompt,
@@ -155,7 +155,7 @@ func (r *run) generateImage(ctx context.Context, prompt, saveAs string, opts mod
 // generateSpeech runs `text` through the system-default TTS model and writes
 // the audio bytes to agent storage at `saveAs` (auto-named when empty).
 func (r *run) generateSpeech(ctx context.Context, text, saveAs string, opts model.SpeechCallOptions) (*mediaResult, error) {
-	m := r.agent.SpeechModel(ctx, "", ModelOpts{Capability: CapSpeech})
+	m := r.agent.proxySpeech(ctx, "", CapSpeech)
 	res, err := goai.GenerateSpeech(ctx, goai.SpeechInput{
 		Model:           m,
 		Text:            text,
@@ -176,7 +176,7 @@ func (r *run) generateSpeech(ctx context.Context, text, saveAs string, opts mode
 // embed proxies the embedding call through Airlock. Texts are small enough
 // that the inline-bytes round-trip is fine.
 func (r *run) embed(ctx context.Context, texts []string) ([][]float64, error) {
-	m := r.agent.EmbeddingModel(ctx, "", ModelOpts{Capability: CapEmbedding})
+	m := r.agent.proxyEmbedding(ctx, "", CapEmbedding)
 	res, err := goai.Embed(ctx, goai.EmbedInput{
 		Model:  m,
 		Values: texts,

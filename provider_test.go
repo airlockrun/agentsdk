@@ -17,9 +17,10 @@ func withBoundRun(a *Agent) context.Context {
 
 func TestAgentLLM(t *testing.T) {
 	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "ocr", Capability: CapVision, Description: "Extract text"})
 	ctx := withBoundRun(a)
 
-	m := a.LLM(ctx, "ocr", ModelOpts{Capability: CapVision, Description: "Extract text"})
+	m := a.LLM(ctx, "ocr")
 	if m == nil {
 		t.Fatal("expected non-nil model")
 	}
@@ -45,16 +46,18 @@ func TestAgentLLM(t *testing.T) {
 	if body.Slug != "ocr" {
 		t.Errorf("slug = %q, want ocr", body.Slug)
 	}
+	// Capability rides from the slot declaration, not a per-call argument.
 	if body.Capability != "vision" {
 		t.Errorf("capability = %q, want vision", body.Capability)
 	}
 }
 
-func TestAgentLLMDefaultCapability(t *testing.T) {
+func TestAgentLLMTextCapability(t *testing.T) {
 	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText})
 	ctx := withBoundRun(a)
 
-	m := a.LLM(ctx, "summarize", ModelOpts{})
+	m := a.LLM(ctx, "summarize")
 	events, err := m.Stream(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -73,15 +76,50 @@ func TestAgentLLMDefaultCapability(t *testing.T) {
 		t.Fatal(err)
 	}
 	if body.Capability != "text" {
-		t.Errorf("capability = %q, want text (default)", body.Capability)
+		t.Errorf("capability = %q, want text", body.Capability)
 	}
+}
+
+func TestAgentLLMPanicsOnUnregisteredSlug(t *testing.T) {
+	a, _ := testAgent(t)
+	ctx := withBoundRun(a)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on unregistered slug")
+		}
+	}()
+	a.LLM(ctx, "never-registered")
+}
+
+func TestAgentLLMPanicsOnEmptySlug(t *testing.T) {
+	a, _ := testAgent(t)
+	ctx := withBoundRun(a)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on empty slug")
+		}
+	}()
+	a.LLM(ctx, "")
+}
+
+func TestAgentLLMPanicsOnCapabilityMismatch(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage})
+	ctx := withBoundRun(a)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic using an image slot as a chat model")
+		}
+	}()
+	a.LLM(ctx, "poster")
 }
 
 func TestAgentImageModel(t *testing.T) {
 	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "render", Capability: CapImage, Description: "Generate chart"})
 	ctx := withBoundRun(a)
 
-	m := a.ImageModel(ctx, "render", ModelOpts{Description: "Generate chart"})
+	m := a.ImageModel(ctx, "render")
 	result, err := m.Generate(ctx, model.ImageCallOptions{Prompt: "a chart"})
 	if err != nil {
 		t.Fatal(err)
@@ -98,9 +136,10 @@ func TestAgentImageModel(t *testing.T) {
 
 func TestAgentEmbeddingModel(t *testing.T) {
 	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "index", Capability: CapEmbedding})
 	ctx := withBoundRun(a)
 
-	m := a.EmbeddingModel(ctx, "index", ModelOpts{})
+	m := a.EmbeddingModel(ctx, "index")
 	result, err := m.Embed(ctx, model.EmbedCallOptions{Values: []string{"hello"}})
 	if err != nil {
 		t.Fatal(err)
@@ -117,9 +156,10 @@ func TestAgentEmbeddingModel(t *testing.T) {
 
 func TestAgentSpeechModel(t *testing.T) {
 	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "narrate", Capability: CapSpeech, Description: "Narrate summary"})
 	ctx := withBoundRun(a)
 
-	m := a.SpeechModel(ctx, "narrate", ModelOpts{Description: "Narrate summary"})
+	m := a.SpeechModel(ctx, "narrate")
 	_, err := m.Generate(ctx, model.SpeechCallOptions{Text: "hello world"})
 	if err != nil {
 		t.Fatal(err)
@@ -133,9 +173,10 @@ func TestAgentSpeechModel(t *testing.T) {
 
 func TestAgentTranscriptionModel(t *testing.T) {
 	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "stt", Capability: CapTranscription})
 	ctx := withBoundRun(a)
 
-	m := a.TranscriptionModel(ctx, "stt", ModelOpts{})
+	m := a.TranscriptionModel(ctx, "stt")
 	result, err := m.Transcribe(ctx, model.TranscribeCallOptions{Audio: []byte("fake-audio")})
 	if err != nil {
 		t.Fatal(err)

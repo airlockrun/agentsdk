@@ -51,9 +51,11 @@ func TestDirectoryWriteAndRead(t *testing.T) {
 // `agent.LLM` calls made with a ctx that has no dispatcher-bound run.
 func TestBackgroundRun(t *testing.T) {
 	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText})
+	a.RegisterModel(&ModelSlot{Slug: "analyze", Capability: CapText})
 
 	// agent.LLM with plain ctx triggers background run creation.
-	m := a.LLM(context.Background(), "summarize", ModelOpts{})
+	m := a.LLM(context.Background(), "summarize")
 	events, err := m.Stream(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +77,7 @@ func TestBackgroundRun(t *testing.T) {
 
 	// A second call within the inactivity window reuses the same run —
 	// no additional run/create request.
-	m2 := a.LLM(context.Background(), "analyze", ModelOpts{})
+	m2 := a.LLM(context.Background(), "analyze")
 	events2, _ := m2.Stream(context.Background(), nil)
 	for range events2 {
 	}
