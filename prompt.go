@@ -398,7 +398,7 @@ func resolvePendingToolCalls(
 
 		// Emit tool result event so frontend/bridge sees it (kind reflects
 		// the discriminated outcome).
-		ew.WriteEvent(stream.ToolOutcomeEvent(tc.ID, tc.Name, nil, toolOut))
+		ew.WriteEvent(stream.ToolOutcomeEvent(tc.ID, tc.Name, nil, toolOut, "", nil))
 
 		resultMsgs = append(resultMsgs, session.Message{
 			Role: "tool",
@@ -537,7 +537,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 	if failed {
 		toolOut = goai.ErrorTextOutput{Value: output}
 	}
-	ew.WriteEvent(stream.ToolOutcomeEvent(del.ToolCallID, toolName, nil, toolOut))
+	ew.WriteEvent(stream.ToolOutcomeEvent(del.ToolCallID, toolName, nil, toolOut, "", nil))
 	if store != nil {
 		_ = store.Append(ctx, []session.Message{{
 			Role: "tool",

@@ -37,7 +37,7 @@ func (s *ndjsonSink) OnToolCall(e stream.ToolCallEvent) {
 }
 
 func (s *ndjsonSink) OnToolResult(e stream.ToolResultEvent) {
-	_ = s.ew.WriteEvent(stream.ToolOutcomeEvent(e.ToolCallID, e.ToolName, e.Input, e.Output))
+	_ = s.ew.WriteEvent(stream.ToolOutcomeEvent(e.ToolCallID, e.ToolName, e.Input, e.Output, e.Title, e.Metadata))
 }
 
 func (s *ndjsonSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
