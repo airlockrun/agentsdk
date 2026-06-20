@@ -334,6 +334,8 @@ declare type DirPath  = string;
 These external services are configured. Use `conn_{slug}.requestJSON(method, path, body?)` to call them:
 {{ range .Connections }}- `{{ .Slug }}` — {{ .Description }}{{ if .BaseURL }} (base: {{ .BaseURL }}){{ end }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
 {{ end }}
+`requestJSON` returns the **parsed** body in `r.data` (along with `r.status`, `r.contentType`, `r.size`). There is **no `r.body` on `requestJSON`** — `body` (an unparsed string) belongs to the raw `conn_{slug}.request(...)` twin. Responses over 8 KiB spill to a file instead of coming back inline: then `r.data`/`r.body` is absent and you read the full body with `JSON.parse(fileRead(r.bodySavedTo))` (raw: `fileRead(r.bodySavedTo)`). Inline (`data`/`body`) and spilled (`bodySavedTo`) keys are mutually exclusive — branch on `r.bodySavedTo` only when it's set; for normal-sized responses just use `r.data`.
+
 If a connection call throws `{authRequired: true, slug, connName}`, the user hasn't authorized it yet. Tell them to set it up at: {{ .AgentDashboardURL }}
 {{- end }}
 {{- if and .Topics (not .DirectTools) }}
