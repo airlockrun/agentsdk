@@ -1199,17 +1199,6 @@ const (
 	CapTranscription ModelCapability = "transcription" // speech-to-text
 )
 
-// ModelOpts configures a model request. Used with agent.LLM(), agent.ImageModel(), etc.
-type ModelOpts struct {
-	// Capability selects the model sub-type. Only meaningful for run.LLM()
-	// (distinguishes text vs vision). For other methods, the method name
-	// determines the capability and this field is ignored.
-	Capability ModelCapability `json:"capability,omitempty"`
-
-	// Description is optional human-readable context for run logs/UI.
-	Description string `json:"description,omitempty"`
-}
-
 // LLMProxyRequest is the body for POST /api/agent/llm/stream.
 type LLMProxyRequest struct {
 	Slug       string          `json:"slug,omitempty"`
