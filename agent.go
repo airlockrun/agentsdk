@@ -111,8 +111,10 @@ func AgentFromContext(ctx context.Context) *Agent {
 // UserFromContext returns the human a run is acting for. The second return is
 // false for runs with no originating user — cron/schedule/webhook triggers and
 // anonymous/public prompt runs. ID is the stable internal-user uuid and is the
-// key to scope agent-owned data by; Email/DisplayName are display claims and
-// are only populated on /prompt runs (the lazy route/A2A path carries id only).
+// key to scope agent-owned data by; Email/DisplayName are display claims.
+// Reading it never materializes a run, so route handlers can call it freely:
+// /prompt and route runs carry id+email+display name (airlock forwards
+// X-User-ID/Email/Name); the A2A path carries id only.
 func UserFromContext(ctx context.Context) (User, bool) {
 	if r := runFromContext(ctx); r != nil {
 		if r.userID == "" {
@@ -124,7 +126,7 @@ func UserFromContext(ctx context.Context) (User, bool) {
 		if l.userID == "" {
 			return User{}, false
 		}
-		return User{ID: l.userID}, true
+		return User{ID: l.userID, Email: l.userEmail, DisplayName: l.userDisplayName}, true
 	}
 	return User{}, false
 }

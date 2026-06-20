@@ -271,7 +271,16 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 // a lazy run into ctx and flushing the run on return if it was materialized.
 func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		lazy := &lazyRun{agent: a, triggerRef: "route:" + key}
+		// Carry the authenticated user (airlock forwards X-User-ID /
+		// X-User-Email on authed proxied requests) so UserFromContext works
+		// in route handlers — without materializing a run.
+		lazy := &lazyRun{
+			agent:           a,
+			triggerRef:      "route:" + key,
+			userID:          r.Header.Get("X-User-ID"),
+			userEmail:       r.Header.Get("X-User-Email"),
+			userDisplayName: r.Header.Get("X-User-Name"),
+		}
 		ctx := contextWithLazyRun(r.Context(), lazy)
 		defer func() {
 			if run := lazy.materialized(); run != nil {
