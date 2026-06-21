@@ -23,9 +23,11 @@ func TestEnvBlockRender(t *testing.T) {
 		want string
 	}{
 		{
-			name: "telegram with user + email shows rendering note",
+			// Telegram renders rich messages (tables, headings, ...) via the
+			// Bot API 10.1 Rich Message path, so it gets no rendering caveat.
+			name: "telegram omits rendering note (rich messages render tables)",
 			data: AgentData{Date: "2026-06-04", Platform: "telegram", UserName: "Jane Doe", UserEmail: "jane@example.com", Conversation: "7f3a"},
-			want: "<env>\nDate: 2026-06-04\nPlatform: telegram\nUser: Jane Doe <jane@example.com>\nConversation: 7f3a\nRendering: this channel doesn't render Markdown tables or headings — use short lines, bullet lists, or \"key: value\" pairs instead of tables.\n</env>",
+			want: "<env>\nDate: 2026-06-04\nPlatform: telegram\nUser: Jane Doe <jane@example.com>\nConversation: 7f3a\n</env>",
 		},
 		{
 			name: "web omits rendering note",

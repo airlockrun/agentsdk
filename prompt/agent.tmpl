@@ -25,7 +25,7 @@ User: {{ .UserName }}{{ if .UserEmail }} <{{ .UserEmail }}>{{ end }}
 {{- if .Conversation }}
 Conversation: {{ .Conversation }}
 {{- end }}
-{{- if or (eq .Platform "telegram") (eq .Platform "discord") }}
+{{- if eq .Platform "discord" }}
 Rendering: this channel doesn't render Markdown tables or headings — use short lines, bullet lists, or "key: value" pairs instead of tables.
 {{- end }}
 </env>
