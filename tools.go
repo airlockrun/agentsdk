@@ -17,6 +17,7 @@ import (
 
 type runJSInput struct {
 	Code                string `json:"code" jsonschema:"description=JavaScript code to execute. Return the result of the last expression."`
+	Description         string `json:"description" jsonschema:"description=A short, plain-language summary of what this code does, in 5-10 words, written for a non-technical user who cannot read code. It is shown in the chat in place of the raw source. Examples:\nInput: ordersApi.list({limit:5})\nOutput: Fetches your 5 most recent orders\nInput: deleteRecord(id)\nOutput: Deletes the selected record"`
 	RequestConfirmation bool   `json:"request_confirmation,omitempty" jsonschema:"description=Set to true if this code modifies external data or has side effects the user should review first. The code will NOT execute — instead the user will be shown the code and asked to approve."`
 }
 
@@ -68,6 +69,7 @@ The system prompt's "JavaScript environment" and "Built-in functions" sections d
 
 Parameters:
 - code: JS source to execute. The value of the last expression is the result; do NOT use a top-level ` + "`return`" + ` statement.
+- description: ALWAYS provide a short, plain-language summary (5-10 words) of what this code does, written for a non-technical user who cannot read code — it is shown in the chat in place of the raw source (e.g. "Fetches your 5 most recent orders"). Describe the effect, not the syntax.
 - request_confirmation: set true ONLY for code that modifies external data (sending messages, deleting records, spending money). Read-only operations and lookups must NEVER set this. When set, the user sees the commented code and decides whether to approve — comment every line so they can understand exactly what will happen.`
 
 // buildRunJSTool creates the run_js tool for a given agent and run.
@@ -103,7 +105,7 @@ func buildRunJSTool(agent *Agent, run *run) tool.Tool {
 					// don't duplicate it into Patterns.
 					Patterns:   []string{"*"},
 					ToolCallID: opts.ToolCallID,
-					Metadata:   map[string]any{"code": args.Code},
+					Metadata:   map[string]any{"code": args.Code, "description": args.Description},
 				})
 				if err != nil {
 					// ErrPermissionNeeded → Sol suspends the run
