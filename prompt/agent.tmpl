@@ -362,6 +362,7 @@ This agent receives incoming webhooks on these paths:
 {{ if .AgentRouteURL }}
 Your routes are served at: {{ .AgentRouteURL }}
 {{ end }}
+These are served to end users in their browser, not for you to call — your code has no authenticated member session, so fetching a `user`/`admin` route returns 401/403. Don't request your own web routes to get data; read the underlying source (DB, files, connections) directly.
 {{ range .Routes }}- `{{ .Method }} {{ .Path }}`{{ if .Description }} — {{ .Description }}{{ end }} ({{ .Access }})
 {{ end }}
 {{- end }}
