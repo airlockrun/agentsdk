@@ -37,51 +37,39 @@ Airlock is the runtime around the agent: auth, storage (S3-like), the LLM
 proxy, credential injection for outbound HTTP/MCP, conversation history,
 triggers (webhooks/crons/bridges), and the per-agent Postgres schema.
 
-## Minimal example — Weather agent
+## Deep-dive references
 
-```go
-// main.go
-package main
+Four subsystems live in their own companion files to keep this reference small
+enough to read in one pass. This file covers everything else in full and gives
+each of the four a short stub at its API slot. **Read the companion when your
+task touches it** (paths are where they live in the build container):
 
-import (
-    "context"
-    "io"
-    "net/http"
+- **`/libs/agentsdk/llms/files.md`** — object storage: `RegisterDirectory`, the
+  trusted Go file API, gating untrusted (LLM-supplied) paths with
+  `CheckFileAccess`, shelling out to CLIs over storage, presigned URLs.
+- **`/libs/agentsdk/llms/exec.md`** — `RegisterExecEndpoint`: running commands
+  on a remote machine over SSH, plus the shared overflow-response shape
+  (`*SavedTo` + `fileRead`) used by connections, exec, and `httpRequest`.
+- **`/libs/agentsdk/llms/auth-web.md`** — interactive login flows (one-time
+  code / password / click) driven from an admin web page, ending in `Seal`.
+- **`/libs/agentsdk/llms/database.md`** — Postgres: goose migrations, sqlc
+  queries, Go migrations, build-time validation.
 
-    "github.com/airlockrun/agentsdk"
-)
+## Verifying a build
 
-func main() {
-    agent := agentsdk.New(agentsdk.Config{
-        Description: "Weather agent — current conditions for any city",
-    })
+After writing code, generate templ output and compile:
 
-    type WeatherIn struct {
-        City string `json:"city" jsonschema:"description=City name, e.g. London"`
-    }
-    type WeatherOut struct {
-        Raw string `json:"raw"`
-    }
-    agent.RegisterTool(&agentsdk.Tool[WeatherIn, WeatherOut]{
-        Name:        "get_weather",
-        Description: "Get current weather for a city.",
-        Execute: func(ctx context.Context, in WeatherIn) (WeatherOut, error) {
-            resp, err := http.Get("https://wttr.in/" + in.City + "?format=j1")
-            if err != nil {
-                return WeatherOut{}, err
-            }
-            defer resp.Body.Close()
-            body, _ := io.ReadAll(resp.Body)
-            return WeatherOut{Raw: string(body)}, nil
-        },
-        Access: agentsdk.AccessUser,
-    })
-
-    agent.Serve()
-}
+```bash
+go tool templ generate
+go build ./...
 ```
 
-The LLM can now call `get_weather({city: "London"})` in `run_js`.
+Run `sqlc generate` only if you created or changed `.sql` files in
+`db/queries/`. The Docker build re-runs `templ generate` and `tailwindcss`, so
+`*_templ.go` and `views/static/app.css` are regenerated there and not
+committed. It does **not** run sqlc, so the generated `internal/db/` **is**
+committed (and updated whenever you change a query) — otherwise a fresh-clone
+`docker build` would fail to find the package.
 
 ## Design principle: always register granular tools
 
@@ -97,7 +85,12 @@ answer "which song has the most votes?" through `run_js`.
 Think: "what would the LLM need to call to be a helpful conversational
 assistant in this domain?" and register those tools.
 
-## Worked example — Spotify agent
+## Worked example
+
+A connection + dependency injection + granular tools. Routes, crons, webhooks
+and the rest follow the same `Register*` shape — register the capability in
+`main()`, keep the logic in a domain package, retrieve handles via
+`GetDeps`.
 
 ```go
 // main.go
@@ -168,9 +161,7 @@ import (
     "github.com/airlockrun/agentsdk"
 )
 
-type Track struct {
-    Name, URI, Artist string
-}
+type Track struct{ Name, URI, Artist string }
 
 type SearchIn struct {
     Query string `json:"query" jsonschema:"description=Search query"`
@@ -202,8 +193,8 @@ func SearchTracks(ctx context.Context, in SearchIn) (SearchOut, error) {
     return SearchOut{Tracks: raw.Tracks.Items}, nil
 }
 
-type PlayIn  struct { TrackURI string `json:"trackURI,omitempty"` }
-type PlayOut struct { OK bool `json:"ok"` }
+type PlayIn struct{ TrackURI string `json:"trackURI,omitempty"` }
+type PlayOut struct{ OK bool `json:"ok"` }
 
 func Play(ctx context.Context, in PlayIn) (PlayOut, error) {
     d := agentsdk.GetDeps[*deps.Deps](ctx)
@@ -221,14 +212,13 @@ func Play(ctx context.Context, in PlayIn) (PlayOut, error) {
 ```
 
 **Key patterns:**
-- `RegisterConnection` returns `*ConnectionHandle`; use it for all API calls
-- `agent.Deps` stores handles; tool funcs retrieve via `agentsdk.GetDeps[*deps.Deps](ctx)`
-- `handle.Request(ctx, agentsdk.RequestOpts{Path: ...})` returns raw
-  bytes. `RequestOpts.Method` defaults to `"GET"`; `Body` auto-encodes
-  (struct → JSON, `[]byte`/`string` as-is, `nil` → no body); `Headers`
-  is an optional `map[string]string` for per-call request headers.
-  Airlock injects credentials.
-- `LLMHint` is appended to the connection block in the runtime system prompt
+- `RegisterConnection` returns `*ConnectionHandle`; use it for all API calls.
+- `agent.Deps` stores handles; tool funcs retrieve via `agentsdk.GetDeps[*deps.Deps](ctx)`.
+- `handle.Request(ctx, agentsdk.RequestOpts{Path: ...})` returns raw bytes.
+  `RequestOpts.Method` defaults to `"GET"`; `Body` auto-encodes (struct → JSON,
+  `[]byte`/`string` as-is, `nil` → no body); `Headers` is an optional
+  `map[string]string`. Airlock injects credentials.
+- `LLMHint` is appended to the connection block in the runtime system prompt.
 
 ---
 
@@ -571,8 +561,8 @@ non-obvious conventions (path prefixes, special headers).
 `conn_{slug}.requestJSON(...)`. Both return an envelope: small responses
 (≤ 8 KiB) come back inline (`body` / `data`); larger ones auto-spill to
 `tmp/conn-{slug}-{callID}.bin` with `bodyPreview` + `bodySavedTo` set
-(no `body`/`data`). See **Reading overflowed responses** under
-`RegisterExecEndpoint`.
+(no `body`/`data`). Read the spilled payload with `fileRead(bodySavedTo)` —
+see the shared overflow shape in **`/libs/agentsdk/llms/exec.md`**.
 
 ## RegisterMCP
 
@@ -619,174 +609,27 @@ agent.RegisterMCP(&agentsdk.MCP{
 (Airlock builder: use the `mcp_probe` tool to check what a URL supports before
 writing this.)
 
-## RegisterExecEndpoint — run commands on a remote target
+## RegisterExecEndpoint — remote commands
 
-Use when the agent needs to run a command on a server its container can't
-reach as a built-in tool (managing a VPS via SSH, kicking a CI runner,
-restarting a service on a homelab box). Airlock owns the transport
-(SSH today) and the credentials; the agent author declares the slug and
-wraps calls in domain-specific tools.
+Declare a slug for running commands on a server the container can't reach as a
+built-in tool (a VPS over SSH, a CI runner, a homelab box). Airlock owns the
+SSH transport and credentials; the operator configures host/user in the UI; you
+wrap calls in typed tools. The handle's `Run(ctx, ExecCommand{...})` returns a
+structured small result; `RunStream(...)` streams a data download. Default
+`Access` is `AccessAdmin` (`AccessPublic` is silently demoted to `AccessUser`).
 
 ```go
 ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
     Slug:        "ci-runner",
     Description: "Self-hosted GitHub Actions runner",
     LLMHint:     "use `kick-build --branch <name>` to start a build",
-    Access:      agentsdk.AccessAdmin, // default; opt down explicitly
-})
-
-type KickIn struct {
-    Branch string `json:"branch" jsonschema:"description=Branch to build"`
-}
-type KickOut struct {
-    ExitCode int    `json:"exitCode"`
-    Stdout   string `json:"stdout"`
-}
-
-agent.RegisterTool(&agentsdk.Tool[KickIn, KickOut]{
-    Name:        "kick_build",
-    Description: "Kick the CI build for a branch.",
     Access:      agentsdk.AccessAdmin,
-    Execute: func(ctx context.Context, in KickIn) (KickOut, error) {
-        res, err := ci.Run(ctx, agentsdk.ExecCommand{
-            Command: "kick-build",
-            Args:    []string{"--branch", in.Branch},
-            Timeout: 30 * time.Second,
-        })
-        if err != nil {
-            return KickOut{}, err
-        }
-        return KickOut{ExitCode: res.ExitCode, Stdout: string(res.Stdout)}, nil
-    },
 })
+res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build", Args: []string{"--branch", "main"}})
 ```
 
-**Configuration is operator-side.** The agent declares the slug,
-description, hint, and access level. The operator configures
-host/port/user in the Airlock UI; airlock generates an ED25519 keypair,
-displays the public key, and the operator pastes it into
-`~/.ssh/authorized_keys` on the target. Private keys never leave
-airlock and are encrypted at rest. The public key carries a dated
-comment (`airlock-{agentSlug}-{endpointSlug}-YYYY-MM-DD`) so on rotation
-the operator can `grep` `authorized_keys` and remove old lines.
-
-**Default access is `AccessAdmin`.** Exec hands arbitrary commands to a
-real machine; admin-only is the right default. **`AccessPublic` is
-silently demoted to `AccessUser`** at registration time with a startup
-warning — exec endpoints are never reachable by unauthenticated callers,
-period. (The demotion is a friendly recovery, not an error, because
-copy-pasting from `RegisterRoute` where Public is meaningful is a
-believable mistake.)
-
-**`ExecHandle.Run` is bound into the JS VM as `exec_{slug}.run(command, args?, opts?)`** —
-gated at bind time on `Access`. Wrap in typed tools when you want a
-narrower verb than "run an arbitrary command":
-
-```javascript
-// JS-side (run_js); only available on admin runs by default
-exec_ci.run("kick-build", ["--branch", "main"])
-// inline (both streams ≤ 8 KiB):
-//   { exitCode, durationMs, stdout: "…", stderr: "…" }
-// spilled (stdout exceeded 8 KiB):
-//   { exitCode, durationMs,
-//     stdoutPreview: "…1 KiB head…",
-//     stdoutSavedTo: "tmp/exec-ci-a3f9c2b1-stdout.bin",
-//     stdoutSize: 50000,
-//     stderr: "…",
-//     note: "stdout (50000 bytes) exceeded inline threshold; saved to … Use fileRead(stdoutSavedTo) to read." }
-```
-
-When `stdoutSavedTo` or `stderrSavedTo` is set, the corresponding
-`stdout`/`stderr` field is absent — read the full payload with
-`fileRead(savedTo)`. See **Reading overflowed responses** below.
-
-**Shell features (pipes, redirection, env expansion) work** because SSH
-hands the full command line to the remote shell. Put pipes in
-`Command`; use `Args` for safe multi-arg invocation (args are
-POSIX-shell-quoted before being joined onto the remote command):
-
-```go
-// Multi-arg with whitespace — args are quoted safely.
-vps.Run(ctx, agentsdk.ExecCommand{
-    Command: "ls",
-    Args:    []string{"-la", "my dir"},
-})
-// Pipe + JSON parse — everything in Command, no Args.
-vps.Run(ctx, agentsdk.ExecCommand{
-    Command: "kubectl get pods -o json | jq '.items[] | .metadata.name'",
-})
-```
-
-**Errors:** `*agentsdk.ExecError` for transport / timeout / config
-problems (the command never ran — different retry strategy than a
-runtime failure). Non-zero exit codes return a normal `ExecResult` —
-inspect `ExitCode` and `Stderr`.
-
-**`Run` is for structured small responses** (JSON API replies, HTML
-pages, CLI summaries that fit in your head). Cap is **20 MiB per
-stream**; overflow returns `agentsdk.ErrOutputTooLarge` with no
-partial result. The run-record audit log keeps an 8 KiB preview per
-stream for visibility in the runs UI; the caller of `Run` still
-receives the full data up to the 20 MiB cap.
-
-**`RunStream` is the default for any actual data download.** Tarballs,
-log archives, database dumps — anything you'd describe as "data"
-rather than "a result." Returns an `*ExecStream` whose `Stdout`/`Stderr`
-are `io.ReadCloser`s and `Wait()` blocks for the exit code:
-
-```go
-s, err := vps.RunStream(ctx, agentsdk.ExecCommand{
-    Command: "tar -czf - /var/log",
-})
-if err != nil { return err }
-defer s.Stdout.Close()
-defer s.Stderr.Close()
-
-// Pipe straight into agent storage — zero buffering in agent RAM.
-info, _ := agent.WriteFile(ctx, "tmp/logs.tar.gz", s.Stdout, "application/gzip")
-exit, _ := s.Wait()
-if exit.ExitCode != 0 {
-    stderrBytes, _ := io.ReadAll(s.Stderr)
-    return fmt.Errorf("tar failed: %s", stderrBytes)
-}
-return nil
-```
-
-`RunStream` is **Go-only** — there is no JS binding for it. The
-JS-facing `exec_{slug}.run` streams under the hood and auto-spills
-stdout/stderr above 8 KiB to `tmp/exec-{slug}-{callID}-stdout.bin` /
-`-stderr.bin` (both halves of a call share `callID` so they correlate).
-
-**Rule of thumb:** if the downstream code is going to call `JSON.parse`
-on the result, use `Run`. If it's going to call `agent.WriteFile`, use
-`RunStream` and skip the round-trip through agent RAM.
-
-### Reading overflowed responses
-
-`conn_{slug}.request`, `conn_{slug}.requestJSON`, `exec_{slug}.run`, and
-`httpRequest` all share the same overflow shape: any payload above 8 KiB
-is saved to a `tmp/...` storage path, with `*Preview` holding the first
-~1 KiB and `*SavedTo` holding the path. Inline and spilled keys are
-mutually exclusive — check the saved-to field and branch:
-
-```javascript
-// Connection
-const r = conn_x.request("GET", "/big")
-const body = r.bodySavedTo ? fileRead(r.bodySavedTo) : r.body
-
-// Connection (JSON)
-const r = conn_x.requestJSON("GET", "/big.json")
-const data = r.bodySavedTo ? JSON.parse(fileRead(r.bodySavedTo)) : r.data
-
-// Exec
-const r = exec_x.run("dump-state")
-const stdout = r.stdoutSavedTo ? fileRead(r.stdoutSavedTo) : r.stdout
-```
-
-Don't re-read an older `savedTo` after a fresh call to the same binding
-— each call gets a unique `callID` so paths don't collide within a run,
-but holding onto a stale path across multiple LLM steps is a bug source
-the `note` field warns about.
+→ Full API (Run vs RunStream, the `exec_{slug}.run` JS binding, shell features,
+errors, and the shared `*SavedTo` overflow handling): **`/libs/agentsdk/llms/exec.md`**.
 
 ## RegisterEnvVar — operator-configured environment variables
 
@@ -796,17 +639,13 @@ proxied HTTP/MCP calls, prefer `RegisterConnection` / `RegisterMCP` with
 `AuthInjection` — Airlock injects the credential at proxy time and the agent
 code never touches it.
 
-`RegisterEnvVar` is for the cases those don't cover:
-- The user explicitly asked for a configurable env var.
-- You're shelling out to a CLI that reads its credentials from environment
-  variables and there's no way to inject them server-side.
-
-Two flavours, controlled by the `Secret` flag:
+`RegisterEnvVar` is for the cases those don't cover: the user explicitly asked
+for a configurable env var, or you're shelling out to a CLI that reads its
+credentials from environment variables. Two flavours, controlled by `Secret`:
 
 ```go
-// Plain config — operator sees and edits the current value in the UI.
-// Default lets the agent ship with a working setting; operator only
-// overrides when needed.
+// Plain config — operator sees/edits the value in the UI; Default ships a
+// working setting.
 region := agent.RegisterEnvVar(&agentsdk.EnvVar{
     Slug:        "aws_region",
     Description: "Default AWS region",
@@ -814,70 +653,25 @@ region := agent.RegisterEnvVar(&agentsdk.EnvVar{
     Pattern:     `^[a-z]{2}-[a-z]+-\d$`, // optional regex; rejected on save if no match
 })
 
-// Secret — write-only in the UI (no read-back, only rotate). Auto-added
-// to the redact set on first Get(). Default is forbidden for secrets.
+// Secret — write-only in the UI (rotate, no read-back). Auto-redacted on first
+// Get(). Default is forbidden for secrets (the SDK panics).
 accessKey := agent.RegisterEnvVar(&agentsdk.EnvVar{
-    Slug:        "aws_access_key_id",
-    Description: "AWS IAM access key id",
-    Secret:      true,
-    Pattern:     `^AKIA[0-9A-Z]{16}$`,
-})
-secretKey := agent.RegisterEnvVar(&agentsdk.EnvVar{
-    Slug:        "aws_secret_access_key",
-    Description: "AWS IAM secret access key",
-    Secret:      true,
-    Pattern:     `^.+$`, // require non-empty; no specific shape known
+    Slug: "aws_access_key_id", Description: "AWS IAM access key id",
+    Secret: true, Pattern: `^AKIA[0-9A-Z]{16}$`,
 })
 ```
 
-Subprocess CLI example — an `s3_list` tool that wraps `aws s3 ls`:
+Use the credential by reading it inside a tool and passing it to the subprocess
+environment (`cmd.Env = append(os.Environ(), "AWS_ACCESS_KEY_ID="+ak, ...)`).
 
-```go
-agent.RegisterTool(&agentsdk.Tool[S3ListIn, S3ListOut]{
-    Name: "s3_list",
-    Execute: func(ctx context.Context, in S3ListIn) (S3ListOut, error) {
-        // Pattern is declared on every credential here, so Get's error
-        // doubles as the "not configured" check — no separate empty-string
-        // guard needed. Surface the slug so the operator knows what to set.
-        ak, err := accessKey.Get(ctx)
-        if err != nil {
-            return S3ListOut{}, fmt.Errorf("set aws_access_key_id in the agent's Environment tab: %w", err)
-        }
-        sk, err := secretKey.Get(ctx)
-        if err != nil {
-            return S3ListOut{}, fmt.Errorf("set aws_secret_access_key in the agent's Environment tab: %w", err)
-        }
-        rg, err := region.Get(ctx)
-        if err != nil { return S3ListOut{}, err }
-
-        cmd := exec.CommandContext(ctx, "aws", "s3", "ls", in.Bucket)
-        cmd.Env = append(os.Environ(),
-            "AWS_ACCESS_KEY_ID="+ak,
-            "AWS_SECRET_ACCESS_KEY="+sk,
-            "AWS_DEFAULT_REGION="+rg,
-        )
-        out, err := cmd.CombinedOutput()
-        return S3ListOut{Output: string(out)}, err
-    },
-})
-```
-
-**Get's contract**: returns the stored value (or `Default`, or `""` if
-neither). The error is non-nil on transport/decrypt failure, **and** when the
+**`Get`'s contract**: returns the stored value (or `Default`, or `""` if
+neither). The error is non-nil on transport/decrypt failure **and** when the
 fetched value doesn't match the declared `Pattern` — including the empty
 string. So if you declare `Pattern: "^.+$"` (or any tighter regex), `err != nil`
 is exactly your "operator hasn't configured this yet" signal; no separate
-`if v == ""` guard is needed. With no `Pattern`, `("", nil)` is a valid
-successful return and the agent code is responsible for deciding what to do
-with it.
-
-**Pattern** is an optional regex — Airlock rejects operator-supplied values
-that don't match at save time, *and* `Get` re-checks at fetch time. Use it for
-credentials with a known shape (AWS keys, region codes) so typos surface
-immediately, or use `^.+$` to require non-empty.
-
-`Default` is forbidden when `Secret: true` (the SDK panics) — secrets must come
-from the operator.
+`if v == ""` guard is needed. With no `Pattern`, `("", nil)` is a valid return
+and your code decides what to do with it. Surface the slug in the error so the
+operator knows what to set in the Environment tab.
 
 ## Seal / Unseal — persist secrets the agent generates at runtime
 
@@ -908,132 +702,11 @@ The plaintext is auto-registered for redaction (same heuristic as a Secret env
 var), so it's stripped from LLM input. Never put a raw secret in `WriteFile`
 without sealing first — storage is not encrypted at rest.
 
-### Auth flows that need user input → an admin web page
-
-Many credentials can't be minted headlessly: the login emits a one-time code,
-asks for a password, or needs a click. That input is **ephemeral and
-interactive** — it can't be an env var. Drive it from an `AccessAdmin`
-`RegisterRoute` page (templ + htmx): an admin performs the interactive step, the
-agent finishes the login, and you `Seal` the resulting long-lived credential.
-Later runs `Unseal` it and never prompt again.
-
-**Worked example — a messaging CLI (`msgcli`) the agent shells out to.** It
-needs API credentials (env) *and* an interactive phone-code login (admin page),
-and it authenticates with a session string we seal:
-
-```go
-// Config the binary reads from its environment. api_hash is a credential.
-var (
-    apiID = agent.RegisterEnvVar(&agentsdk.EnvVar{
-        Slug: "msg_api_id", Description: "API ID from the provider console",
-        Pattern: `^[0-9]+$`,
-    })
-    apiHash = agent.RegisterEnvVar(&agentsdk.EnvVar{
-        Slug: "msg_api_hash", Description: "API hash from the provider console",
-        Secret: true, Pattern: `^[a-f0-9]{32}$`,
-    })
-)
-
-const sessionPath = "state/msg-session.enc" // sealed blob, agent-wide
-
-// runCLI shells out with env + the unsealed session (when one exists).
-func runCLI(ctx context.Context, args ...string) ([]byte, error) {
-    id, err := apiID.Get(ctx)
-    if err != nil {
-        return nil, fmt.Errorf("set msg_api_id in the Environment tab: %w", err)
-    }
-    hash, err := apiHash.Get(ctx)
-    if err != nil {
-        return nil, fmt.Errorf("set msg_api_hash in the Environment tab: %w", err)
-    }
-    env := append(os.Environ(), "MSG_API_ID="+id, "MSG_API_HASH="+hash)
-
-    if blob, err := agent.ReadFile(ctx, sessionPath); err == nil {
-        session, err := agent.Unseal(ctx, string(blob))
-        if err != nil {
-            return nil, fmt.Errorf("stored session unreadable — re-run login: %w", err)
-        }
-        env = append(env, "MSG_SESSION="+session)
-    }
-    cmd := exec.CommandContext(ctx, "msgcli", args...)
-    cmd.Env = env
-    return cmd.CombinedOutput()
-}
-
-// --- admin login page: the only place the plaintext session exists ---
-
-// GET /admin/login — render the phone form.
-agent.RegisterRoute(&agentsdk.Route{
-    Method: "GET", Path: "/admin/login", Access: agentsdk.AccessAdmin,
-    Description: "Interactive login page for the messaging account",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        templ.Handler(views.PhoneForm()).ServeHTTP(w, r)
-    },
-})
-
-// POST /admin/login/start — CLI sends a one-time code to the operator's device.
-agent.RegisterRoute(&agentsdk.Route{
-    Method: "POST", Path: "/admin/login/start", Access: agentsdk.AccessAdmin,
-    Description: "Begin login: trigger the one-time code",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        phone := r.FormValue("phone")
-        if _, err := runCLI(ctx, "login", "start", "--phone", phone); err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-        views.CodeForm(phone).Render(ctx, w) // htmx swaps in the code form
-    },
-})
-
-// POST /admin/login/verify — finish login, seal the session, persist it.
-agent.RegisterRoute(&agentsdk.Route{
-    Method: "POST", Path: "/admin/login/verify", Access: agentsdk.AccessAdmin,
-    Description: "Finish login and store the sealed session",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        out, err := runCLI(ctx, "login", "verify",
-            "--phone", r.FormValue("phone"), "--code", r.FormValue("code"))
-        if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-        session := strings.TrimSpace(string(out)) // the long-lived session string
-
-        sealed, err := agent.Seal(ctx, session)
-        if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-        if _, err := agent.WriteFile(ctx, sessionPath, strings.NewReader(sealed), "text/plain"); err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
-        }
-        views.LoginDone().Render(ctx, w)
-    },
-})
-
-// The LLM-facing tool just runs the binary; the session is wired in by runCLI.
-agent.RegisterTool(&agentsdk.Tool[SendIn, SendOut]{
-    Name:        "send_message",
-    Description: "Send a message via the linked account.",
-    Execute: func(ctx context.Context, in SendIn) (SendOut, error) {
-        out, err := runCLI(ctx, "send", "--to", in.To, "--text", in.Text)
-        if err != nil {
-            return SendOut{}, fmt.Errorf("not linked yet — an admin must complete login at the agent's /admin/login page: %w", err)
-        }
-        return SendOut{Result: string(out)}, nil
-    },
-})
-```
-
-For **per-user** login — the SaaS-style case where the agent's own end users
-each link their account through public signup/login pages the agent serves —
-Airlock supplies no caller identity to lean on. The agent runs its own auth on
-`AccessPublic` routes, keeps a `users` table and sessions in its own Postgres
-schema, and keys each sealed session by *its* `user_id`. `runCLI` resolves the
-current user from the agent's session (cookie / token / however its pages
-identify the request) and loads that row instead of `ReadFile`. The
-seal/unseal calls are identical — only where you keep the ciphertext, and how
-you identify whose it is, changes.
+> Many credentials can't be minted headlessly — the login emits a one-time
+> code, asks for a password, or needs a click. Drive that interactive step from
+> an `AccessAdmin` `RegisterRoute` page, finish the login, and `Seal` the
+> resulting long-lived credential. Full worked example (admin login page,
+> sealing the session, per-user variant): **`/libs/agentsdk/llms/auth-web.md`**.
 
 ## RegisterModel — named model slots
 
@@ -1089,268 +762,27 @@ The runtime LLM subscribes the current conversation via
 
 ## RegisterDirectory — file storage
 
-The agent has its own **S3-like object storage**. There is no container
-filesystem you expose to tools or to the LLM — every path you read or write is
-an S3 key. Paths are slashless: `uploads/x.csv`, `reports/q1.pdf`,
-`tmp/foo.png`. Leading slashes are rejected by the SDK (the LLM and your Go
-code share one canonical form).
-
-**Hard rule for tool authors: tool inputs and outputs are *storage* paths,
-never container paths.** A `Source agentsdk.FilePath` field on a tool's `In`
-struct is a storage path the LLM (or a sibling agent over A2A) passed in;
-convert with `string(in.Source)` and pass it through `CheckFileAccess` /
-`agent.OpenFile`. A `Result agentsdk.FilePath` you return is a storage path
-the LLM, chat, or calling sibling will follow back through the same storage
-namespace. Returning `os.CreateTemp` paths or `localOut.Name()` to the LLM
-gives it a path it cannot read — the framework will 404. When you need a real
-on-disk file (CLI tools like `ffmpeg`, `pdftotext`), use `os.CreateTemp`
-purely as scratch inside the tool body, then upload the result with
-`agent.WriteFile` and return the resulting path as `agentsdk.FilePath`.
+The agent has its own **S3-like object storage** — there is no container
+filesystem you expose to tools or the LLM. Every path is a slashless S3 key
+(`uploads/x.csv`, `reports/q1.pdf`, `tmp/foo.png`); leading slashes are
+rejected. Register a directory to declare per-capability access (`Read` /
+`Write` / `List`) and an optional `LLMHint`:
 
 ```go
 agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessUser, Write: agentsdk.AccessUser, List: agentsdk.AccessUser,
-    Description: "Files the user uploaded in chat.",
-})
-agent.RegisterDirectory("reports", agentsdk.DirectoryOpts{
-    Read: agentsdk.AccessUser, Write: agentsdk.AccessAdmin, List: agentsdk.AccessUser,
-    Description: "Generated reports.",
-})
-agent.RegisterDirectory("cache", agentsdk.DirectoryOpts{
-    Read: agentsdk.AccessAdmin, Write: agentsdk.AccessAdmin, List: agentsdk.AccessAdmin,
-    Description: "Memoized responses.",
-    LLMHint:     "internal cache; do not read, write, or list",
-})
-agent.RegisterDirectory("generated-images", agentsdk.DirectoryOpts{
-    Read: agentsdk.AccessAdmin, Write: agentsdk.AccessAdmin, List: agentsdk.AccessAdmin,
-    Description:    "Throwaway AI-generated images served via fileShareURL.",
-    LLMHint:        "served externally via fileShareURL only; do not read or list directly",
-    RetentionHours: 24, // sweeper drops files older than 24h
+    Description: "User-uploaded source files",
 })
 ```
 
-`Read` / `Write` / `List` are independent caps. `delete` folds into `Write`
-(write on the parent governs unlink). Each can be `AccessAdmin`, `AccessUser`,
-or `AccessPublic`. To hide a directory from the LLM while keeping it reachable
-from your Go code, set the caps to `AccessAdmin` and add an `LLMHint` like
-`"internal cache; do not read, write, or list"` — the hint is purely
-model-facing guidance surfaced in the system prompt, while the trusted Go file
-API (`agent.OpenFile`/`ReadFile`/...) bypasses `CheckFileAccess` entirely so
-your code can use the directory freely.
+The **trusted Go file API** (`agent.ReadFile` / `WriteFile` / `OpenFile` /
+`StatFile` / `ListDir` / `DeleteFile` / `CopyFile`) bypasses access checks — it's
+your code. A path that arrives **from the LLM or any untrusted source** must be
+gated first with `agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead)`.
 
-**`RetentionHours`** opts the directory into Airlock's storage sweeper: any
-object older than the configured hours is deleted on the ~6h sweep tick.
-Default `0` means files live forever — that's right for `uploads`, `reports`,
-anything the user expects to find tomorrow. Set a TTL on directories that hold
-ephemeral artifacts (generated media, transient scratch, presigned-URL
-targets) so the bucket doesn't grow without bound. Match the TTL to whatever
-URL expiry you hand out: a `fileShareURL(path, {expiresInMinutes: 60})` link is
-useless after an hour, so the bytes can go away on roughly the same horizon.
-
-**`Scope`** — **use rarely.** Default (`ScopeNone`) is correct for almost every
-directory; reach for scoping only when the user explicitly asks for per-user
-(or per-conversation) file isolation, or when a tool that produces files must
-be exposed at the public tier. Don't scope `uploads`, `reports`, `cache`, or
-general working directories — that breaks the natural "the agent and its
-members share these files" model and surprises the user when files "disappear"
-across conversations.
-
-When you do need it: `Scope` opts the directory into per-context path
-isolation. WriteFile inserts a scope segment (`user-<id>` / `conv-<id>` /
-`run-<id>`) under the directory prefix; CheckFileAccess accepts the matching
-segment on reads. The author's code is unchanged —
-`agent.WriteFile(ctx, "gen/cat.jpg", ...)` returns the scoped path, the LLM
-passes it around, and reads just work for the caller who wrote it. Use this
-instead of opening a directory to `AccessPublic` when a public-tier tool
-produces files: `Scope: ScopeUser` (with `Read/Write/List=AccessAdmin`) keeps
-the base ACL locked while letting each caller see their own slot. `ScopeUser`
-falls back to conv → run when no logged-in user is available, so anon callers
-still get isolation.
-
-```go
-agent.RegisterDirectory("gen", agentsdk.DirectoryOpts{
-    Read: agentsdk.AccessAdmin, Write: agentsdk.AccessAdmin, List: agentsdk.AccessAdmin,
-    Scope:          agentsdk.ScopeUser,
-    Description:    "Per-caller generated artifacts.",
-    RetentionHours: 24,
-})
-// tool body:
-out, _ := agent.WriteFile(ctx, "gen/result.png", buf, "image/png")
-// out.Path is "gen/user-<uuid>/result.png" — return that to the LLM.
-```
-
-The framework auto-registers `tmp` at `Read=Write=List=AccessUser` with
-`RetentionHours: 72` (unscoped — accessible to any user-tier caller). You may
-`RegisterDirectory("tmp", DirectoryOpts{Description: "..."})` to customize the
-description; the access caps, retention, and unscoped behaviour stay at the
-framework's values.
-
-### Trusted Go file API — for code that constructs paths
-
-```go
-src,  err := agent.OpenFile(ctx, "uploads/doc.pdf")          // io.ReadCloser
-data, err := agent.ReadFile(ctx, "uploads/notes.txt")        // []byte
-info, err := agent.WriteFile(ctx, "reports/q1.csv", reader, "text/csv")
-info, err := agent.StatFile(ctx, "uploads/doc.pdf")          // FileInfo
-files, err := agent.ListDir(ctx, "uploads/", agentsdk.ListOpts{Recursive: false})
-err := agent.DeleteFile(ctx, "reports/old.csv")              // idempotent
-err := agent.CopyFile(ctx, "uploads/in.csv", "reports/copy.csv")
-share, err := agent.ShareFileURL(ctx, "reports/q1.csv", time.Hour) // {URL, ExpiresAtMs}
-```
-
-These do **not** call `CheckFileAccess` — agent Go is trusted with paths it
-constructs itself. Use freely from cron/webhook handlers, internal caches,
-anywhere.
-
-`ShareFileURL` returns a presigned, unauthenticated, time-limited URL (default
-1h, capped at 24h server-side). Use it from cron/webhook handlers when you need
-to email/post a one-off external link to a stored file. For chat delivery,
-prefer `printToUser({type:"file", source:path})` from `run_js`; for member-only
-access on a stable URL, the agent's `__air/storage/{path}` route already
-handles it.
-
-### Untrusted paths — when a tool accepts a path from the LLM
-
-If a tool input declares a path field, the path is **untrusted**. The LLM can
-pass any string, including paths under internal directories or with `..`
-segments. **Call `agent.CheckFileAccess` before using the path anywhere** —
-even before passing it to an external API.
-
-```go
-type CropIn struct {
-    Image   agentsdk.FilePath `json:"image"`
-    X, Y, W, H int
-}
-type CropOut struct {
-    Result agentsdk.FilePath `json:"result"`
-}
-
-agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
-    Name:        "crop_image",
-    Description: "Crop a stored image and save the result.",
-    Access:      agentsdk.AccessUser,
-    Execute: func(ctx context.Context, in CropIn) (CropOut, error) {
-        src := string(in.Image) // FilePath → string for the file API
-        if err := agent.CheckFileAccess(ctx, src, agentsdk.OpRead); err != nil {
-            return CropOut{}, err
-        }
-        r, err := agent.OpenFile(ctx, src)
-        if err != nil {
-            return CropOut{}, err
-        }
-        defer r.Close()
-        cropped := crop(r, in.X, in.Y, in.W, in.H)
-        info, err := agent.WriteFile(ctx, "tmp/crop-"+randHex(4)+".png",
-            bytes.NewReader(cropped), "image/png")
-        if err != nil {
-            return CropOut{}, err
-        }
-        return CropOut{Result: info.Path}, nil
-    },
-})
-```
-
-`CheckFileAccess` returns `agentsdk.ErrNotFound` for both "denied" and "no
-covering directory" — the indistinguishable response prevents path-guessing
-from leaking what exists.
-
-### Shelling out to a CLI tool
-
-CLI tools (ffmpeg, pdftotext, imagemagick, libreoffice, …) need real on-disk
-files. The shape is always: permission-check the LLM-supplied storage path,
-download to a temp file, shell out, upload the result back to storage, clean
-up. Temp files are scratch internal to the tool — they never appear in inputs
-or outputs.
-
-```go
-type TranscodeIn struct {
-    Source agentsdk.FilePath `json:"source"`
-}
-type TranscodeOut struct {
-    Result agentsdk.FilePath `json:"result"`
-}
-
-Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
-    srcPath := string(in.Source) // FilePath → string for the file API
-    if err := agent.CheckFileAccess(ctx, srcPath, agentsdk.OpRead); err != nil {
-        return TranscodeOut{}, err
-    }
-
-    // Download the storage object into a scratch temp file.
-    src, err := agent.OpenFile(ctx, srcPath)
-    if err != nil {
-        return TranscodeOut{}, err
-    }
-    defer src.Close()
-    inFile, err := os.CreateTemp("", "in-*"+filepath.Ext(srcPath))
-    if err != nil {
-        return TranscodeOut{}, err
-    }
-    defer os.Remove(inFile.Name())
-    if _, err := io.Copy(inFile, src); err != nil {
-        inFile.Close()
-        return TranscodeOut{}, err
-    }
-    inFile.Close()
-
-    // Run the CLI against the scratch files.
-    outFile, _ := os.CreateTemp("", "out-*.mp3")
-    outFile.Close()
-    defer os.Remove(outFile.Name())
-    cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", inFile.Name(),
-        "-b:a", "128k", outFile.Name())
-    if out, err := cmd.CombinedOutput(); err != nil {
-        return TranscodeOut{}, fmt.Errorf("ffmpeg: %w: %s", err, out)
-    }
-
-    // Upload the result back into storage and return the path as FilePath
-    // so airlock auto-copies it to the caller across A2A boundaries.
-    result, err := os.Open(outFile.Name())
-    if err != nil {
-        return TranscodeOut{}, err
-    }
-    defer result.Close()
-    info, err := agent.WriteFile(ctx, "transcoded/"+filepath.Base(outFile.Name()),
-        result, "audio/mpeg")
-    if err != nil {
-        return TranscodeOut{}, err
-    }
-    return TranscodeOut{Result: info.Path}, nil
-},
-```
-
-Skipping any step either leaks across the security boundary or leaves the
-result invisible to the rest of the agent:
-
-- The two `defer os.Remove` calls fire on every exit path; without them the
-  container's scratch disk fills up over time.
-- Never return `outFile.Name()` (or any `os.CreateTemp` path) to the LLM. That
-  path doesn't exist in the agent's storage; `agent.StatFile` would 404. Always
-  upload with `agent.WriteFile` and return the resulting path as
-  `agentsdk.FilePath`.
-- For tools whose output filename you don't control, point the CLI at a temp
-  *directory* (`os.MkdirTemp`), `defer os.RemoveAll` it, then walk and upload.
-
-> **Use ctx-aware primitives in tool Execute.** The `ctx` in `Execute(ctx, in)`
-> cancels when the user cancels or the run timeout fires.
-> `exec.CommandContext`, `http.NewRequestWithContext`,
-> `agent.DB().QueryContext(ctx, ...)` (and sqlc query methods, which take
-> `ctx`), and
-> `select { case <-ctx.Done(): ...; case <-time.After(d): }` honor it;
-> `time.Sleep`, `io.ReadAll` without ctx, and blocking syscalls don't. A
-> non-cooperative tool keeps running until it returns naturally — the run row
-> finalizes correctly, but cancellation feels broken to the user.
-
-### Public URLs for storage
-
-Every registered directory is reachable at
-`https://{slug}.{agentDomain}/__air/storage/{path}`; the proxy enforces the
-directory's `Read` cap at fetch time:
-
-- `AccessPublic` — unauthenticated, anyone with the URL.
-- `AccessUser` — requires agent membership (proxy redirects through
-  relay-login).
-- `AccessAdmin` — same, admin role.
+→ Full directory ACL model, the complete file API, untrusted-path gating,
+shelling out to a CLI over storage, and presigned URLs:
+**`/libs/agentsdk/llms/files.md`**.
 
 ## Agent methods (ctx-first)
 
@@ -1370,14 +802,12 @@ agent.EmbeddingModel(ctx, slug)
 // handler entry; the ctx is consumed there to resolve the run. Lines go
 // to container stdout as structured JSON (run_id/agent_id tagged) and
 // are kept by Airlock as the run's log record (a failed run's logs also
-// feed the "Fix this error" builder). Use zap field constructors for
-// structured context.
+// feed the "Fix this error" builder). Use zap field constructors.
 log := agent.Logger(ctx)
 log.Info("imported rows", zap.Int("count", 42))
-log.Warn("skipping row", zap.Int("row", i), zap.Error(err))
 // Levels: Debug, Info, Warn, Error. import "go.uber.org/zap"
 
-// Storage — see RegisterDirectory section. Trusted; no CheckFileAccess.
+// Storage — trusted; no CheckFileAccess. See /libs/agentsdk/llms/files.md.
 agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir / DeleteFile / CopyFile
 agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead) // gate paths from untrusted sources
 agent.DB() // *AgentDB — pass to sqlc-generated New() (nil if AIRLOCK_DB_URL unset)
@@ -1400,10 +830,9 @@ if err != nil {
 ## Calling LLMs from agent code (goai)
 
 Crons, webhooks, and tool handlers can call language models via
-`agent.LLM(ctx, slug)` and the `goai` package. Calls are proxied
-through Airlock so token usage is tracked. Each `slug` below
-(`"summarize"`, `"sentiment"`) must be declared once with `RegisterModel`
-(see above) — the getter reads the model type from the slot.
+`agent.LLM(ctx, slug)` and the `goai` package. Calls are proxied through Airlock
+so token usage is tracked. Each `slug` must be declared once with
+`RegisterModel` — the getter reads the model type from the slot.
 
 **Plain text:**
 
@@ -1476,143 +905,63 @@ structured output on the final step. Other strategies: `output.Array`,
 
 ## Built-in VM bindings (don't shadow them)
 
-The runtime system prompt fully documents the bindings the LLM can use. As an
-agent author the practical rule is: **don't name a `RegisterTool` the same as
-a built-in or you'll silently lose it.** `RegisterTool` doesn't panic on a
+The runtime system prompt fully documents the bindings the LLM can use. The
+practical rule for an agent author: **don't name a `RegisterTool` the same as a
+built-in or you'll silently lose it.** `RegisterTool` doesn't panic on a
 collision — both modes (JS sandbox via `run_js`, direct-tool mode for public
-callers) bind built-ins *after* registered tools, so the built-in wins and
-your tool becomes unreachable. The behaviour is identical across modes, so a
-collision can't sneak past JS testing only to break in production direct mode.
+callers) bind built-ins *after* registered tools, so the built-in wins and your
+tool becomes unreachable. The behaviour is identical across modes.
 
-Built-in names are **camelCase**. Anything you put on the agent's bindings
-namespaces — connections, exec endpoints, topics, MCPs, siblings — auto-binds
-with a **`{prefix}_`** name at runtime. Pick `RegisterTool` names that don't
-start with one of these prefixes, or you'll shadow your own binding:
+Built-in names are **camelCase**. Registered handles auto-bind with a
+**`{prefix}_`** name — avoid `RegisterTool` names starting with one of these, or
+you shadow your own binding:
 
-- `conn_` — `RegisterConnection`
-- `exec_` — `RegisterExecEndpoint`
-- `topic_` — `RegisterTopic`
-- `mcp_` — `RegisterMCP`
-- `agent_` — A2A sibling tools (synced, not registered by you)
+| Prefix / name | Source |
+|---|---|
+| `conn_` | `RegisterConnection` |
+| `exec_` | `RegisterExecEndpoint` |
+| `topic_` | `RegisterTopic` |
+| `mcp_` | `RegisterMCP` |
+| `agent_` | A2A sibling tools (synced, not registered by you) |
+| `run_js` (reserved) | the JS sandbox entry point |
+| `promptAgent` (reserved) | open-ended A2A delegation |
 
-Two fixed top-level names are also reserved: `run_js` (the JS sandbox entry
-point) and `promptAgent` (open-ended A2A delegation).
+Framework primitives (the runtime prompt describes each in detail).
+**Availability**: *all* = every run; *authed* = non-public runs only; *admin* =
+admin runs only; *per-dir* = bound only when a registered directory grants the
+matching capability:
 
-Framework-provided primitives (always present, the runtime prompt describes
-each in detail):
-
-- **File API** — `fileRead`, `fileReadBytes`, `fileWrite`, `fileStat`, `fileList`,
-  `fileDelete`, `fileExists`, `fileShareURL`. Operate on S3-like storage with
-  slashless paths (`uploads/x`, not `/uploads/x`); see the storage section
-  above. `fileRead`/`fileReadBytes` cap at 16 MiB.
-- **Large-file reads** — `fileReadRangeBytes(path, start, length)` (an exact
-  byte window, no whole-file load; bytes only — text is addressed by line),
-  `fileGrep(path, pattern, opts?)`, `fileHead(path, n?)`, `fileTail(path, n?)`,
-  `fileLines(path, start, count)`. Large reads transparently cache to local disk for the run, so
-  repeated scans of the same file don't re-fetch from S3.
-- **File→file transforms** (authed runs only) — `fileEncode(src, codec, dst?)` /
-  `fileDecode(src, codec, dst?)` (base64 | base64url | hex | gzip),
-  `fileDecodeText(src, charset, dst?)` (charset → UTF-8). Stream the whole file
-  with no size cap; omit `dst` for an auto scratch path.
-- **File editors** (authed runs only) — `fileEditLines(src, edits, dst?)`
-  (structured 1-based line edits: replace/delete/insert/append) and
-  `fileSed(src, script, dst?)` (a sed subset: `s/re/repl/[gi]`, `d`, `c`/`i`/`a`,
-  addresses `N`·`N,M`·`/re/`·`$`). Both stream so a file too big to load whole
-  is still editable; omit `dst` for a scratch path or pass `dst === src` to edit
-  in place.
-- **AI / media helpers** (resolved via per-agent capability defaults — no slug
-  needed) — `analyzeImage(path, question?)`, `transcribeAudio(path, opts?)`,
-  `generateImage(prompt, opts?)`, `speak(text, opts?)`, `embed(texts)`.
-- **User-facing output** — `printToUser(parts)`, `attachToContext(path)`.
-- **HTTP / web** — `httpRequest(url, opts?)`, `webSearch(query, count?)`.
-- **Logging** — `log(...)`, `console.log/warn/error`.
-- **Database** (admin runs only) — `queryDB(sql, ...params)`,
-  `execDB(sql, ...params)`.
-- **Self-rebuild** (admin runs only) — `requestUpgrade(description)`.
-
-If you re-declare any of these as `RegisterTool`s the built-in shadows yours
-in both modes — your handler will never run. Pick a different name.
+| Binding(s) | Purpose | Availability |
+|---|---|---|
+| `fileRead` `fileReadBytes` `fileWrite` `fileStat` `fileList` `fileDelete` `fileExists` `fileShareURL` | object storage; slashless paths; reads cap 16 MiB | per-dir |
+| `fileReadRangeBytes` `fileGrep` `fileHead` `fileTail` `fileLines` | large-file reads (exact byte window / line-addressed; cache to local disk) | authed (read verbs also per-dir for public) |
+| `fileEncode` `fileDecode` `fileDecodeText` | file→file codec transforms (base64/hex/gzip/charset) | authed |
+| `fileEditLines` `fileSed` | streamed line / sed edits | authed |
+| `analyzeImage` `transcribeAudio` `generateImage` `speak` `embed` | AI/media (capability-default model) | authed |
+| `printToUser` | user-facing output | all |
+| `attachToContext` | attach a file to the conversation | authed |
+| `httpRequest` `webSearch` | web | authed |
+| `log` `console.log/warn/error` | logging | all |
+| `queryDB` `execDB` | raw SQL | admin |
+| `requestUpgrade` | self-rebuild | admin |
 
 **Public-caller surface is much narrower.** A run triggered by an
-`AccessPublic` caller (unauthenticated bot, public route) only sees:
+`AccessPublic` caller only sees: `printToUser`, `log`/`console`; the file API
+verbs only where a registered directory grants `AccessPublic` for the matching
+cap (no public dirs → no file API); and the `conn_`/`mcp_`/`topic_`/registered
+tools explicitly marked `Access: AccessPublic`. Everything in the *authed* /
+*admin* rows above is bind-time-gated *out* — it doesn't exist in the JS runtime
+for public runs, so prompt injection can't summon it.
 
-- `printToUser`, `log` / `console` — always present
-- File API: each verb is bound only when at least one registered directory
-  grants `AccessPublic` for the matching cap. `fileRead` / `fileReadBytes` /
-  `fileReadRangeBytes` / `fileGrep` / `fileHead` / `fileTail` /
-  `fileLines` / `fileStat` / `fileExists` / `fileShareURL` need a public **Read** dir;
-  `fileWrite` / `fileDelete` need a public **Write** dir; `fileList` needs a
-  public **List** dir. If you've registered no public dirs, the file API is
-  invisible to public callers entirely.
-- `conn_{slug}` / `mcp_{slug}` / `topic_{slug}` / registered tools — only the
-  ones explicitly marked `Access: AccessPublic`
-
-Bind-time-gated *out* for public callers: `httpRequest`, `webSearch`, AI/media
-helpers (`analyzeImage`, `transcribeAudio`, `generateImage`, `speak`, `embed`),
-file→file transforms (`fileEncode`, `fileDecode`, `fileDecodeText`), file
-editors (`fileEditLines`, `fileSed`), `attachToContext`, `queryDB` / `execDB`,
-`requestUpgrade`. These don't exist in
-the JS runtime for public runs — they can't be coaxed into existence by prompt
-injection, and they can't drive metered/external resources on a public
-visitor's behalf.
-
-Plan public flows around this: if a public visitor needs the agent to look up
-or compute something, register a typed `Tool` with `Access: AccessPublic` that
-performs the call internally with whatever auth/limits you choose. Don't expect
-the LLM to reach for a primitive that isn't there.
-
-**For public flows, narrow the surface to single-purpose tools rather than
-registering a public directory and expecting the LLM to assemble several
-primitives.** A single `Tool` you control gives you one place to validate the
-input, sanitize the prompt, and decide what reaches the user — and the LLM only
-sees the verb you want it to use. Concrete example: an "AI-generated image"
-feature for public visitors. Don't do this:
-
-```
-RegisterDirectory("generated", AccessPublic for Read+Write+List)
-// ... then hope the LLM stitches generateImage + fileWrite + fileShareURL
-//     correctly on every call, with no rate limit, leaking the storage layout
-```
-
-Do this — one bounded tool, no public storage dir at all:
-
-```go
-type GenImageIn struct {
-    Prompt string `json:"prompt" jsonschema:"description=Image description"`
-}
-type GenImageOut struct {
-    URL string `json:"url" jsonschema:"description=Time-limited URL to the generated image"`
-}
-
-agent.RegisterTool(&agentsdk.Tool[GenImageIn, GenImageOut]{
-    Name:        "generate_public_image",
-    Description: "Generate an image from a prompt and return a 1-hour shareable link.",
-    Access:      agentsdk.AccessPublic, // single verb the public LLM is allowed to call
-    Execute: func(ctx context.Context, in GenImageIn) (GenImageOut, error) {
-        // Validate / sanitize the prompt here before spending tokens.
-        // Generate via agent.ImageModel(...) → write the bytes to an
-        // admin-only directory with an LLMHint that hides it from the
-        // model (still reachable from this trusted Go code via the file
-        // API, which bypasses CheckFileAccess) → presign and return the URL.
-        info, err := generateAndStore(ctx, in.Prompt)
-        if err != nil {
-            return GenImageOut{}, err
-        }
-        share, err := agent.ShareFileURL(ctx, info.Path, time.Hour)
-        if err != nil {
-            return GenImageOut{}, err
-        }
-        return GenImageOut{URL: share.URL}, nil
-    },
-})
-```
-
-The public visitor's LLM sees one tool: `generate_public_image({prompt})`. It
-can't list, read, write, or delete arbitrary paths. It can't call `httpRequest`
-or `webSearch` to do something else with the prompt. The image lives in an
-internal directory the LLM can't enumerate; the only way out is the presigned
-URL the tool returns. That's the model: **shrink the verbs, control the side
-effects, surface the URL.**
+So plan public flows around **single-purpose tools**, not a public directory the
+LLM assembles primitives over. A `Tool` you control is one place to validate
+input, sanitize the prompt, and decide what reaches the user; the LLM only sees
+the verb you expose. E.g. for a public "AI image" feature, don't register a
+public `generated/` dir and hope the LLM stitches `generateImage` + `fileWrite`
++ `fileShareURL` — register one `generate_public_image({prompt})` tool
+(`Access: AccessPublic`) that generates internally, writes to an admin-only dir
+(trusted Go bypasses `CheckFileAccess`), and returns only a presigned
+`ShareFileURL`. Shrink the verbs, control the side effects, surface the URL.
 
 ---
 
@@ -1653,244 +1002,66 @@ fixed-path wrapper that execs `setup.sh` as root; you cannot `sudo
 
 `setup.sh` runs **once per image build** — anything it installs is frozen into
 that image. For tools that *self-update* (`bun upgrade`, `uv self update`) or
-download data that goes stale (GeoIP DBs, ClamAV signatures, cached ML
-weights), the update happens at runtime in the container's writable layer and
-is lost when the container gets reaped.
+download data that goes stale (GeoIP DBs, ClamAV signatures, cached ML weights),
+the update happens at runtime in the container's writable layer and is lost when
+the container gets reaped.
 
-The fix is `agent.SyncDown` / `agent.SyncUp`: pair them in a cron handler to
-persist runtime updates to the agent's S3-backed storage, then pull them back
-at boot. The container's local copy is the working copy; S3 is the durable
-record.
+The fix is `agent.SyncDown` / `agent.SyncUp`: pair them to persist runtime
+updates to the agent's S3-backed storage and pull them back at boot. The
+container's local copy is the working copy; S3 is the durable record.
 
 ```go
 // SyncDown(ctx, "state/bin/", "/var/agent/bin/")
-//   ListDir(state/bin/, recursive) → for each remote file newer than
-//   local: download, atomic-rename, chmod 0755, set local mtime to remote.
+//   for each remote file newer than local: download, atomic-rename,
+//   chmod 0755, set local mtime to remote.
 // SyncUp(ctx, "/var/agent/bin/", "state/bin/")
-//   filepath.Walk(localDir) → for each local file newer than remote:
-//   WriteFile, set local mtime to the resulting S3 LastModified.
+//   for each local file newer than remote: WriteFile, set local mtime
+//   to the resulting S3 LastModified.
+
+// Boot: pull latest in the background so we don't block Serve (no-op on
+// first boot when S3 is empty — the image's seeded binary stays).
+go func() { _ = agent.SyncDown(context.Background(), "state/bin/", "/var/agent/bin/") }()
+
+// A cron self-updates, then pushes the new binary up.
+agent.RegisterCron(&agentsdk.Cron{
+    Slug: "bun-refresh", Schedule: "0 3 * * 0",
+    Handler: func(ctx context.Context, _ *agentsdk.EventWriter) error {
+        if err := exec.CommandContext(ctx, "/var/agent/bin/bun", "upgrade").Run(); err != nil {
+            return err
+        }
+        return agent.SyncUp(ctx, "/var/agent/bin/", "state/bin/")
+    },
+})
 ```
 
-Multi-replica is **last-writer-wins**: two replicas concurrently uploading the
-same path converge to whichever finished last. That's correct for self-updates
-(both replicas end up with the same new binary anyway). For shared mutable
-state with concurrent writers, use the agent's Postgres schema instead — files
-are for blobs, rows are for shared state.
+Multi-replica is **last-writer-wins** (correct for self-updates — both replicas
+converge on the same new binary). For shared mutable state with concurrent
+writers, use the agent's Postgres schema instead — files are for blobs, rows are
+for shared state.
 
-**Worked example — keeping `bun` self-updating across container restarts.**
-`setup.sh` seeds `/var/agent/bin/bun` into the image. The `bun-refresh` cron
-fires `bun upgrade` weekly and syncs the new binary up to S3. On any container
-restart (image rebuild, reap, crash), `SyncDown` pulls the latest bun back
-down. A typed tool exposes the runtime to the LLM as `eval_js`.
+Keep the persisted binaries in an **admin-only directory** with an `LLMHint`
+that steers the model away (`"framework-managed binary cache; do not read,
+write, or list"`); the trusted Go file API still reaches it freely. Use
+`state/bin/` for executables, `state/data/` for everything else (GeoIP, ClamAV
+sigs, ML weights, browser binaries) — it's just a convention so the LLM-facing
+directory inventory reads cleanly.
 
 **Health-check budget:** the platform expects `agent.Serve()` to start within
 ~15 seconds of container start. Anything slower than a few hundred ms —
-`SyncDown`, third-party warm-up, model preload — must run in a goroutine
-*after* you call `Serve`, not synchronously in `main()` before it. The
-`eval_js` tool first call may have to retry if the goroutine hasn't finished,
-but that's better than failing the boot health check.
-
-```bash
-# setup.sh
-apt-get update && apt-get install -y --no-install-recommends curl unzip
-mkdir -p /var/agent/bin
-BUN_INSTALL=/var/agent/bin curl -fsSL https://bun.sh/install | bash
-```
-
-```go
-// main.go
-package main
-
-import (
-    "context"
-    "os/exec"
-    "strings"
-
-    "github.com/airlockrun/agentsdk"
-)
-
-func main() {
-    agent := agentsdk.New(agentsdk.Config{
-        Description: "Runs JS snippets via bun; refreshes the binary weekly.",
-    })
-
-    // Admin-only bucket for binaries; the LLMHint steers the model away
-    // even on admin runs while leaving the directory reachable from
-    // trusted Go code (the file API bypasses CheckFileAccess), so
-    // SyncDown/SyncUp work freely.
-    agent.RegisterDirectory("state", agentsdk.DirectoryOpts{
-        Read:  agentsdk.AccessAdmin,
-        Write: agentsdk.AccessAdmin,
-        List:  agentsdk.AccessAdmin,
-        Description: "Self-updating binaries persisted across container restarts.",
-        LLMHint:     "framework-managed binary cache; do not read, write, or list",
-    })
-
-    // Boot: pull the latest bun from S3 in the background so we don't
-    // block Serve. First boot is a no-op when S3 is empty — the
-    // image's seeded /var/agent/bin/bun stays in place until the
-    // weekly cron lands the first upload.
-    go func() {
-        _ = agent.SyncDown(context.Background(), "state/bin/", "/var/agent/bin/")
-    }()
-
-    // Weekly: self-update bun, then push the new binary to S3.
-    agent.RegisterCron(&agentsdk.Cron{
-        Name:     "bun-refresh",
-        Schedule: "0 3 * * 0",
-        Handler: func(ctx context.Context, _ *agentsdk.EventWriter) error {
-            if err := exec.CommandContext(ctx, "/var/agent/bin/bun", "upgrade").Run(); err != nil {
-                return err
-            }
-            return agent.SyncUp(ctx, "/var/agent/bin/", "state/bin/")
-        },
-    })
-
-    type EvalIn struct {
-        Code string `json:"code" jsonschema:"description=JS expression to evaluate"`
-    }
-    type EvalOut struct {
-        Result string `json:"result"`
-    }
-    agent.RegisterTool(&agentsdk.Tool[EvalIn, EvalOut]{
-        Name:        "eval_js",
-        Description: "Evaluate a JS expression with bun and return stdout.",
-        Access:      agentsdk.AccessUser,
-        Execute: func(ctx context.Context, in EvalIn) (EvalOut, error) {
-            cmd := exec.CommandContext(ctx, "/var/agent/bin/bun", "-e", in.Code)
-            out, err := cmd.CombinedOutput()
-            if err != nil {
-                return EvalOut{}, err
-            }
-            return EvalOut{Result: strings.TrimSpace(string(out))}, nil
-        },
-    })
-
-    agent.Serve()
-}
-```
-
-The same shape works for `uv self update`, `freshclam` (ClamAV signature DB
-into `/var/agent/data/clamav/`), browser binaries for headless scraping, ML
-model weights, anything that updates at runtime. Pick `state/bin/` for
-executables, `state/data/` for everything else — it's just a convention so the
-LLM-facing prompt's directory inventory reads cleanly.
+`SyncDown`, third-party warm-up, model preload — must run in a goroutine *after*
+you call `Serve`, not synchronously in `main()` before it.
 
 ---
 
 # Database access
 
-You have a full Postgres database available (well, a single schema, but you can
-create as many tables in it as you like). Usually the database has pgvector
-enabled, so you can create vector columns and use them together with
-`agent.EmbeddingModel(ctx, slug)`.
-
-If the agent needs its own database tables:
-
-1. Migration files in `db/migrations/` (e.g. `00001_init.sql`)
-2. Query files in `db/queries/` (e.g. `queries.sql`)
-3. `sqlc generate` — produces Go code in `internal/db/`
-4. Import `internal/db` in your code
-
-Migrations run automatically at container startup via **goose**. Each `.sql`
-file has Up and Down sections:
-
-```sql
--- +goose Up
-CREATE TABLE rooms (
-    id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name text NOT NULL
-);
-
--- +goose Down
-DROP TABLE rooms;
-```
-
-**Numbering:** zero-padded prefixes (`00001_init.sql`). Goose runs them in
-numeric order.
-
-**Go migrations** for operational work (rename S3 keys, backfill via HTTP, ...):
-create a `.go` file in `db/migrations/`. Get the agent via
-`agentsdk.AgentFromMigrationContext(ctx)`.
-
-**Tx vs NoTx:**
-- `goose.AddMigrationContext(up, down)` — wraps in a Postgres transaction.
-  Default for short, DB-focused work.
-- `goose.AddMigrationNoTxContext(up, down)` — no wrapping tx. Use when you
-  (1) call slow external services (S3, HTTP) — don't hold a Postgres tx idle
-  across them; or (2) need ops Postgres won't run in a tx
-  (`CREATE INDEX CONCURRENTLY`, `VACUUM`, ...).
-
-```go
-// db/migrations/00002_rename_media.go
-package migrations
-
-import (
-    "context"
-    "database/sql"
-    "path"
-
-    "github.com/airlockrun/agentsdk"
-    "github.com/pressly/goose/v3"
-)
-
-func init() {
-    // NoTx: calls S3 in a loop; don't hold a Postgres tx open across slow external calls.
-    goose.AddMigrationNoTxContext(Up00002, Down00002)
-}
-
-func Up00002(ctx context.Context, db *sql.DB) error {
-    // Build-time validation runs migrations against a test DB without S3,
-    // Airlock API, or connection credentials. Guard side effects so SQL still runs.
-    if agentsdk.IsValidatingMigrations() {
-        return nil
-    }
-    agent := agentsdk.AgentFromMigrationContext(ctx)
-    files, err := agent.ListDir(ctx, "old/", agentsdk.ListOpts{Recursive: true})
-    if err != nil {
-        return err
-    }
-    for _, f := range files {
-        src := string(f.Path)
-        dst := "media/" + path.Base(src)
-        if err := agent.CopyFile(ctx, src, dst); err != nil {
-            return err
-        }
-        if err := agent.DeleteFile(ctx, src); err != nil {
-            return err
-        }
-    }
-    return nil
-}
-
-func Down00002(ctx context.Context, db *sql.DB) error { return nil }
-```
-
-`main.go` already blank-imports `db/migrations`, so `init()` fires
-automatically.
-
-**Guard external side effects.** Build-time validation runs the full migration
-chain (up → down → up) against a test DB clone with no S3, Airlock API, or
-connection credentials. Go migrations that touch external services must check
-`agentsdk.IsValidatingMigrations()` and return early — but still run any
-DB/schema work later migrations depend on.
-
-**Validate after creating migrations** (Airlock builder; three env vars
-`TEST_DB_URL` for goose, `TEST_DB_PSQL` for psql, `TEST_DB_SCHEMA` — skip if
-`$TEST_DB_URL` is unset):
-
-```bash
-goose -dir db/migrations postgres "$TEST_DB_URL" up
-goose -dir db/migrations postgres "$TEST_DB_URL" reset
-goose -dir db/migrations postgres "$TEST_DB_URL" up
-
-psql "$TEST_DB_PSQL" -c "SET search_path TO $TEST_DB_SCHEMA; SELECT table_name FROM information_schema.tables WHERE table_schema = '$TEST_DB_SCHEMA'"
-```
-
-The agent gets its own Postgres schema. `agent.DB()` returns an `*AgentDB`
-wrapping `*sql.DB` — pass it straight to the generated `New()`.
-
-**Using sqlc in Go:**
+A full Postgres schema (usually with pgvector — pair vector columns with
+`agent.EmbeddingModel(ctx, slug)`). Tables via goose migrations in
+`db/migrations/`; queries via sqlc (`db/queries/` → generated `internal/db/`).
+`agent.DB()` returns `*AgentDB` (wraps `*sql.DB`, `nil` if `AIRLOCK_DB_URL`
+unset) — pass it straight to the generated `New()`. Migrations run automatically
+at container startup. **Always use sqlc** — never raw `db.QueryRow` / `db.Exec`
+strings in Go.
 
 ```go
 db := agent.DB()
@@ -1898,22 +1069,6 @@ queries := internaldb.New(db) // import "agent/internal/db" as internaldb
 users, err := queries.ListActiveUsers(ctx)
 ```
 
-**Always use sqlc.** Never write raw `db.QueryRow`/`db.Exec` strings in Go.
-
----
-
-# Verifying a build
-
-After writing code, generate templ output and compile:
-
-```bash
-go tool templ generate
-go build ./...
-```
-
-Run `sqlc generate` only if you created or changed `.sql` files in
-`db/queries/`. The Docker build re-runs `templ generate` and `tailwindcss`, so
-`*_templ.go` and `views/static/app.css` are regenerated there and not
-committed. It does **not** run sqlc, so the generated `internal/db/` **is**
-committed (and updated whenever you change a query) — otherwise a fresh-clone
-`docker build` would fail to find the package.
+→ Migration file format, numbering, Go migrations (Tx vs NoTx), guarding
+external side effects with `IsValidatingMigrations()`, and build-time
+validation: **`/libs/agentsdk/llms/database.md`**.
