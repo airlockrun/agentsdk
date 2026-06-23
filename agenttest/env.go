@@ -4,6 +4,7 @@
 package agenttest
 
 import (
+	"os"
 	"testing"
 
 	"github.com/airlockrun/agentsdk"
@@ -23,6 +24,13 @@ type Env struct {
 // requires (AIRLOCK_API_URL, AIRLOCK_AGENT_ID, AIRLOCK_AGENT_TOKEN) to point at
 // it. Call it before constructing the agent. The mock server and the env vars
 // are torn down automatically when the test ends.
+//
+// When a test database is provisioned ($TEST_DB_URL), NewEnv also sets
+// AIRLOCK_DB_URL to it — up front, before the caller builds the agent — so an
+// agent that caches agent.DB() in its Deps at construction (the recommended
+// pattern) gets a live handle, exactly as in production. agenttest.UseDB then
+// resets and migrates that schema. Without $TEST_DB_URL the var stays unset and
+// UseDB skips the test.
 func NewEnv(t *testing.T) *Env {
 	t.Helper()
 	m, url := agentsdk.NewMockAirlock()
@@ -30,5 +38,8 @@ func NewEnv(t *testing.T) *Env {
 	t.Setenv("AIRLOCK_API_URL", url)
 	t.Setenv("AIRLOCK_AGENT_ID", "00000000-0000-0000-0000-000000000000")
 	t.Setenv("AIRLOCK_AGENT_TOKEN", "test-token")
+	if dsn := os.Getenv("TEST_DB_URL"); dsn != "" {
+		t.Setenv("AIRLOCK_DB_URL", dsn)
+	}
 	return &Env{Airlock: m, URL: url}
 }
