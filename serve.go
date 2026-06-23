@@ -37,6 +37,36 @@ func (a *Agent) Serve() {
 	// the inactivity window elapses.
 	a.startBackgroundFlusher()
 
+	server := &http.Server{
+		Addr:    addr,
+		Handler: a.Handler(),
+	}
+
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		server.Shutdown(shutdownCtx)
+		// Flush any open background run before the process exits.
+		a.stopBackgroundFlusher()
+	}()
+
+	agentLogger().Info("serving", zap.String("version", Version), zap.String("addr", addr))
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		panic("agentsdk: server error: " + err.Error())
+	}
+}
+
+// Handler builds the agent's HTTP mux: the framework routes (/prompt,
+// /webhook, /fire, /refresh, /health, the A2A and asset endpoints) plus every
+// route registered via RegisterRoute, each wrapped with the lazy-run + logging
+// middleware. Serve installs it after syncing with Airlock.
+//
+// Handler does not sync with Airlock and does not listen — it just returns the
+// mux. Tests use it to exercise routes through the real dispatch (including
+// {param} extraction) with httptest. A test that needs the synced prompt data
+// or MCP schemas a handler reads must call syncWithAirlock first.
+func (a *Agent) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /prompt", handlePrompt(a))
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
@@ -58,24 +88,7 @@ func (a *Agent) Serve() {
 		mux.HandleFunc(key, routeLogging(a.wrapRoute(key, route.Handler)))
 	}
 
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
-	}
-
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		server.Shutdown(shutdownCtx)
-		// Flush any open background run before the process exits.
-		a.stopBackgroundFlusher()
-	}()
-
-	agentLogger().Info("serving", zap.String("version", Version), zap.String("addr", addr))
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		panic("agentsdk: server error: " + err.Error())
-	}
+	return mux
 }
 
 func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
