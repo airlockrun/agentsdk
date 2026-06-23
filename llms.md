@@ -710,11 +710,19 @@ without sealing first — storage is not encrypted at rest.
 
 ## RegisterModel — named model slots
 
-Declare a named slot for every distinct runtime model use case. The admin picks
-a specific model per slot in the Airlock UI. At runtime the slug resolves: slot
-binding → per-agent default for the slot's capability → system default for that
-capability. The slot's `Capability` is the single source of truth for the model
-type — the getters take only a slug and read the capability from the slot.
+Declare a named slot for every distinct LLM call **your own agent code makes** —
+then invoke it through a getter (below). The admin picks a specific model per slot
+in the Airlock UI. At runtime the slug resolves: slot binding → per-agent default
+for the slot's capability → system default for that capability. The slot's
+`Capability` is the single source of truth for the model type — the getters take
+only a slug and read the capability from the slot.
+
+Only register a slot you actually call. **Don't add a speculative slot "for future
+use"**, and **don't register one for the agent's chat loop** — the conversation
+that drives your `RegisterTool` tools runs on the agent's runtime model, which the
+admin sets in the Models tab, not a `RegisterModel` slot. An agent whose own code
+makes no LLM calls registers no slots at all (a slot with no matching getter call
+is dead config and a misleading rebind knob in the UI).
 
 Registration is required: every slug you pass to a model getter must be declared
 with `RegisterModel` first. Calling a getter with an unregistered (or empty)
