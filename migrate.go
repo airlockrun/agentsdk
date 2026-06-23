@@ -30,6 +30,15 @@ func AgentFromMigrationContext(ctx context.Context) *Agent {
 	return a
 }
 
+// MigrationContext returns ctx with this agent attached, so goose Up/Down calls
+// run the agent's Go migrations — those fetch the agent via
+// AgentFromMigrationContext. autoMigrate uses this for the baked /migrations;
+// tests use it to apply db/migrations against a test database (see
+// agentsdk/agenttest.UseDB).
+func (a *Agent) MigrationContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, agentCtxKey{}, a)
+}
+
 // IsValidatingMigrations reports whether the agent is running in migration
 // validation mode (AGENT_VALIDATE_MIGRATIONS=1). Go migrations that touch
 // external services (S3, Airlock API, connection credentials) should return
@@ -80,7 +89,7 @@ func (a *Agent) autoMigrate() {
 		panic("agentsdk: goose dialect: " + err.Error())
 	}
 
-	ctx := context.WithValue(context.Background(), agentCtxKey{}, a)
+	ctx := a.MigrationContext(context.Background())
 	if IsValidatingMigrations() {
 		agentLogger().Info("validating migrations (up → down → up)")
 		if err := goose.UpContext(ctx, db, migrationsPath); err != nil {
