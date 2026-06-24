@@ -381,13 +381,33 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(tools)
 
+	// A healthy report must mean the DB is reachable AND the credentials
+	// authenticate. The dispatcher gates traffic on this endpoint; without
+	// the check a 200 here lets it route to an agent that 500s on its first
+	// query — e.g. a drifted DB role (pq 28P01) on an agent with no
+	// migrations, where autoMigrate never forced a boot-time connection.
+	// Reporting 503 instead keeps the agent out of rotation until its creds
+	// are reconciled (the builder re-asserts the role on upgrade).
+	status := "ok"
+	code := http.StatusOK
+	if db := a.DB(); db != nil {
+		pingCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if err := db.PingContext(pingCtx); err != nil {
+			status = "db_unavailable"
+			code = http.StatusServiceUnavailable
+			agentLogger().Warn("health: db ping failed", zap.Error(err))
+		}
+	}
+
 	resp := struct {
 		Status    string         `json:"status"`
 		Webhooks  []string       `json:"webhooks"`
 		Schedules []scheduleInfo `json:"schedules"`
 		Tools     []string       `json:"tools"`
-	}{"ok", webhooks, schedules, tools}
+	}{status, webhooks, schedules, tools}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(resp)
 }
