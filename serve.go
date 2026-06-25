@@ -391,12 +391,23 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	status := "ok"
 	code := http.StatusOK
 	if db := a.DB(); db != nil {
-		pingCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-		defer cancel()
-		if err := db.PingContext(pingCtx); err != nil {
+		// Retry transient failures (e.g. a 28P01 while Airlock is reconciling
+		// the role's scram verifier mid-handshake) so a brief blip doesn't
+		// report the agent unhealthy and pull it out of rotation.
+		var pingErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			pingCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			pingErr = db.PingContext(pingCtx)
+			cancel()
+			if pingErr == nil || !isTransientConnError(pingErr) {
+				break
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+		if pingErr != nil {
 			status = "db_unavailable"
 			code = http.StatusServiceUnavailable
-			agentLogger().Warn("health: db ping failed", zap.Error(err))
+			agentLogger().Warn("health: db ping failed", zap.Error(pingErr))
 		}
 	}
 

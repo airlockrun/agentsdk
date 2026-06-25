@@ -3,16 +3,58 @@ package agentsdk
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"github.com/pressly/goose/v3"
 	"go.uber.org/zap"
 )
 
 const migrationsPath = "/migrations"
+
+const (
+	migrateMaxAttempts  = 8
+	migrateRetryBackoff = 250 * time.Millisecond
+)
+
+// isTransientConnError reports whether err is a transient DB connection/auth
+// error worth retrying at boot rather than panicking. Notably 28P01: Airlock
+// reconciles an agent's Postgres role with ALTER ROLE ... PASSWORD, which
+// rewrites the scram-sha-256 verifier (new salt) even for the *same* password.
+// An ALTER that lands mid-handshake makes Postgres reject the correct password
+// with 28P01; a retry once the ALTER completes succeeds. Connection-refused /
+// "starting up" cover the agent racing Postgres coming up.
+func isTransientConnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		switch string(pqErr.Code) {
+		case "28P01", // invalid_password (verifier rewritten mid-handshake)
+			"28000", // invalid_authorization_specification
+			"57P03", // cannot_connect_now
+			"53300", // too_many_connections
+			"08006", // connection_failure
+			"08001", // unable_to_establish_connection
+			"08004": // rejected_connection
+			return true
+		default:
+			return false
+		}
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "password authentication failed") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "the database system is starting up") ||
+		strings.Contains(msg, "EOF")
+}
 
 // agentCtxKey is the context key under which the running Agent is stored
 // during migrations. Go migrations retrieve the agent via AgentFromContext
@@ -123,8 +165,27 @@ func (a *Agent) autoMigrate() {
 		os.Exit(0)
 	}
 
-	if err := goose.UpContext(ctx, db, migrationsPath); err != nil {
-		panic("agentsdk: run migrations: " + err.Error())
+	// Retry on transient connection/auth errors: Airlock may be reconciling
+	// this role's password (ALTER ROLE rewrites the scram verifier) and an
+	// ALTER landing mid-handshake yields a spurious 28P01 for the correct
+	// password. goose tracks the applied version, so re-running UpContext after
+	// a connect failure is safe (no partial re-apply).
+	var upErr error
+	for attempt := 1; attempt <= migrateMaxAttempts; attempt++ {
+		upErr = goose.UpContext(ctx, db, migrationsPath)
+		if upErr == nil || !isTransientConnError(upErr) {
+			break
+		}
+		backoff := migrateRetryBackoff * time.Duration(attempt)
+		if backoff > time.Second {
+			backoff = time.Second
+		}
+		agentLogger().Warn("migrations: transient DB connection error, retrying",
+			zap.Int("attempt", attempt), zap.Int("max", migrateMaxAttempts), zap.Error(upErr))
+		time.Sleep(backoff)
+	}
+	if upErr != nil {
+		panic("agentsdk: run migrations: " + upErr.Error())
 	}
 	agentLogger().Info("migrations applied")
 }
