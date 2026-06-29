@@ -104,17 +104,16 @@ agent.RegisterRoute(&agentsdk.Route{
 })
 
 // The LLM-facing tool just runs the binary; the session is wired in by runCLI.
-agent.RegisterTool(&agentsdk.Tool[SendIn, SendOut]{
-    Name:        "send_message",
-    Description: "Send a message via the linked account.",
-    Execute: func(ctx context.Context, in SendIn) (SendOut, error) {
+agent.RegisterTool(tool.Typed[SendIn, SendOut]("send_message").
+    Description("Send a message via the linked account.").
+    Execute(func(ctx context.Context, in SendIn) (SendOut, error) {
         out, err := runCLI(ctx, "send", "--to", in.To, "--text", in.Text)
         if err != nil {
             return SendOut{}, fmt.Errorf("not linked yet — an admin must complete login at the agent's /admin/login page: %w", err)
         }
         return SendOut{Result: string(out)}, nil
-    },
-})
+    }).
+    Build(), agentsdk.AccessUser)
 ```
 
 For **per-user** login — the SaaS-style case where the agent's own end users

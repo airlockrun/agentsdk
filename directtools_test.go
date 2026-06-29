@@ -16,24 +16,10 @@ import (
 // run sees everything.
 func TestDirectTools_RegisteredToolSurface_AccessGated(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "pub_hello",
-		Description: "Public hello.",
-		Access:      AccessPublic,
-		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
-	})
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "user_hello",
-		Description: "User hello.",
-		Access:      AccessUser,
-		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
-	})
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "admin_hello",
-		Description: "Admin hello.",
-		Access:      AccessAdmin,
-		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
-	})
+	noop := func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil }
+	a.RegisterTool(greetTool("pub_hello", "Public hello.", noop), AccessPublic)
+	a.RegisterTool(greetTool("user_hello", "User hello.", noop), AccessUser)
+	a.RegisterTool(greetTool("admin_hello", "Admin hello.", noop), AccessAdmin)
 
 	cases := []struct {
 		access      Access
@@ -98,14 +84,10 @@ func TestDirectTools_JSPathUnchanged(t *testing.T) {
 // the JSON-marshaled output.
 func TestDirectTools_RegisteredToolExecutes(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "echo_name",
-		Description: "Echo the name back.",
-		Access:      AccessPublic,
-		Execute: func(ctx context.Context, in greetIn) (greetOut, error) {
+	a.RegisterTool(greetTool("echo_name", "Echo the name back.",
+		func(ctx context.Context, in greetIn) (greetOut, error) {
 			return greetOut{Greeting: "hi " + in.Name}, nil
-		},
-	})
+		}), AccessPublic)
 	run := newRun(a, "rd-exec", "", "", context.Background())
 	run.directTools = true
 	run.callerAccess = AccessPublic
@@ -132,14 +114,10 @@ func TestDirectTools_RegisteredToolExecutes(t *testing.T) {
 // built-in wins. Symmetric behaviour across both modes.
 func TestDirectTools_BuiltinShadowsRegistered(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "fileRead",
-		Description: "Author-shadowed fileRead.",
-		Access:      AccessUser,
-		Execute: func(ctx context.Context, in greetIn) (greetOut, error) {
+	a.RegisterTool(greetTool("fileRead", "Author-shadowed fileRead.",
+		func(ctx context.Context, in greetIn) (greetOut, error) {
 			return greetOut{Greeting: "AUTHOR"}, nil
-		},
-	})
+		}), AccessUser)
 	run := newRun(a, "rd-shadow", "", "", context.Background())
 	run.directTools = true
 	run.callerAccess = AccessUser

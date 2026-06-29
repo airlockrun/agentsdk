@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/airlockrun/goai/message"
+	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
 )
 
@@ -20,18 +21,19 @@ type greetOut struct {
 	Greeting string `json:"greeting"`
 }
 
+// greetTool builds a greet-shaped tool.Tool for the test suite.
+func greetTool(name, desc string, fn tool.TypedFunc[greetIn, greetOut]) tool.Tool {
+	return tool.Typed[greetIn, greetOut](name).Description(desc).Execute(fn).Build()
+}
+
 func TestPromptHandler(t *testing.T) {
 	a, mock := testAgent(t)
 	_ = mock
 
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "greet",
-		Description: "Returns a greeting.",
-		Execute: func(ctx context.Context, in greetIn) (greetOut, error) {
+	a.RegisterTool(greetTool("greet", "Returns a greeting.",
+		func(ctx context.Context, in greetIn) (greetOut, error) {
 			return greetOut{Greeting: "Hello, " + in.Name + "!"}, nil
-		},
-		Access: AccessUser,
-	})
+		}), AccessUser)
 
 	input := PromptInput{
 		Messages: []message.Message{

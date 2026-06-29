@@ -38,11 +38,8 @@ func TestRunJSAutoConfirmSkipsGate(t *testing.T) {
 // "## Built-in functions" section.
 func TestSystemPrompt_BuiltinsAndAdminGate(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "check_gmail",
-		Description: "Search Gmail inbox.",
-		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
-	})
+	a.RegisterTool(greetTool("check_gmail", "Search Gmail inbox.",
+		func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil }), AccessUser)
 
 	admin := a.renderSystemPrompt(AccessAdmin, nil, nil, promptEnv{Date: "2026-06-09"}, false)
 	if !strings.Contains(admin, "## Built-in functions") {
@@ -80,9 +77,6 @@ func TestSystemPrompt_TopicIncludesLLMHint(t *testing.T) {
 	}
 }
 
-// agentsdk.Tool.LLMHint flows through into registeredTool — the tsrender
-// path picks it up from there. Verifies the field actually persists past
-// toRegistered() rather than being dropped.
 // Tool errors must surface with the tool name prefixed so the LLM /
 // operator can tell which tool failed from the JS stack trace alone.
 // Without the prefix, stdlib errors like "unexpected end of JSON input"
@@ -90,15 +84,12 @@ func TestSystemPrompt_TopicIncludesLLMHint(t *testing.T) {
 // reader has no way to know which tool's Go code produced them.
 func TestRegisterTool_WrapsExecuteErrorWithName(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "broken_tool",
-		Description: "always errors",
-		Execute: func(ctx context.Context, in greetIn) (greetOut, error) {
+	a.RegisterTool(greetTool("broken_tool", "always errors",
+		func(ctx context.Context, in greetIn) (greetOut, error) {
 			return greetOut{}, errors.New("unexpected end of JSON input")
-		},
-	})
+		}), AccessUser)
 	rt := a.tools["broken_tool"]
-	_, err := rt.Execute(context.Background(), []byte(`{}`))
+	_, err := rt.Execute(context.Background(), []byte(`{}`), tool.CallOptions{})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -112,18 +103,15 @@ func TestRegisterTool_WrapsExecuteErrorWithName(t *testing.T) {
 
 func TestRegisterTool_PreservesLLMHint(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "search",
-		Description: "Search the web.",
-		LLMHint:     "expensive; cache results before re-calling",
-		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
-	})
+	a.RegisterTool(greetTool("search", "Search the web.",
+		func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil }),
+		AccessUser, WithLLMHint("expensive; cache results before re-calling"))
 	rt, ok := a.tools["search"]
 	if !ok {
 		t.Fatal("expected tool 'search' to be registered")
 	}
-	if rt.LLMHint != "expensive; cache results before re-calling" {
-		t.Errorf("registeredTool.LLMHint = %q, want hint preserved", rt.LLMHint)
+	if rt.llmHint != "expensive; cache results before re-calling" {
+		t.Errorf("registeredTool.llmHint = %q, want hint preserved", rt.llmHint)
 	}
 }
 
@@ -156,11 +144,8 @@ func TestSystemPrompt_DirectoryIncludesLLMHint(t *testing.T) {
 // the expected TypeScript surface from a list of registered tools.
 func TestRegisteredToolsRenderToDecls(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "greet",
-		Description: "Say hi.",
-		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
-	})
+	a.RegisterTool(greetTool("greet", "Say hi.",
+		func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil }), AccessUser)
 	tools := make([]*registeredTool, 0, len(a.tools))
 	for _, tt := range a.tools {
 		tools = append(tools, tt)

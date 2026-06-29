@@ -114,22 +114,18 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 
 	tools := make([]ToolDef, 0, len(a.tools))
 	for _, t := range a.tools {
-		inRaw, err := json.Marshal(t.InputSchema)
-		if err != nil {
-			return fmt.Errorf("marshal input schema for tool %q: %w", t.Name, err)
-		}
-		outRaw, err := json.Marshal(t.OutputSchema)
-		if err != nil {
-			return fmt.Errorf("marshal output schema for tool %q: %w", t.Name, err)
+		examples := make([]json.RawMessage, len(t.InputExamples))
+		for i, ex := range t.InputExamples {
+			examples[i] = ex.Input
 		}
 		tools = append(tools, ToolDef{
 			Name:          t.Name,
 			Description:   t.Description,
-			LLMHint:       t.LLMHint,
-			Access:        t.Access,
-			InputSchema:   inRaw,
-			OutputSchema:  outRaw,
-			InputExamples: t.InputExamples,
+			LLMHint:       t.llmHint,
+			Access:        t.access,
+			InputSchema:   t.InputSchema,
+			OutputSchema:  t.OutputSchema,
+			InputExamples: examples,
 		})
 	}
 

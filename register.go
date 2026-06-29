@@ -4,24 +4,48 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/airlockrun/goai/tool"
 	"go.uber.org/zap"
 )
 
-// RegisterTool registers a typed, schema-bearing capability the LLM can
-// invoke via run_js. The tool auto-binds as a global inside the goja VM;
-// input from JS is JSON-marshaled and decoded into the author's In struct,
-// Execute runs, and the Out struct is JSON-marshaled back to a native JS
-// value. Input/output JSON schemas are rendered as a TypeScript declaration
-// in the system prompt so the LLM sees typed signatures.
+// RegisterOption layers agentsdk-only concerns onto a registered tool that
+// goai's provider-agnostic tool.Tool doesn't model.
+type RegisterOption func(*registeredTool)
+
+// WithLLMHint adds model-only guidance appended to the tool's description in the
+// system prompt — kept out of member-facing UIs that render the bare
+// description (e.g. the dashboard's Tools tab).
+func WithLLMHint(hint string) RegisterOption {
+	return func(rt *registeredTool) { rt.llmHint = hint }
+}
+
+// RegisterTool registers a goai tool.Tool the LLM can invoke, at the given
+// access level (empty defaults to AccessUser). Build the tool once with
+// tool.Typed[In,Out] (or tool.New) and pass the same value here and to the
+// agent's GenerateText/StreamText sub-calls.
 //
-//	agent.RegisterTool(&agentsdk.Tool[SearchIn, SearchOut]{
-//	    Name:        "search",
-//	    Description: "Search the web.",
-//	    Execute:     doSearch,
-//	    Access:      agentsdk.AccessUser,
-//	})
-func (a *Agent) RegisterTool(def AnyTool) {
-	rt := def.toRegistered()
+//	calc := tool.Typed[CalcIn, CalcOut]("calculator").
+//	    Description("Evaluate an expression.").
+//	    Execute(doCalc).
+//	    Build()
+//	agent.RegisterTool(calc, agentsdk.AccessUser)
+func (a *Agent) RegisterTool(t tool.Tool, access Access, opts ...RegisterOption) {
+	if t.Name == "" {
+		panic("agentsdk: RegisterTool: tool Name is required")
+	}
+	if t.Description == "" {
+		panic(fmt.Sprintf("agentsdk: RegisterTool(%q): tool Description is required", t.Name))
+	}
+	if t.Execute == nil && !t.IsProviderTool() {
+		panic(fmt.Sprintf("agentsdk: RegisterTool(%q): tool Execute is required", t.Name))
+	}
+	if access == "" {
+		access = AccessUser
+	}
+	rt := &registeredTool{Tool: t, access: access}
+	for _, o := range opts {
+		o(rt)
+	}
 	if _, exists := a.tools[rt.Name]; exists {
 		panic("agentsdk: duplicate RegisterTool: " + rt.Name)
 	}

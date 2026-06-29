@@ -155,7 +155,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	// as JS throws via vm.NewGoError. Tools whose declared Access exceeds
 	// the run's callerAccess are simply not bound — invisible to the LLM.
 	for _, t := range agent.tools {
-		if !accessSatisfies(run.callerAccess, t.Access) {
+		if !accessSatisfies(run.callerAccess, t.access) {
 			continue
 		}
 		t := t // capture
@@ -169,18 +169,19 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				panic(vm.NewGoError(fmt.Errorf("%s: marshal args: %w", t.Name, err)))
 			}
 			run.gw.enter()
-			outJSON, err := t.Execute(run.checkedCtx(), raw)
+			outRes, err := t.Execute(run.checkedCtx(), raw, tool.CallOptions{})
 			run.gw.exit()
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
-			capJSBytes(vm, t.Name, len(outJSON))
-			if outJSON == "" {
+			out := outRes.Output
+			capJSBytes(vm, t.Name, len(out))
+			if out == "" {
 				return goja.Undefined()
 			}
 			var parsed any
-			if err := json.Unmarshal([]byte(outJSON), &parsed); err != nil {
-				return vm.ToValue(outJSON)
+			if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+				return vm.ToValue(out)
 			}
 			return vm.ToValue(parsed)
 		})

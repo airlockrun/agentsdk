@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/airlockrun/goai/tool"
 	"github.com/dop251/goja"
 )
 
@@ -52,13 +53,11 @@ type bigOut struct {
 // with the size error instead of materializing the bytes in the goja heap.
 func TestVM_ToolReturnSizeCap(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[bigIn, bigOut]{
-		Name:        "make_blob",
-		Description: "Returns a blob of n bytes.",
-		Execute: func(ctx context.Context, in bigIn) (bigOut, error) {
+	a.RegisterTool(tool.Typed[bigIn, bigOut]("make_blob").
+		Description("Returns a blob of n bytes.").
+		Execute(func(ctx context.Context, in bigIn) (bigOut, error) {
 			return bigOut{Blob: strings.Repeat("a", in.N)}, nil
-		},
-	})
+		}).Build(), AccessUser)
 	run := newRun(a, "run-1", "", "", context.Background())
 
 	t.Run("under cap succeeds", func(t *testing.T) {

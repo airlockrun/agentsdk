@@ -3,6 +3,8 @@ package agentsdk
 import (
 	"context"
 	"testing"
+
+	"github.com/airlockrun/goai/tool"
 )
 
 type addIn struct {
@@ -14,17 +16,19 @@ type addOut struct {
 	Sum float64 `json:"sum"`
 }
 
+func addTool(name, desc string) tool.Tool {
+	return tool.Typed[addIn, addOut](name).
+		Description(desc).
+		Execute(func(ctx context.Context, in addIn) (addOut, error) {
+			return addOut{Sum: in.X + in.Y}, nil
+		}).
+		Build()
+}
+
 func TestRegisterTool(t *testing.T) {
 	t.Run("stores tool with access", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterTool(&Tool[addIn, addOut]{
-			Name:        "add",
-			Description: "Add two numbers.",
-			Execute: func(ctx context.Context, in addIn) (addOut, error) {
-				return addOut{Sum: in.X + in.Y}, nil
-			},
-			Access: AccessUser,
-		})
+		a.RegisterTool(addTool("add", "Add two numbers."), AccessUser)
 
 		if len(a.tools) != 1 {
 			t.Fatalf("expected 1 tool, got %d", len(a.tools))
@@ -33,8 +37,8 @@ func TestRegisterTool(t *testing.T) {
 		if tt == nil {
 			t.Fatal("expected registered tool for add")
 		}
-		if tt.Access != AccessUser {
-			t.Fatalf("expected AccessUser, got %q", tt.Access)
+		if tt.access != AccessUser {
+			t.Fatalf("expected AccessUser, got %q", tt.access)
 		}
 		if tt.Execute == nil {
 			t.Fatal("expected Execute to be set")
@@ -46,35 +50,21 @@ func TestRegisterTool(t *testing.T) {
 
 	t.Run("access defaults to AccessUser", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterTool(&Tool[addIn, addOut]{
-			Name:        "noop",
-			Description: "No op.",
-			Execute: func(ctx context.Context, in addIn) (addOut, error) {
-				return addOut{}, nil
-			},
-		})
-		if a.tools["noop"].Access != AccessUser {
-			t.Fatalf("default access = %q, want AccessUser", a.tools["noop"].Access)
+		a.RegisterTool(addTool("noop", "No op."), "")
+		if a.tools["noop"].access != AccessUser {
+			t.Fatalf("default access = %q, want AccessUser", a.tools["noop"].access)
 		}
 	})
 
 	t.Run("panics on duplicate name", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterTool(&Tool[addIn, addOut]{
-			Name:        "dup",
-			Description: "dup",
-			Execute:     func(ctx context.Context, in addIn) (addOut, error) { return addOut{}, nil },
-		})
+		a.RegisterTool(addTool("dup", "dup"), AccessUser)
 		defer func() {
 			if r := recover(); r == nil {
 				t.Fatal("expected panic on duplicate name")
 			}
 		}()
-		a.RegisterTool(&Tool[addIn, addOut]{
-			Name:        "dup",
-			Description: "dup again",
-			Execute:     func(ctx context.Context, in addIn) (addOut, error) { return addOut{}, nil },
-		})
+		a.RegisterTool(addTool("dup", "dup again"), AccessUser)
 	})
 
 	t.Run("panics on missing Execute", func(t *testing.T) {
@@ -84,10 +74,7 @@ func TestRegisterTool(t *testing.T) {
 				t.Fatal("expected panic on missing Execute")
 			}
 		}()
-		a.RegisterTool(&Tool[addIn, addOut]{
-			Name:        "bad",
-			Description: "no exec",
-		})
+		a.RegisterTool(tool.Tool{Name: "bad", Description: "no exec"}, AccessUser)
 	})
 
 	t.Run("panics on empty name", func(t *testing.T) {
@@ -97,28 +84,19 @@ func TestRegisterTool(t *testing.T) {
 				t.Fatal("expected panic on empty name")
 			}
 		}()
-		a.RegisterTool(&Tool[addIn, addOut]{
-			Description: "no name",
-			Execute:     func(ctx context.Context, in addIn) (addOut, error) { return addOut{}, nil },
-		})
+		a.RegisterTool(addTool("", "no name"), AccessUser)
 	})
 
 	t.Run("Execute round-trips input/output via JSON", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterTool(&Tool[addIn, addOut]{
-			Name:        "add_rt",
-			Description: "Add two numbers.",
-			Execute: func(ctx context.Context, in addIn) (addOut, error) {
-				return addOut{Sum: in.X + in.Y}, nil
-			},
-		})
+		a.RegisterTool(addTool("add_rt", "Add two numbers."), AccessUser)
 		tt := a.tools["add_rt"]
-		out, err := tt.Execute(context.Background(), []byte(`{"x":3,"y":4}`))
+		out, err := tt.Execute(context.Background(), []byte(`{"x":3,"y":4}`), tool.CallOptions{})
 		if err != nil {
 			t.Fatalf("execute: %v", err)
 		}
-		if out != `{"sum":7}` {
-			t.Fatalf("got %q, want {\"sum\":7}", out)
+		if out.Output != `{"sum":7}` {
+			t.Fatalf("got %q, want {\"sum\":7}", out.Output)
 		}
 	})
 }

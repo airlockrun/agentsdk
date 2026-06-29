@@ -59,9 +59,7 @@ func (r *run) transcribeAudio(ctx context.Context, path string, opts model.Trans
 		}
 	}
 
-	stt := r.agent.proxyTranscription(ctx, "", CapTranscription)
-	return goai.Transcribe(ctx, goai.TranscribeInput{
-		Model:           stt,
+	return r.agent.Transcribe(ctx, goai.TranscribeInput{
 		Audio:           audio,
 		MimeType:        opts.MimeType,
 		Filename:        opts.Filename,
@@ -125,9 +123,7 @@ func (r *run) analyzeImage(ctx context.Context, path, question string) (string, 
 // when empty). Returns the path + metadata for downstream output /
 // attachToContext calls.
 func (r *run) generateImage(ctx context.Context, prompt, saveAs string, opts model.ImageCallOptions) (*mediaResult, error) {
-	m := r.agent.proxyImage(ctx, "", CapImage)
-	res, err := goai.GenerateImage(ctx, goai.ImageInput{
-		Model:           m,
+	res, err := r.agent.GenerateImage(ctx, goai.ImageInput{
 		Prompt:          prompt,
 		N:               1,
 		Size:            opts.Size,
@@ -155,9 +151,7 @@ func (r *run) generateImage(ctx context.Context, prompt, saveAs string, opts mod
 // generateSpeech runs `text` through the system-default TTS model and writes
 // the audio bytes to agent storage at `saveAs` (auto-named when empty).
 func (r *run) generateSpeech(ctx context.Context, text, saveAs string, opts model.SpeechCallOptions) (*mediaResult, error) {
-	m := r.agent.proxySpeech(ctx, "", CapSpeech)
-	res, err := goai.GenerateSpeech(ctx, goai.SpeechInput{
-		Model:           m,
+	res, err := r.agent.GenerateSpeech(ctx, goai.SpeechInput{
 		Text:            text,
 		Voice:           opts.Voice,
 		OutputFormat:    opts.OutputFormat,
@@ -176,9 +170,7 @@ func (r *run) generateSpeech(ctx context.Context, text, saveAs string, opts mode
 // embed proxies the embedding call through Airlock. Texts are small enough
 // that the inline-bytes round-trip is fine.
 func (r *run) embed(ctx context.Context, texts []string) ([][]float64, error) {
-	m := r.agent.proxyEmbedding(ctx, "", CapEmbedding)
-	res, err := goai.Embed(ctx, goai.EmbedInput{
-		Model:  m,
+	res, err := r.agent.Embed(ctx, goai.EmbedInput{
 		Values: texts,
 	})
 	if err != nil {
