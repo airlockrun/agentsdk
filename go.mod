@@ -3,7 +3,7 @@ module github.com/airlockrun/agentsdk
 go 1.26.0
 
 require (
-	github.com/airlockrun/goai v0.1.5-rc.2
+	github.com/airlockrun/goai v0.1.5-rc.4
 	github.com/airlockrun/sol v0.1.8-rc.3
 	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c
 	github.com/google/uuid v1.6.0
