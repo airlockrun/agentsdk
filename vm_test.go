@@ -28,13 +28,11 @@ type runIDOut struct {
 func TestVM(t *testing.T) {
 	t.Run("registered tool callable from JS", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterTool(&Tool[doubleIn, doubleOut]{
-			Name:        "double",
-			Description: "Doubles a number.",
-			Execute: func(ctx context.Context, in doubleIn) (doubleOut, error) {
+		a.RegisterTool(tool.Typed[doubleIn, doubleOut]("double").
+			Description("Doubles a number.").
+			Execute(func(ctx context.Context, in doubleIn) (doubleOut, error) {
 				return doubleOut{Result: in.X * 2}, nil
-			},
-		})
+			}).Build(), AccessUser)
 
 		run := newRun(a, "run-1", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), "double({x: 21}).result")
@@ -49,18 +47,16 @@ func TestVM(t *testing.T) {
 	t.Run("run context passed to Execute", func(t *testing.T) {
 		a, _ := testAgent(t)
 		var capturedRunID string
-		a.RegisterTool(&Tool[runIDIn, runIDOut]{
-			Name:        "get_run_id",
-			Description: "Returns run ID.",
-			Execute: func(ctx context.Context, in runIDIn) (runIDOut, error) {
+		a.RegisterTool(tool.Typed[runIDIn, runIDOut]("get_run_id").
+			Description("Returns run ID.").
+			Execute(func(ctx context.Context, in runIDIn) (runIDOut, error) {
 				r := runFromContext(ctx)
 				if r != nil {
 					capturedRunID = r.id
 					return runIDOut{ID: r.id}, nil
 				}
 				return runIDOut{}, nil
-			},
-		})
+			}).Build(), AccessUser)
 
 		run := newRun(a, "run-42", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), "get_run_id().id")
@@ -83,14 +79,12 @@ func TestVM(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("downloads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
 		var checkErr error
-		a.RegisterTool(&Tool[runIDIn, runIDOut]{
-			Name:        "probe_write",
-			Description: "Probes write access on downloads/.",
-			Execute: func(ctx context.Context, in runIDIn) (runIDOut, error) {
+		a.RegisterTool(tool.Typed[runIDIn, runIDOut]("probe_write").
+			Description("Probes write access on downloads/.").
+			Execute(func(ctx context.Context, in runIDIn) (runIDOut, error) {
 				checkErr = a.CheckFileAccess(ctx, "downloads/x.bin", OpWrite)
 				return runIDOut{}, nil
-			},
-		})
+			}).Build(), AccessUser)
 
 		run := newRun(a, "run-1", "", "", context.Background())
 		run.callerAccess = AccessUser

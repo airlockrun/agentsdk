@@ -10,11 +10,8 @@ import (
 
 func TestHealthEndpoint(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[greetIn, greetOut]{
-		Name:        "test_tool",
-		Description: "Test tool.",
-		Execute:     func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil },
-	})
+	a.RegisterTool(greetTool("test_tool", "Test tool.",
+		func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil }), AccessUser)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/health", nil)

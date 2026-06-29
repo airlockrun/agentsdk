@@ -123,14 +123,14 @@ func main() {
 
     agent.Deps = &deps.Deps{Spotify: spotifyConn}
 
-    agent.RegisterTool(&agentsdk.Tool[spotify.SearchIn, spotify.SearchOut]{
-        Name: "search_tracks", Description: "Search Spotify tracks.",
-        Execute: spotify.SearchTracks, Access: agentsdk.AccessUser,
-    })
-    agent.RegisterTool(&agentsdk.Tool[spotify.PlayIn, spotify.PlayOut]{
-        Name: "play", Description: "Start or resume playback.",
-        Execute: spotify.Play, Access: agentsdk.AccessUser,
-    })
+    agent.RegisterTool(tool.Typed[spotify.SearchIn, spotify.SearchOut]("search_tracks").
+        Description("Search Spotify tracks.").
+        Execute(spotify.SearchTracks).
+        Build(), agentsdk.AccessUser)
+    agent.RegisterTool(tool.Typed[spotify.PlayIn, spotify.PlayOut]("play").
+        Description("Start or resume playback.").
+        Execute(spotify.Play).
+        Build(), agentsdk.AccessUser)
 
     agent.Serve()
 }
@@ -276,11 +276,19 @@ func DoSomething(ctx context.Context, in SomeIn) (SomeOut, error) {
 ## RegisterTool
 
 The LLM has one tool, `run_js`. `RegisterTool` exposes typed Go functions as JS
-globals inside that VM. Each tool declares **input and output struct types**;
+globals inside that VM. A tool is a `goai/tool.Tool`; build it from Go types with
+`tool.Typed[In, Out]`. Each tool declares **input and output struct types**;
 Airlock renders them as TypeScript signatures in the system prompt and
 validates arguments before `Execute` runs.
 
+`RegisterTool(t tool.Tool, access agentsdk.Access, opts ...agentsdk.RegisterOption)`
+takes the access tier as a positional argument (empty defaults to `AccessUser`).
+The same `tool.Tool` value also works as a sub-call tool in
+`agent.GenerateText`/`agent.StreamText` — define a tool once, use it everywhere.
+
 ```go
+import "github.com/airlockrun/goai/tool"
+
 type DoThingIn struct {
     Query string `json:"query" jsonschema:"description=Search text"`
     Limit int    `json:"limit,omitempty" jsonschema:"minimum=1,maximum=50"`
@@ -289,15 +297,16 @@ type DoThingOut struct {
     Hits []string `json:"hits"`
 }
 
-agent.RegisterTool(&agentsdk.Tool[DoThingIn, DoThingOut]{
-    Name:        "do_thing",
-    Description: "Short, action-oriented summary.",
-    Execute: func(ctx context.Context, in DoThingIn) (DoThingOut, error) {
+agent.RegisterTool(tool.Typed[DoThingIn, DoThingOut]("do_thing").
+    Description("Short, action-oriented summary.").
+    Execute(func(ctx context.Context, in DoThingIn) (DoThingOut, error) {
         return DoThingOut{Hits: []string{"one", "two"}}, nil
-    },
-    Access: agentsdk.AccessUser,
-})
+    }).
+    Build(), agentsdk.AccessUser)
 ```
+
+Model-only guidance that shouldn't appear in member-facing UIs goes through an
+option: `agent.RegisterTool(t, agentsdk.AccessUser, agentsdk.WithLLMHint("expensive; cache results"))`.
 
 The LLM sees:
 
@@ -835,28 +844,42 @@ if err != nil {
 }
 ```
 
-## Calling LLMs from agent code (goai)
+## Calling LLMs from agent code (agentsdk wrappers)
 
-Crons, webhooks, and tool handlers can call language models via
-`agent.LLM(ctx, slug)` and the `goai` package. Calls are proxied through Airlock
-so token usage is tracked. Each `slug` must be declared once with
-`RegisterModel` — the getter reads the model type from the slot.
+Crons, webhooks, and tool handlers make sub-model calls through the agent's own
+generation methods, which mirror the `goai` functions but inject the run:
 
-**Plain text:**
+- `agent.GenerateText` / `agent.StreamText` (chat, with optional tools)
+- `agent.GenerateImage` / `agent.GenerateSpeech` / `agent.Transcribe` / `agent.Embed`
+
+Two things they handle for you:
+
+1. **Model resolution.** Leave `Model` unset and the wrapper fills the agent's
+   capability-routed proxy model (Airlock picks the per-agent default for that
+   capability, then the system default). To pin a specific registered slot, set
+   `Model: agent.LLM(ctx, "summarize")` (or `ImageModel`/`SpeechModel`/…) — each
+   slug declared once with `RegisterModel`.
+2. **Tool reach.** Tools you pass in `stream.Input.Tools` — typically the same
+   `tool.Typed[...]` values you hand to `RegisterTool` — run under the call's
+   run, so they can touch agent facilities (storage, events, sub-prompts). Set
+   `MaxSteps > 1` to let the model call them in a loop.
+
+Calls are proxied through Airlock so token usage is tracked. The wrappers are
+always callable — from a cron, a webhook, or a detached goroutine with no run in
+ctx — because they resolve a run (dispatcher → route-lazy → background) themselves.
+
+**Plain text (default model):**
 
 ```go
 import (
-    "github.com/airlockrun/goai"
     "github.com/airlockrun/goai/message"
     "github.com/airlockrun/goai/stream"
 )
 
 func Summarize(ctx context.Context, in SummarizeIn) (SummarizeOut, error) {
     a := agentsdk.AgentFromContext(ctx)
-    model := a.LLM(ctx, "summarize")
 
-    result, err := goai.GenerateText(ctx, stream.Input{
-        Model: model,
+    result, err := a.GenerateText(ctx, stream.Input{
         Messages: []message.Message{
             message.NewSystemMessage("You are a concise summarizer. 2-3 sentences."),
             message.NewUserMessage("Summarize: " + in.Text),
@@ -867,6 +890,23 @@ func Summarize(ctx context.Context, in SummarizeIn) (SummarizeOut, error) {
     }
     return SummarizeOut{Summary: result.Text}, nil
 }
+```
+
+**With tools (the same tool.Tool you'd RegisterTool):**
+
+```go
+import "github.com/airlockrun/goai/tool"
+
+lookup := tool.Typed[LookupIn, LookupOut]("lookup").
+    Description("Look up a customer by id.").
+    Execute(doLookup).
+    Build()
+
+result, err := a.GenerateText(ctx, stream.Input{
+    MaxSteps: 4,
+    Tools:    tool.Set{lookup.Name: lookup},
+    Messages: []message.Message{message.NewUserMessage(question)},
+})
 ```
 
 **Structured output:**
@@ -884,10 +924,9 @@ type SentimentResult struct {
 
 func AnalyzeSentiment(ctx context.Context, in SentimentIn) (SentimentResult, error) {
     a := agentsdk.AgentFromContext(ctx)
-    model := a.LLM(ctx, "sentiment")
 
-    result, err := goai.GenerateText(ctx, stream.Input{
-        Model: model,
+    result, err := a.GenerateText(ctx, stream.Input{
+        Model: a.LLM(ctx, "sentiment"), // explicit slot
         Output: output.Object(output.ObjectOptions{
             Schema: schema.MustFromType(SentimentResult{}),
             Name:   "SentimentResult",

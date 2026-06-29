@@ -101,31 +101,33 @@ func buildDirectTools(agent *Agent, run *run, supportedModalities []string) tool
 // dispatched from inside the goja VM.
 func addRegisteredTools(ts tool.Set, agent *Agent, run *run) {
 	for name, rt := range agent.tools {
-		if !accessSatisfies(run.callerAccess, rt.Access) {
+		if !accessSatisfies(run.callerAccess, rt.access) {
 			continue
 		}
 		ts[name] = buildRegisteredTool(rt, run)
 	}
 }
 
+// wrapToolWithRun returns a copy of t whose Execute runs under the run-scoped
+// context (caller, cancellation, run value), so agent-facility tools — storage,
+// events, sub-prompts — resolve the agent and run. Provider/no-execute tools
+// pass through unchanged. Shared by registered tools and the agent's
+// GenerateText/StreamText sub-calls.
+func wrapToolWithRun(t tool.Tool, run *run) tool.Tool {
+	if t.Execute == nil {
+		return t
+	}
+	inner := t.Execute
+	t.Execute = func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
+		return inner(contextWithRun(run.checkedCtx(), run), input, opts)
+	}
+	return t
+}
+
 func buildRegisteredTool(rt *registeredTool, run *run) tool.Tool {
-	desc := rt.Description
-	if rt.LLMHint != "" {
-		desc = desc + " [" + rt.LLMHint + "]"
+	t := wrapToolWithRun(rt.Tool, run)
+	if rt.llmHint != "" {
+		t.Description = t.Description + " [" + rt.llmHint + "]"
 	}
-	def := tool.New(rt.Name).
-		Description(desc).
-		Schema(rt.InputSchema.MustJSON()).
-		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
-			ctx = contextWithRun(run.checkedCtx(), run)
-			out, err := rt.Execute(ctx, input)
-			if err != nil {
-				return tool.Result{}, err
-			}
-			return tool.Result{Output: out}, nil
-		})
-	for _, ex := range rt.InputExamples {
-		def = def.InputExample(ex)
-	}
-	return def.Build()
+	return t
 }

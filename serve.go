@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/airlockrun/goai/tool"
 	"go.uber.org/zap"
 )
 
@@ -212,7 +213,7 @@ func (a *Agent) handleFire(w http.ResponseWriter, r *http.Request) {
 // JSON-RPC error to the caller.
 func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	tool, ok := a.tools[name]
+	rt, ok := a.tools[name]
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -222,7 +223,7 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	if caller == "" {
 		caller = AccessUser
 	}
-	if !accessSatisfies(caller, tool.Access) {
+	if !accessSatisfies(caller, rt.access) {
 		http.Error(w, `{"error":"tool requires higher access"}`, http.StatusForbidden)
 		return
 	}
@@ -271,13 +272,13 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	out, err := tool.Execute(ctx, raw)
+	res, err := rt.Execute(ctx, raw, tool.CallOptions{})
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(out))
+	_, _ = w.Write([]byte(res.Output))
 }
 
 // wrapRoute converts a RouteHandlerFunc into http.HandlerFunc, installing

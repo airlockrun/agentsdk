@@ -24,11 +24,9 @@ type KickOut struct {
     Stdout   string `json:"stdout"`
 }
 
-agent.RegisterTool(&agentsdk.Tool[KickIn, KickOut]{
-    Name:        "kick_build",
-    Description: "Kick the CI build for a branch.",
-    Access:      agentsdk.AccessAdmin,
-    Execute: func(ctx context.Context, in KickIn) (KickOut, error) {
+agent.RegisterTool(tool.Typed[KickIn, KickOut]("kick_build").
+    Description("Kick the CI build for a branch.").
+    Execute(func(ctx context.Context, in KickIn) (KickOut, error) {
         res, err := ci.Run(ctx, agentsdk.ExecCommand{
             Command: "kick-build",
             Args:    []string{"--branch", in.Branch},
@@ -38,8 +36,8 @@ agent.RegisterTool(&agentsdk.Tool[KickIn, KickOut]{
             return KickOut{}, err
         }
         return KickOut{ExitCode: res.ExitCode, Stdout: string(res.Stdout)}, nil
-    },
-})
+    }).
+    Build(), agentsdk.AccessAdmin)
 ```
 
 **Configuration is operator-side.** The agent declares the slug,

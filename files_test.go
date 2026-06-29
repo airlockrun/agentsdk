@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/airlockrun/goai/tool"
 )
 
 func TestFilePathSchemaMarker(t *testing.T) {
@@ -17,13 +19,11 @@ func TestFilePathSchemaMarker(t *testing.T) {
 	}
 
 	a, _ := testAgent(t)
-	a.RegisterTool(&Tool[In, Out]{
-		Name:        "demo",
-		Description: "demo",
-		Execute: func(ctx context.Context, in In) (Out, error) {
+	a.RegisterTool(tool.Typed[In, Out]("demo").
+		Description("demo").
+		Execute(func(ctx context.Context, in In) (Out, error) {
 			return Out{Result: FilePath("ok")}, nil
-		},
-	})
+		}).Build(), AccessUser)
 
 	rt := a.tools["demo"]
 	if rt == nil {

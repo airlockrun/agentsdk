@@ -3,7 +3,6 @@ package agentsdk
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -371,15 +370,13 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 
 	tools := make([]prompt.ToolInfo, 0, len(a.tools))
 	for _, t := range a.tools {
-		inSchema, _ := json.Marshal(t.InputSchema)
-		outSchema, _ := json.Marshal(t.OutputSchema)
 		tools = append(tools, prompt.ToolInfo{
 			Name:         t.Name,
 			Description:  t.Description,
-			LLMHint:      t.LLMHint,
-			Access:       string(t.Access),
-			InputSchema:  inSchema,
-			OutputSchema: outSchema,
+			LLMHint:      t.llmHint,
+			Access:       string(t.access),
+			InputSchema:  t.InputSchema,
+			OutputSchema: t.OutputSchema,
 		})
 	}
 

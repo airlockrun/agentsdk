@@ -138,11 +138,9 @@ type CropOut struct {
     Result agentsdk.FilePath `json:"result"`
 }
 
-agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
-    Name:        "crop_image",
-    Description: "Crop a stored image and save the result.",
-    Access:      agentsdk.AccessUser,
-    Execute: func(ctx context.Context, in CropIn) (CropOut, error) {
+agent.RegisterTool(tool.Typed[CropIn, CropOut]("crop_image").
+    Description("Crop a stored image and save the result.").
+    Execute(func(ctx context.Context, in CropIn) (CropOut, error) {
         src := string(in.Image) // FilePath → string for the file API
         if err := agent.CheckFileAccess(ctx, src, agentsdk.OpRead); err != nil {
             return CropOut{}, err
@@ -159,8 +157,8 @@ agent.RegisterTool(&agentsdk.Tool[CropIn, CropOut]{
             return CropOut{}, err
         }
         return CropOut{Result: info.Path}, nil
-    },
-})
+    }).
+    Build(), agentsdk.AccessUser)
 ```
 
 `CheckFileAccess` returns `agentsdk.ErrNotFound` for both "denied" and "no
