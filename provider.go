@@ -7,6 +7,8 @@ import (
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/provider/proxy"
 	"github.com/airlockrun/goai/stream"
+	"github.com/airlockrun/goai/tool"
+	"github.com/airlockrun/sol/websearch"
 )
 
 // requireSlot returns the declared capability of the registered model slot
@@ -140,4 +142,24 @@ func (a *Agent) proxyTranscription(ctx context.Context, slug string, cap ModelCa
 		Capability: string(cap),
 		Headers:    runIDHeader(r.id),
 	})
+}
+
+// WebSearch runs a web search through the registered CapSearch slot `slug`. The
+// admin binds a search provider to the slot in the Airlock UI; an unbound slot
+// resolves to the agent's configured search provider, then the system default —
+// the same cascade as an unbound model slot. The call is proxied through Airlock
+// (no search API keys in the container). Panics if `slug` is empty or not
+// registered with RegisterModel as CapSearch.
+func (a *Agent) WebSearch(ctx context.Context, slug string, req websearch.Request) (*websearch.Response, error) {
+	a.requireSlot(slug, CapSearch)
+	return (&proxySearchClient{client: a.client}).Search(ctx, slug, req)
+}
+
+// WebSearchTool returns the web-search tool bound to the registered CapSearch
+// slot `slug`, ready to hand to goai.GenerateText as one of stream.Input.Tools.
+// Resolves the same way as WebSearch. Panics if `slug` is not registered as
+// CapSearch.
+func (a *Agent) WebSearchTool(ctx context.Context, slug string) tool.Tool {
+	a.requireSlot(slug, CapSearch)
+	return wrapWebSearch(a, a.runForCall(ctx), slug)
 }

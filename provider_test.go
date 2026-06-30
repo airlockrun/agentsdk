@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/airlockrun/goai/model"
+	"github.com/airlockrun/sol/websearch"
 )
 
 // withBoundRun returns a ctx that carries a run so agent model accessors
@@ -112,6 +113,76 @@ func TestAgentLLMPanicsOnCapabilityMismatch(t *testing.T) {
 		}
 	}()
 	a.LLM(ctx, "poster")
+}
+
+func TestAgentWebSearch(t *testing.T) {
+	a, mock := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "research", Capability: CapSearch, Description: "Web search"})
+	ctx := withBoundRun(a)
+
+	resp, err := a.WebSearch(ctx, "research", websearch.Request{Query: "golang", Count: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+
+	reqs := mock.RequestsByPath("/api/agent/search")
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 search request, got %d", len(reqs))
+	}
+	var body struct {
+		Slug       string `json:"slug"`
+		Capability string `json:"capability"`
+		Query      string `json:"Query"`
+	}
+	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Slug != "research" {
+		t.Errorf("slug = %q, want research", body.Slug)
+	}
+	if body.Capability != "search" {
+		t.Errorf("capability = %q, want search", body.Capability)
+	}
+	if body.Query != "golang" {
+		t.Errorf("query = %q, want golang", body.Query)
+	}
+}
+
+func TestAgentWebSearchPanicsOnUnregisteredSlug(t *testing.T) {
+	a, _ := testAgent(t)
+	ctx := withBoundRun(a)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on unregistered search slug")
+		}
+	}()
+	_, _ = a.WebSearch(ctx, "never-registered", websearch.Request{Query: "x"})
+}
+
+func TestAgentWebSearchPanicsOnCapabilityMismatch(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText})
+	ctx := withBoundRun(a)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic using a text slot as a search slot")
+		}
+	}()
+	_, _ = a.WebSearch(ctx, "summarize", websearch.Request{Query: "x"})
+}
+
+func TestAgentWebSearchTool(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterModel(&ModelSlot{Slug: "research", Capability: CapSearch})
+	ctx := withBoundRun(a)
+
+	tl := a.WebSearchTool(ctx, "research")
+	if tl.Name != "webSearch" {
+		t.Errorf("tool name = %q, want webSearch", tl.Name)
+	}
 }
 
 func TestAgentImageModel(t *testing.T) {

@@ -1028,7 +1028,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
 				count = int(call.Arguments[1].ToInteger())
 			}
-			resp, err := searchClient.Search(run.ctx, websearch.Request{
+			resp, err := searchClient.Search(run.ctx, "", websearch.Request{
 				Query: query,
 				Count: count,
 			})
