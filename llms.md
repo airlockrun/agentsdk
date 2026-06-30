@@ -754,6 +754,10 @@ model := agent.LLM(ctx, "summarize")
 - `CapSpeech` → `agent.SpeechModel(ctx, slug)` (TTS)
 - `CapTranscription` → `agent.TranscriptionModel(ctx, slug)` (STT)
 - `CapEmbedding` → `agent.EmbeddingModel(ctx, slug)`
+- `CapSearch` → `agent.WebSearch(ctx, slug, req)` / `agent.WebSearchTool(ctx, slug)` (web
+  search). The slot binds a *search provider* (+ optional model), not a chat model; the
+  admin picks it in the Models tab. An unbound slot falls back to the agent's configured
+  search provider, then the system default — same cascade as a model slot.
 
 The built-in VM media helpers (analyze_image, generate_image, etc.) resolve the
 system-default model by capability internally — that capability-routed path is
@@ -949,6 +953,46 @@ func AnalyzeSentiment(ctx context.Context, in SentimentIn) (SentimentResult, err
 structured output can be combined: the model calls tools first, then produces
 structured output on the final step. Other strategies: `output.Array`,
 `output.Choice`, `output.JSON`, `output.Text` (default).
+
+**Giving the model tools (incl. web search):** pass `tool.Tool` values in
+`stream.Input.Tools`. `agent.WebSearchTool(ctx, slug)` hands the model the
+framework's web-search tool, bound to a registered `CapSearch` slot — the same
+search that backs the `webSearch()` runtime binding, now usable from your own
+`GenerateText` loop. Register the slot once; the admin binds its provider.
+
+```go
+import (
+    "github.com/airlockrun/goai"
+    "github.com/airlockrun/goai/message"
+    "github.com/airlockrun/goai/stream"
+    "github.com/airlockrun/goai/tool"
+)
+
+// once, before Serve():
+agent.RegisterModel(&agentsdk.ModelSlot{
+    Slug: "research", Capability: agentsdk.CapSearch,
+    Description: "Web search for the weekly digest",
+})
+
+func Digest(ctx context.Context, in DigestIn) (DigestOut, error) {
+    a := agentsdk.AgentFromContext(ctx)
+    result, err := goai.GenerateText(ctx, stream.Input{
+        Model: a.LLM(ctx, "assistant"),
+        Tools: []tool.Tool{a.WebSearchTool(ctx, "research")},
+        Messages: []message.Message{
+            message.NewUserMessage("Summarize this week's Go news: " + in.Topic),
+        },
+    })
+    if err != nil {
+        return DigestOut{}, err
+    }
+    return DigestOut{Summary: result.Text}, nil
+}
+```
+
+To run a search directly (results in Go, no model loop), call
+`agent.WebSearch(ctx, "research", websearch.Request{Query: ..., Count: 5})` and
+read `resp.Results` / `resp.Synthesis`.
 
 ## Built-in VM bindings (don't shadow them)
 

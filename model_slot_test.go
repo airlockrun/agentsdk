@@ -41,6 +41,7 @@ func TestRegisterModel_SyncPayload(t *testing.T) {
 
 	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Short summaries"})
 	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage})
+	a.RegisterModel(&ModelSlot{Slug: "research", Capability: CapSearch, Description: "Web search"})
 
 	a.syncWithAirlock(context.Background())
 
@@ -53,13 +54,16 @@ func TestRegisterModel_SyncPayload(t *testing.T) {
 	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
 		t.Fatalf("decode sync body: %v", err)
 	}
-	if len(body.ModelSlots) != 2 {
-		t.Fatalf("ModelSlots len = %d, want 2", len(body.ModelSlots))
+	if len(body.ModelSlots) != 3 {
+		t.Fatalf("ModelSlots len = %d, want 3", len(body.ModelSlots))
 	}
 	if body.ModelSlots[0].Slug != "summarize" || body.ModelSlots[0].Capability != "text" {
 		t.Errorf("slot[0] = %+v", body.ModelSlots[0])
 	}
 	if body.ModelSlots[1].Slug != "poster" || body.ModelSlots[1].Capability != "image" {
 		t.Errorf("slot[1] = %+v", body.ModelSlots[1])
+	}
+	if body.ModelSlots[2].Slug != "research" || body.ModelSlots[2].Capability != "search" {
+		t.Errorf("slot[2] = %+v", body.ModelSlots[2])
 	}
 }

@@ -1197,6 +1197,7 @@ const (
 	CapImage         ModelCapability = "image"         // image generation
 	CapSpeech        ModelCapability = "speech"        // text-to-speech
 	CapTranscription ModelCapability = "transcription" // speech-to-text
+	CapSearch        ModelCapability = "search"        // web search provider (provider-bound, optional model)
 )
 
 // LLMProxyRequest is the body for POST /api/agent/llm/stream.

@@ -18,10 +18,16 @@ func TestProxySearchClient(t *testing.T) {
 			return
 		}
 
-		var req websearch.Request
+		var req SearchProxyRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.Query != "test query" {
 			t.Errorf("expected query 'test query', got %q", req.Query)
+		}
+		if req.Slug != "research" {
+			t.Errorf("expected slug 'research', got %q", req.Slug)
+		}
+		if req.Capability != "search" {
+			t.Errorf("expected capability 'search', got %q", req.Capability)
 		}
 
 		json.NewEncoder(w).Encode(websearch.Response{
@@ -41,7 +47,7 @@ func TestProxySearchClient(t *testing.T) {
 		},
 	}
 
-	resp, err := client.Search(t.Context(), websearch.Request{Query: "test query", Count: 5})
+	resp, err := client.Search(t.Context(), "research", websearch.Request{Query: "test query", Count: 5})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -71,7 +77,7 @@ func TestProxySearchClientNotConfigured(t *testing.T) {
 		},
 	}
 
-	_, err := client.Search(t.Context(), websearch.Request{Query: "test"})
+	_, err := client.Search(t.Context(), "", websearch.Request{Query: "test"})
 	if err == nil {
 		t.Fatal("expected error for unconfigured search, got nil")
 	}

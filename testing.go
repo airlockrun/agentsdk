@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+
+	"github.com/airlockrun/sol/websearch"
 )
 
 // MockRequest records a request made to the mock Airlock server.
@@ -137,6 +139,16 @@ func NewMockAirlock() (*MockAirlock, string) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"text":     "mock transcription",
 			"language": "en",
+		})
+	})
+
+	// Web search endpoint.
+	mux.HandleFunc("POST /api/agent/search", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(websearch.Response{
+			Results:  []websearch.Result{{Title: "Mock Result", URL: "https://example.com", Snippet: "mock"}},
+			Provider: "mock",
 		})
 	})
 
