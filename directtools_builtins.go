@@ -63,7 +63,7 @@ func addBuiltinTools(ts tool.Set, agent *Agent, run *run) {
 
 	if accessSatisfies(run.callerAccess, AccessUser) {
 		ts["httpRequest"] = wrapHTTPRequest(agent, run)
-		ts["webSearch"] = wrapWebSearch(agent, run, "")
+		ts["webSearch"] = wrapWebSearch(agent, run)
 		ts["attachToContext"] = wrapAttachToContext(agent, run)
 		ts["analyzeImage"] = wrapAnalyzeImage(agent, run)
 		ts["transcribeAudio"] = wrapTranscribeAudio(agent, run)
@@ -681,10 +681,10 @@ type webSearchInput struct {
 	Count int    `json:"count,omitempty" jsonschema:"description=Default 5."`
 }
 
-// wrapWebSearch builds the webSearch tool. slug names the registered CapSearch
-// model slot to resolve the provider against; "" (the auto-bind path) resolves
-// to the agent's configured search provider, then the system default.
-func wrapWebSearch(agent *Agent, run *run, slug string) tool.Tool {
+// wrapWebSearch builds the agent's built-in webSearch tool (the runtime chat
+// loop's, not an author API). It uses the agent's configured search provider
+// (slug "" → agent default → system default).
+func wrapWebSearch(agent *Agent, run *run) tool.Tool {
 	searchClient := &proxySearchClient{client: agent.client}
 	return tool.New("webSearch").
 		Description("Search the web. Returns provider results; shape mirrors the airlock /search proxy.").
@@ -698,7 +698,7 @@ func wrapWebSearch(agent *Agent, run *run, slug string) tool.Tool {
 			if count == 0 {
 				count = 5
 			}
-			resp, err := searchClient.Search(run.ctx, slug, websearch.Request{Query: in.Query, Count: count})
+			resp, err := searchClient.Search(run.ctx, "", websearch.Request{Query: in.Query, Count: count})
 			if err != nil {
 				return tool.Result{}, err
 			}

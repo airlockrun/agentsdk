@@ -174,17 +174,6 @@ func TestAgentWebSearchPanicsOnCapabilityMismatch(t *testing.T) {
 	_, _ = a.WebSearch(ctx, "summarize", websearch.Request{Query: "x"})
 }
 
-func TestAgentWebSearchTool(t *testing.T) {
-	a, _ := testAgent(t)
-	a.RegisterModel(&ModelSlot{Slug: "research", Capability: CapSearch})
-	ctx := withBoundRun(a)
-
-	tl := a.WebSearchTool(ctx, "research")
-	if tl.Name != "webSearch" {
-		t.Errorf("tool name = %q, want webSearch", tl.Name)
-	}
-}
-
 func TestAgentImageModel(t *testing.T) {
 	a, mock := testAgent(t)
 	a.RegisterModel(&ModelSlot{Slug: "render", Capability: CapImage, Description: "Generate chart"})

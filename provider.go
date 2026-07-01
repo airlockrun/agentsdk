@@ -7,7 +7,6 @@ import (
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/provider/proxy"
 	"github.com/airlockrun/goai/stream"
-	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/websearch"
 )
 
@@ -150,16 +149,13 @@ func (a *Agent) proxyTranscription(ctx context.Context, slug string, cap ModelCa
 // the same cascade as an unbound model slot. The call is proxied through Airlock
 // (no search API keys in the container). Panics if `slug` is empty or not
 // registered with RegisterModel as CapSearch.
+//
+// Prefer searching directly and feeding the results into GenerateText over
+// exposing search as an LLM tool: it's one round-trip instead of a model→
+// Airlock→model detour, and the search always runs (a tool the model may
+// decline to call doesn't). If you genuinely need the model to decide whether
+// to search mid-conversation, wrap this in your own RegisterTool.
 func (a *Agent) WebSearch(ctx context.Context, slug string, req websearch.Request) (*websearch.Response, error) {
 	a.requireSlot(slug, CapSearch)
 	return (&proxySearchClient{client: a.client}).Search(ctx, slug, req)
-}
-
-// WebSearchTool returns the web-search tool bound to the registered CapSearch
-// slot `slug`, ready to hand to goai.GenerateText as one of stream.Input.Tools.
-// Resolves the same way as WebSearch. Panics if `slug` is not registered as
-// CapSearch.
-func (a *Agent) WebSearchTool(ctx context.Context, slug string) tool.Tool {
-	a.requireSlot(slug, CapSearch)
-	return wrapWebSearch(a, a.runForCall(ctx), slug)
 }

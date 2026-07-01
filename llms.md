@@ -284,7 +284,9 @@ validates arguments before `Execute` runs.
 `RegisterTool(t tool.Tool, access agentsdk.Access, opts ...agentsdk.RegisterOption)`
 takes the access tier as a positional argument (empty defaults to `AccessUser`).
 The same `tool.Tool` value also works as a sub-call tool in
-`agent.GenerateText`/`agent.StreamText` — define a tool once, use it everywhere.
+`agent.GenerateText`/`agent.StreamText` — define a tool once, use it everywhere
+(but prefer computing in Go and feeding the result into the prompt over giving a
+sub-call model a tool — see "Calling LLMs from agent code").
 
 ```go
 import "github.com/airlockrun/goai/tool"
@@ -754,10 +756,10 @@ model := agent.LLM(ctx, "summarize")
 - `CapSpeech` → `agent.SpeechModel(ctx, slug)` (TTS)
 - `CapTranscription` → `agent.TranscriptionModel(ctx, slug)` (STT)
 - `CapEmbedding` → `agent.EmbeddingModel(ctx, slug)`
-- `CapSearch` → `agent.WebSearch(ctx, slug, req)` / `agent.WebSearchTool(ctx, slug)` (web
-  search). The slot binds a *search provider* (+ optional model), not a chat model; the
-  admin picks it in the Models tab. An unbound slot falls back to the agent's configured
-  search provider, then the system default — same cascade as a model slot.
+- `CapSearch` → `agent.WebSearch(ctx, slug, req)` (web search). The slot binds a *search
+  provider* (+ optional model), not a chat model; the admin picks it in the Models tab. An
+  unbound slot falls back to the agent's configured search provider, then the system
+  default — same cascade as a model slot.
 
 The built-in VM media helpers (analyze_image, generate_image, etc.) resolve the
 system-default model by capability internally — that capability-routed path is
@@ -913,6 +915,18 @@ result, err := a.GenerateText(ctx, stream.Input{
 })
 ```
 
+> **Prefer computing in Go over handing the model a tool.** A tool earns its
+> place only when the model must decide *whether* or *which* to call mid-
+> conversation. Otherwise it's the slower, costlier path: a model→Airlock→model
+> round-trip, it runs only if the model chooses to call it, and it spends tokens
+> on the call/result envelope. When your handler already knows it needs the data
+> — a lookup, a web search, a DB query — fetch it directly and put the result in
+> the prompt (see **Web search** below for the pattern). Even *branching* rarely
+> needs a tool — ask the model for a structured bool/enum decision and switch on
+> it in Go (see **Branch without a tool** below). Reserve `Tools` for genuinely
+> open-ended, multi-step loops where the model must pick and re-pick actions on
+> its own.
+
 **Structured output:**
 
 ```go
@@ -954,18 +968,45 @@ structured output can be combined: the model calls tools first, then produces
 structured output on the final step. Other strategies: `output.Array`,
 `output.Choice`, `output.JSON`, `output.Text` (default).
 
-**Giving the model tools (incl. web search):** pass `tool.Tool` values in
-`stream.Input.Tools`. `agent.WebSearchTool(ctx, slug)` hands the model the
-framework's web-search tool, bound to a registered `CapSearch` slot — the same
-search that backs the `webSearch()` runtime binding, now usable from your own
-`GenerateText` loop. Register the slot once; the admin binds its provider.
+**Branch without a tool.** Instead of a tool for "let the model decide what
+next", get a structured decision and branch in Go: control flow stays in your
+code, it's one decision round-trip instead of a tool loop, and the decision
+always happens.
+
+```go
+type Decision struct {
+    GoodForJog bool `json:"good_for_jog" description:"true if the weather suits a jog"`
+}
+
+// 1. Structured yes/no, fed data you gathered in Go (parse res.Output as above).
+res, _ := a.GenerateText(ctx, stream.Input{
+    Output:   output.Object(output.ObjectOptions{Schema: schema.MustFromType(Decision{}), Name: "Decision"}),
+    Messages: []message.Message{message.NewUserMessage("Good jogging weather?\n" + currentWeather())},
+})
+var d Decision
+raw, _ := json.Marshal(res.Output); _ = json.Unmarshal(raw, &d)
+
+// 2. Branch in Go; each arm is its own focused generation.
+prompt := "Recommend a few mellow, melancholy songs."
+if d.GoodForJog {
+    prompt = "Write a short, upbeat nudge to go for a jog."
+}
+out, _ := a.GenerateText(ctx, stream.Input{Messages: []message.Message{message.NewUserMessage(prompt)}})
+```
+
+**Web search — search, then feed the results into the prompt.** Run the search
+in Go with `agent.WebSearch(ctx, slug, req)` and put the results in the message.
+Prefer this over handing the model a search *tool*: it's a single round-trip
+(no model→Airlock→model detour), the search always runs (a tool the model may
+decline to call doesn't), and you control exactly what enters the context. If
+you really need the model to decide whether to search mid-conversation, wrap
+`agent.WebSearch` in your own `RegisterTool`.
 
 ```go
 import (
-    "github.com/airlockrun/goai"
     "github.com/airlockrun/goai/message"
     "github.com/airlockrun/goai/stream"
-    "github.com/airlockrun/goai/tool"
+    "github.com/airlockrun/sol/websearch"
 )
 
 // once, before Serve():
@@ -976,11 +1017,17 @@ agent.RegisterModel(&agentsdk.ModelSlot{
 
 func Digest(ctx context.Context, in DigestIn) (DigestOut, error) {
     a := agentsdk.AgentFromContext(ctx)
-    result, err := goai.GenerateText(ctx, stream.Input{
+
+    found, err := a.WebSearch(ctx, "research", websearch.Request{Query: in.Topic, Count: 5})
+    if err != nil {
+        return DigestOut{}, err
+    }
+
+    result, err := a.GenerateText(ctx, stream.Input{
         Model: a.LLM(ctx, "assistant"),
-        Tools: []tool.Tool{a.WebSearchTool(ctx, "research")},
         Messages: []message.Message{
-            message.NewUserMessage("Summarize this week's Go news: " + in.Topic),
+            message.NewUserMessage("Using these search results:\n" + found.Text() +
+                "\nWrite a short digest of: " + in.Topic),
         },
     })
     if err != nil {
@@ -990,9 +1037,9 @@ func Digest(ctx context.Context, in DigestIn) (DigestOut, error) {
 }
 ```
 
-To run a search directly (results in Go, no model loop), call
-`agent.WebSearch(ctx, "research", websearch.Request{Query: ..., Count: 5})` and
-read `resp.Results` / `resp.Synthesis`.
+`found.Text()` returns the provider's synthesized answer when available
+(Grok/Gemini/Kimi) and otherwise a bulleted list of the results — so you don't
+have to branch on `found.Synthesis` or format `found.Results` by hand.
 
 ## Built-in VM bindings (don't shadow them)
 
