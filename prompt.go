@@ -109,8 +109,23 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			}
 		}()
 
+		// Self-heal a stale config cache. Airlock stamps its current config
+		// fingerprint on every dispatch; a mismatch means a model-slot or slug
+		// change landed without firing /refresh. Resync before building the
+		// agent so THIS run already renders with fresh capabilities/modalities.
+		// Best-effort: a resync failure logs and proceeds on the cached config
+		// — a backstop that can't reach airlock must not kill the run.
+		if input.ExpectedSyncHash != "" && input.ExpectedSyncHash != agent.syncedStateHash() {
+			agentLogger().Warn("sync state drift — resyncing before run",
+				zap.String("expected", input.ExpectedSyncHash),
+				zap.String("cached", agent.syncedStateHash()))
+			if err := agent.syncWithAirlock(ctx); err != nil {
+				agentLogger().Error("self-heal resync failed; proceeding with cached config", zap.Error(err))
+			}
+		}
+
 		// Build Sol agent with agentsdk tools.
-		solAgent := newSolAgent(agent, run, input.SupportedModalities)
+		solAgent := newSolAgent(agent, run)
 
 		// Airlock composes access-filtered extras at run dispatch; append to
 		// the sync-cached base prompt so the LLM sees everything in one

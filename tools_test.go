@@ -41,7 +41,7 @@ func TestSystemPrompt_BuiltinsAndAdminGate(t *testing.T) {
 	a.RegisterTool(greetTool("check_gmail", "Search Gmail inbox.",
 		func(ctx context.Context, in greetIn) (greetOut, error) { return greetOut{}, nil }), AccessUser)
 
-	admin := a.renderSystemPrompt(AccessAdmin, nil, nil, promptEnv{Date: "2026-06-09"}, false)
+	admin := a.renderSystemPrompt(AccessAdmin, nil, promptEnv{Date: "2026-06-09"}, false)
 	if !strings.Contains(admin, "## Built-in functions") {
 		t.Fatal("admin prompt should include the Built-in functions section")
 	}
@@ -52,7 +52,7 @@ func TestSystemPrompt_BuiltinsAndAdminGate(t *testing.T) {
 		t.Fatal("admin prompt should advertise queryDB")
 	}
 
-	user := a.renderSystemPrompt(AccessUser, nil, nil, promptEnv{Date: "2026-06-09"}, false)
+	user := a.renderSystemPrompt(AccessUser, nil, promptEnv{Date: "2026-06-09"}, false)
 	if strings.Contains(user, "queryDB(sql") || strings.Contains(user, "execDB(sql") {
 		t.Fatal("AccessUser prompt must not advertise queryDB/execDB")
 	}
@@ -68,7 +68,7 @@ func TestSystemPrompt_TopicIncludesLLMHint(t *testing.T) {
 		LLMHint:     "subscribe only when the user explicitly opts in",
 	})
 
-	prompt := a.renderSystemPrompt(AccessUser, nil, nil, promptEnv{Date: "2026-06-09"}, false)
+	prompt := a.renderSystemPrompt(AccessUser, nil, promptEnv{Date: "2026-06-09"}, false)
 	if !strings.Contains(prompt, "topic_build_done") {
 		t.Errorf("expected topic binding in inventory; got:\n%s", prompt)
 	}
@@ -128,7 +128,7 @@ func TestSystemPrompt_DirectoryIncludesLLMHint(t *testing.T) {
 		LLMHint:     "internal cache; do not list or modify",
 	})
 
-	prompt := a.renderSystemPrompt(AccessAdmin, nil, nil, promptEnv{Date: "2026-06-09"}, false)
+	prompt := a.renderSystemPrompt(AccessAdmin, nil, promptEnv{Date: "2026-06-09"}, false)
 	if !strings.Contains(prompt, "cache/") {
 		t.Errorf("expected cache path in inventory; got:\n%s", prompt)
 	}
@@ -153,5 +153,33 @@ func TestRegisteredToolsRenderToDecls(t *testing.T) {
 	got := renderRegisteredTools(tools)
 	if !strings.Contains(got, "declare function greet(args: {") {
 		t.Fatalf("declaration not rendered:\n%s", got)
+	}
+}
+
+func TestCheckAttachModality(t *testing.T) {
+	cases := []struct {
+		name       string
+		modalities []string
+		mime       string
+		ok         bool
+	}{
+		{"empty rejects image (fail closed)", nil, "image/png", false},
+		{"empty rejects pdf", []string{}, "application/pdf", false},
+		{"text-only rejects image", []string{"text"}, "image/jpeg", false},
+		{"image allows image", []string{"text", "image"}, "image/jpeg", true},
+		{"image rejects pdf", []string{"image"}, "application/pdf", false},
+		{"pdf allows pdf", []string{"image", "pdf"}, "application/pdf", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &run{supportedModalities: tc.modalities}
+			err := r.checkAttachModality(tc.mime)
+			if tc.ok && err != nil {
+				t.Errorf("expected accept, got error: %v", err)
+			}
+			if !tc.ok && err == nil {
+				t.Error("expected rejection, got nil")
+			}
+		})
 	}
 }

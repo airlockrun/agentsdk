@@ -28,10 +28,10 @@ type runJSInput struct {
 // each capability is its own typed LLM tool and run_js is absent —
 // narrower attack surface and predictable single-call exchanges. See
 // buildDirectTools in directtools.go for the direct-tools shape.
-func buildSolTools(agent *Agent, run *run, supportedModalities []string) tool.Set {
+func buildSolTools(agent *Agent, run *run) tool.Set {
 	var ts tool.Set
 	if run.directTools {
-		ts = buildDirectTools(agent, run, supportedModalities)
+		ts = buildDirectTools(agent, run)
 	} else {
 		ts = tool.Set{
 			"run_js": buildRunJSTool(agent, run),
@@ -328,6 +328,22 @@ func mimeMatchesModalities(mimeType string, modalities []string) bool {
 		}
 	}
 	return false
+}
+
+// checkAttachModality reports whether the current model can accept a file of
+// mimeType as a visual/context attachment. It fails CLOSED: an empty modality
+// list (a text-only model, or one whose modalities weren't synced) rejects all
+// attachments — attaching a file the model can't consume only yields a provider
+// error downstream. Callers guard attachToContext with this.
+func (r *run) checkAttachModality(mimeType string) error {
+	if mimeMatchesModalities(mimeType, r.supportedModalities) {
+		return nil
+	}
+	if len(r.supportedModalities) == 0 {
+		return fmt.Errorf("the current model does not accept file attachments (%s). Use fileRead(path) for text-based files", mimeType)
+	}
+	return fmt.Errorf("%s files are not supported by the current model. Supported types: %s. Use fileRead(path) for text-based files",
+		mimeType, strings.Join(r.supportedModalities, ", "))
 }
 
 const (

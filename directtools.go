@@ -77,7 +77,7 @@ func directToolRaw[I any](name, desc string, fn func(context.Context, I) (string
 //
 // promptAgent is added by buildSolTools after the direct-tools set is
 // assembled so the open-ended delegation primitive lives in both modes.
-func buildDirectTools(agent *Agent, run *run, supportedModalities []string) tool.Set {
+func buildDirectTools(agent *Agent, run *run) tool.Set {
 	ts := tool.Set{}
 	// Order mirrors newVM (vm.go): registered tools first, then built-ins,
 	// then namespaced bindings. Last write wins on name collisions — so an
