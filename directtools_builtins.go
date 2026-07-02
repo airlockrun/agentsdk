@@ -733,14 +733,12 @@ func wrapAttachToContext(agent *Agent, run *run) tool.Tool {
 			if err != nil {
 				return tool.Result{}, fmt.Errorf("file not found: %w", err)
 			}
-			if len(run.supportedModalities) > 0 && !mimeMatchesModalities(info.ContentType, run.supportedModalities) {
-				return tool.Result{}, fmt.Errorf(
-					"%s files are not supported by the current model. Supported types: %s. Use fileRead(path) for text-based files",
-					info.ContentType, strings.Join(run.supportedModalities, ", "))
+			if err := run.checkAttachModality(info.ContentType); err != nil {
+				return tool.Result{}, err
 			}
 			run.mu.Lock()
 			run.pendingAttachments = append(run.pendingAttachments, tool.Attachment{
-				Data:     "s3ref:" + in.Path,
+				Data:     s3RefSentinel + in.Path,
 				MimeType: info.ContentType,
 				Filename: pathBase(in.Path),
 			})

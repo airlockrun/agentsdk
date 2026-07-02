@@ -14,6 +14,12 @@ import (
 	"github.com/airlockrun/goai/stream"
 )
 
+// s3RefSentinel marks a file part's Data as an S3 reference (the agent-facing
+// key follows) rather than base64 or a URL. Airlock's attachref resolver
+// rewrites it into a presigned URL (default) or base64 (inline mode) before the
+// provider call — must match airlock/attachref.Sentinel.
+const s3RefSentinel = "s3ref:"
+
 // mediaResult is the LLM-facing return value for generateImage / speak.
 // Path is the canonical storage path the LLM uses for downstream
 // output / attachToContext / fileReadBytes calls. The on-wire shape (see
@@ -78,14 +84,18 @@ func (r *run) transcribeAudio(ctx context.Context, path string, opts model.Trans
 //
 // `question` defaults to "Describe this image." when empty.
 func (r *run) analyzeImage(ctx context.Context, path, question string) (string, error) {
-	imgBytes, err := r.agent.ReadFile(ctx, path)
+	// Reference the stored object via the attachref sentinel rather than reading
+	// + base64-inlining the bytes here. Airlock's ResolveForLLM (run on every
+	// proxied call) rewrites the sentinel into a presigned URL by default — or
+	// base64 under FORCE_INLINE_ATTACHMENTS — the same path a chat attachment
+	// takes. Cheaper (no full read in the agent) and URL-cache-stable per turn.
+	info, err := r.agent.StatFile(ctx, path)
 	if err != nil {
 		return "", fmt.Errorf("load %s: %w", path, err)
 	}
-
-	mimeType := "image/png"
-	if info, err := r.agent.StatFile(ctx, path); err == nil && info.ContentType != "" {
-		mimeType = info.ContentType
+	mimeType := info.ContentType
+	if mimeType == "" {
+		mimeType = "image/png"
 	}
 
 	if question == "" {
@@ -99,7 +109,7 @@ func (r *run) analyzeImage(ctx context.Context, path, question string) (string, 
 			message.NewUserMessageWithParts(
 				goai.TextPart{Text: question},
 				message.FilePart{
-					Data:     message.FileDataBytes{Data: base64.StdEncoding.EncodeToString(imgBytes)},
+					Data:     message.FileDataBytes{Data: s3RefSentinel + path},
 					MimeType: mimeType,
 				},
 			),

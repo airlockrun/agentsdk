@@ -1069,10 +1069,8 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				panic(vm.NewGoError(fmt.Errorf("attachToContext: file not found: %w", err)))
 			}
 
-			if len(run.supportedModalities) > 0 && !mimeMatchesModalities(info.ContentType, run.supportedModalities) {
-				panic(vm.NewGoError(fmt.Errorf(
-					"attachToContext: %s files are not supported by the current model. Supported types: %s. Use fileRead(path) for text-based files",
-					info.ContentType, strings.Join(run.supportedModalities, ", "))))
+			if err := run.checkAttachModality(info.ContentType); err != nil {
+				panic(vm.NewGoError(fmt.Errorf("attachToContext: %w", err)))
 			}
 
 			// Emit a s3ref: sentinel rather than loading + base64-encoding here.
@@ -1082,7 +1080,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			// the storage path so the resolver can presign the right S3 object.
 			run.mu.Lock()
 			run.pendingAttachments = append(run.pendingAttachments, tool.Attachment{
-				Data:     "s3ref:" + path,
+				Data:     s3RefSentinel + path,
 				MimeType: info.ContentType,
 				Filename: pathBase(path),
 			})

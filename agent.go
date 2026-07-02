@@ -65,6 +65,7 @@ type Agent struct {
 	mcpAuthStatus     []MCPAuthStatus            // per-server auth status (for prompt status lines)
 	mcpSchemas        map[string][]MCPToolSchema // server slug → discovered tools
 	publicStorageBase string                     // base URL for AccessPublic zone reads (subdomain or host-level fallback)
+	syncStateHash     string                     // airlock's config fingerprint at last sync; drift vs a dispatch's ExpectedSyncHash triggers a self-heal resync
 
 	// Deps holds application-level dependencies (connection handles, MCP handles, etc.).
 	// The builder defines their own typed struct and assigns it here.
@@ -284,14 +285,14 @@ type promptEnv struct {
 	Conversation string
 }
 
-func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, runModalities []string, env promptEnv, directTools bool) string {
+func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, env promptEnv, directTools bool) string {
 	switch caller {
 	case AccessAdmin, AccessUser, AccessPublic, "":
 		// ok
 	default:
 		panic("agentsdk: renderSystemPrompt: unknown caller access " + string(caller))
 	}
-	data := a.buildPromptData(caller, visibleSiblings, runModalities)
+	data := a.buildPromptData(caller, visibleSiblings)
 	data.Date = env.Date
 	data.Platform = env.Platform
 	data.UserName = env.UserName
@@ -347,7 +348,17 @@ func (a *Agent) applySyncResponse(resp SyncResponse) {
 	a.mcpAuthStatus = resp.MCPAuthStatus
 	a.mcpSchemas = resp.MCPSchemas
 	a.publicStorageBase = resp.PublicStorageBase
+	a.syncStateHash = resp.SyncStateHash
 	a.syncMu.Unlock()
+}
+
+// syncedStateHash returns airlock's config fingerprint as of the last
+// applied sync. A dispatch whose ExpectedSyncHash differs means the agent's
+// cached PromptData is stale; the /prompt path resyncs to catch up.
+func (a *Agent) syncedStateHash() string {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	return a.syncStateHash
 }
 
 // buildPromptData assembles prompt.AgentData from the agent's
@@ -358,7 +369,7 @@ func (a *Agent) applySyncResponse(resp SyncResponse) {
 // every tool/conn/etc. registered with the agent. Sibling visibility
 // is per-user (not per-tier) so we intersect PromptData.Siblings
 // with visibleSiblings here.
-func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runModalities []string) prompt.AgentData {
+func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prompt.AgentData {
 	a.syncMu.RLock()
 	pd := a.promptData
 	auth := append([]MCPAuthStatus(nil), a.mcpAuthStatus...)
@@ -505,14 +516,7 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID, runM
 		}
 	}
 
-	// Per-run modalities override the sync-time list when supplied
-	// (web /prompt fills them from the actual model that will serve
-	// THIS turn). Bridge/webhook/cron paths leave runModalities
-	// empty and fall back to the sync default.
 	modalities := pd.SupportedModalities
-	if len(runModalities) > 0 {
-		modalities = runModalities
-	}
 
 	return prompt.AgentData{
 		AgentDashboardURL: pd.AgentDashboardURL,

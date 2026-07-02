@@ -35,7 +35,7 @@ func TestDirectTools_RegisteredToolSurface_AccessGated(t *testing.T) {
 			run := newRun(a, "rd-"+string(c.access), "", "", context.Background())
 			run.directTools = true
 			run.callerAccess = c.access
-			ts := buildSolTools(a, run, nil)
+			ts := buildSolTools(a, run)
 			for _, name := range c.mustHave {
 				if _, ok := ts[name]; !ok {
 					t.Errorf("%s tier: missing tool %q (have %v)", c.access, name, keys(ts))
@@ -57,7 +57,7 @@ func TestDirectTools_RunJSAbsent(t *testing.T) {
 	run := newRun(a, "rd-norjs", "", "", context.Background())
 	run.directTools = true
 	run.callerAccess = AccessPublic
-	ts := buildSolTools(a, run, nil)
+	ts := buildSolTools(a, run)
 	if _, ok := ts["run_js"]; ok {
 		t.Fatalf("direct mode must not expose run_js; got tools: %v", keys(ts))
 	}
@@ -70,7 +70,7 @@ func TestDirectTools_JSPathUnchanged(t *testing.T) {
 	a, _ := testAgent(t)
 	run := newRun(a, "rd-js", "", "", context.Background())
 	run.callerAccess = AccessUser
-	ts := buildSolTools(a, run, nil)
+	ts := buildSolTools(a, run)
 	if _, ok := ts["run_js"]; !ok {
 		t.Fatalf("JS path must expose run_js; got tools: %v", keys(ts))
 	}
@@ -92,7 +92,7 @@ func TestDirectTools_RegisteredToolExecutes(t *testing.T) {
 	run.directTools = true
 	run.callerAccess = AccessPublic
 
-	ts := buildSolTools(a, run, nil)
+	ts := buildSolTools(a, run)
 	t1, ok := ts["echo_name"]
 	if !ok {
 		t.Fatalf("echo_name should be exposed; got %v", keys(ts))
@@ -121,7 +121,7 @@ func TestDirectTools_BuiltinShadowsRegistered(t *testing.T) {
 	run := newRun(a, "rd-shadow", "", "", context.Background())
 	run.directTools = true
 	run.callerAccess = AccessUser
-	ts := buildSolTools(a, run, nil)
+	ts := buildSolTools(a, run)
 	got, ok := ts["fileRead"]
 	if !ok {
 		t.Fatalf("fileRead should be present in tool set")

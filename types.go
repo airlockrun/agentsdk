@@ -370,19 +370,26 @@ func IsAuthRequired(err error) (*AuthRequiredError, bool) {
 
 // PromptInput is the request body for POST /prompt.
 type PromptInput struct {
-	Messages            []message.Message `json:"messages"`
-	Message             string            `json:"message,omitempty"` // New user message text (used with SessionStore)
-	ConversationID      string            `json:"conversationId,omitempty"`
-	ProviderID          string            `json:"providerId,omitempty"`
-	ModelID             string            `json:"modelId,omitempty"`
-	Temperature         *float64          `json:"temperature,omitempty"`
-	MaxOutputTokens     *int              `json:"maxOutputTokens,omitempty"`
-	ProviderOptions     json.RawMessage   `json:"providerOptions,omitempty"`
-	Files               []FileInfo        `json:"files,omitempty"`
-	ResumeRunID         string            `json:"resumeRunId,omitempty"`
-	Approved            *bool             `json:"approved,omitempty"`
-	SupportedModalities []string          `json:"supportedModalities,omitempty"` // e.g. ["text", "image", "pdf", "audio", "video"]
-	Source              string            `json:"source,omitempty"`              // "user" (default), "system" (injected by Airlock)
+	Messages        []message.Message `json:"messages"`
+	Message         string            `json:"message,omitempty"` // New user message text (used with SessionStore)
+	ConversationID  string            `json:"conversationId,omitempty"`
+	ProviderID      string            `json:"providerId,omitempty"`
+	ModelID         string            `json:"modelId,omitempty"`
+	Temperature     *float64          `json:"temperature,omitempty"`
+	MaxOutputTokens *int              `json:"maxOutputTokens,omitempty"`
+	ProviderOptions json.RawMessage   `json:"providerOptions,omitempty"`
+	Files           []FileInfo        `json:"files,omitempty"`
+	ResumeRunID     string            `json:"resumeRunId,omitempty"`
+	Approved        *bool             `json:"approved,omitempty"`
+	Source          string            `json:"source,omitempty"` // "user" (default), "system" (injected by Airlock)
+
+	// ExpectedSyncHash is airlock's current SyncResponse.SyncStateHash for
+	// this agent, stamped on every dispatch. When it differs from the value
+	// the agent cached at its last sync, the agent's config cache is stale
+	// (a model-slot/slug change that didn't fire /refresh) — the agent logs
+	// a warning and resyncs before running so this turn already sees fresh
+	// capabilities/modalities. Empty from an older airlock (check skipped).
+	ExpectedSyncHash string `json:"expectedSyncHash,omitempty"`
 
 	// Instructions is an access-filtered concatenation of the agent's
 	// registered AddInstruction fragments, composed by Airlock at run
@@ -986,6 +993,15 @@ type SyncResponse struct {
 	// dirs serve unauthenticated, user/admin dirs require subdomain login
 	// (redirect-on-missing-cookie).
 	PublicStorageBase string `json:"publicStorageBase,omitempty"`
+
+	// SyncStateHash fingerprints the airlock-authoritative agent config
+	// that feeds this PromptData (model slots + slug). Airlock stamps the
+	// same hash onto every dispatched PromptInput.ExpectedSyncHash; the
+	// agent caches this value and self-heals (resyncs) when a dispatch
+	// arrives carrying a different one — catching a config change that
+	// didn't fire an explicit /refresh. Opaque to the agent. Empty from an
+	// older airlock, in which case the agent skips the drift check.
+	SyncStateHash string `json:"syncStateHash,omitempty"`
 }
 
 // PromptData is the platform-supplied slice of the prompt-render
@@ -1016,13 +1032,13 @@ type PromptData struct {
 	// runtime (e.g. analyzeImage on an agent with no vision model).
 	Capabilities Capabilities `json:"capabilities,omitempty"`
 
-	// SupportedModalities is the chat model's declared input
-	// modality list ("text", "image", "pdf", "audio", "video") at
-	// sync time. PromptInput.SupportedModalities overrides per-run
-	// when set (the run-time value reflects the actual model that
-	// will serve THIS turn, which can differ from sync if the agent
-	// uses run.LLM(slug=...) elsewhere). The prompt template uses
-	// whichever the agent has on hand.
+	// SupportedModalities is the exec model's declared input modality
+	// list ("text", "image", "pdf", "audio", "video"). Airlock resolves
+	// it from the agent's configured model and keeps it current: an
+	// immediate /refresh when the model changes, plus a dispatch-time
+	// hash check that resyncs a stale cache before the run. Every run
+	// path (web, bridge, webhook, cron, A2A) renders from this one value
+	// — both the prompt template and the attachToContext modality guard.
 	SupportedModalities []string `json:"supportedModalities,omitempty"`
 }
 
