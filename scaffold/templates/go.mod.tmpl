@@ -1,0 +1,10 @@
+module {{.Module}}
+
+go {{.GoVersion}}
+
+require (
+	github.com/a-h/templ {{.TemplVersion}}
+	github.com/airlockrun/agentsdk {{.AgentSDKVersion}}
+)
+
+tool github.com/a-h/templ/cmd/templ
