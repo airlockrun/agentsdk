@@ -359,12 +359,15 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		vm.Set("exec_"+slug, obj)
 	}
 
-	// queryDB / execDB are admin-only. AccessUser / AccessPublic callers
+	// queryDB is admin-only and read-only. AccessUser / AccessPublic callers
 	// shouldn't be able to coax the LLM into running arbitrary SQL — for
 	// user-facing data access, builders register typed tools that wrap
 	// queryDB internally and enforce row-level filtering. Gate is bind-time
-	// so the bindings simply don't exist for non-admin runs and can't be
-	// reached even via prompt injection.
+	// so the binding simply doesn't exist for non-admin runs and can't be
+	// reached even via prompt injection. There is no write binding: mutations
+	// go through typed tools a builder writes deliberately, never an
+	// LLM-driven arbitrary-SQL escape hatch. queryReadOnly runs the statement
+	// in a read-only transaction, so any write inside queryDB is rejected.
 	if accessSatisfies(run.callerAccess, AccessAdmin) {
 		vm.Set("queryDB", func(call goja.FunctionCall) goja.Value {
 			db := agent.DB()
@@ -376,36 +379,11 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			for i := 1; i < len(call.Arguments); i++ {
 				params[i-1] = call.Arguments[i].Export()
 			}
-			rows, err := db.QueryContext(run.ctx, query, params...)
-			if err != nil {
-				panic(vm.NewGoError(err))
-			}
-			defer rows.Close()
-			result, err := rowsToMaps(rows)
+			result, err := queryReadOnly(run.ctx, db, query, params...)
 			if err != nil {
 				panic(vm.NewGoError(err))
 			}
 			return vm.ToValue(result)
-		})
-
-		vm.Set("execDB", func(call goja.FunctionCall) goja.Value {
-			db := agent.DB()
-			if db == nil {
-				panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
-			}
-			query := call.Argument(0).String()
-			params := make([]any, len(call.Arguments)-1)
-			for i := 1; i < len(call.Arguments); i++ {
-				params[i-1] = call.Arguments[i].Export()
-			}
-			res, err := db.ExecContext(run.ctx, query, params...)
-			if err != nil {
-				panic(vm.NewGoError(err))
-			}
-			affected, _ := res.RowsAffected()
-			obj := vm.NewObject()
-			obj.Set("rowsAffected", affected)
-			return vm.ToValue(obj)
 		})
 	}
 
