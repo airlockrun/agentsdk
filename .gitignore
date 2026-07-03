@@ -1,3 +1,6 @@
 # Local environment / secrets — never commit
 .env
 .env.*
+
+# CLI binary left by `go build ./cmd/create-agent` at the repo root
+/create-agent
