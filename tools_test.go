@@ -53,8 +53,8 @@ func TestSystemPrompt_BuiltinsAndAdminGate(t *testing.T) {
 	}
 
 	user := a.renderSystemPrompt(AccessUser, nil, promptEnv{Date: "2026-06-09"}, false)
-	if strings.Contains(user, "queryDB(sql") || strings.Contains(user, "execDB(sql") {
-		t.Fatal("AccessUser prompt must not advertise queryDB/execDB")
+	if strings.Contains(user, "queryDB(sql") {
+		t.Fatal("AccessUser prompt must not advertise queryDB")
 	}
 }
 

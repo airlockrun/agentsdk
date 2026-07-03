@@ -221,8 +221,7 @@ These are available as JS globals inside `run_js`. Tools registered via `agent.R
 {{- if .CallerAccess.IsAdmin }}
 
 **Admin only:**
-- `queryDB(sql, ...params)` → `[{...}, ...]` — read-only SQL against the agent's Postgres schema.
-- `execDB(sql, ...params)` → `{rowsAffected: N}` — write SQL (INSERT/UPDATE/DELETE) against the agent's Postgres schema.
+- `queryDB(sql, ...params)` → `[{...}, ...]` — read-only SQL against the agent's Postgres schema. Runs in a read-only transaction: writes (INSERT/UPDATE/DELETE/DDL) are rejected. To persist data, register a typed tool that performs the write in your Go code — there is no arbitrary-write binding.
 - `requestUpgrade(description)` → string — ask Airlock to regenerate this agent with new capabilities. The current agent keeps running until the new build finishes; `description` specifies what to add or change.
 {{- end }}
 

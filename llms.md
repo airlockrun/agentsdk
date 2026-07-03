@@ -1080,7 +1080,7 @@ matching capability:
 | `attachToContext` | attach a file to the conversation | authed |
 | `httpRequest` `webSearch` | web | authed |
 | `log` `console.log/warn/error` | logging | all |
-| `queryDB` `execDB` | raw SQL | admin |
+| `queryDB` | read-only SQL (runs in a read-only tx; writes rejected) | admin |
 | `requestUpgrade` | self-rebuild | admin |
 
 **Public-caller surface is much narrower.** A run triggered by an

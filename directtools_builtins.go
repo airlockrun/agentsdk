@@ -74,7 +74,6 @@ func addBuiltinTools(ts tool.Set, agent *Agent, run *run) {
 
 	if accessSatisfies(run.callerAccess, AccessAdmin) {
 		ts["queryDB"] = wrapQueryDB(agent, run)
-		ts["execDB"] = wrapExecDB(agent, run)
 		ts["requestUpgrade"] = wrapRequestUpgrade(agent, run)
 	}
 }
@@ -922,7 +921,7 @@ func wrapEmbed(agent *Agent, run *run) tool.Tool {
 		}).Build()
 }
 
-// --- admin (queryDB / execDB / requestUpgrade) ---
+// --- admin (queryDB / requestUpgrade) ---
 
 type queryDBInput struct {
 	SQL    string `json:"sql"`
@@ -931,7 +930,7 @@ type queryDBInput struct {
 
 func wrapQueryDB(agent *Agent, run *run) tool.Tool {
 	return tool.New("queryDB").
-		Description("Run a read-only SQL query against the agent's database. Returns an array of row objects.").
+		Description("Run a read-only SQL query against the agent's database. Runs inside a read-only transaction, so writes (INSERT/UPDATE/DELETE/DDL) are rejected. Returns an array of row objects.").
 		SchemaFromStruct(queryDBInput{}).
 		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
 			var in queryDBInput
@@ -942,47 +941,11 @@ func wrapQueryDB(agent *Agent, run *run) tool.Tool {
 			if db == nil {
 				return tool.Result{}, errors.New("agent database not configured (AIRLOCK_DB_URL not set)")
 			}
-			rows, err := db.QueryContext(run.ctx, in.SQL, in.Params...)
-			if err != nil {
-				return tool.Result{}, err
-			}
-			defer rows.Close()
-			res, err := rowsToMaps(rows)
+			res, err := queryReadOnly(run.ctx, db, in.SQL, in.Params...)
 			if err != nil {
 				return tool.Result{}, err
 			}
 			return jsonResult(res)
-		}).Build()
-}
-
-type execDBInput struct {
-	SQL    string `json:"sql"`
-	Params []any  `json:"params,omitempty"`
-}
-
-type execDBOutput struct {
-	RowsAffected int64 `json:"rowsAffected"`
-}
-
-func wrapExecDB(agent *Agent, run *run) tool.Tool {
-	return tool.New("execDB").
-		Description("Execute a SQL statement (DDL/DML) against the agent's database. Returns {rowsAffected}.").
-		SchemaFromStruct(execDBInput{}).
-		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
-			var in execDBInput
-			if err := json.Unmarshal(input, &in); err != nil {
-				return tool.Result{}, err
-			}
-			db := agent.DB()
-			if db == nil {
-				return tool.Result{}, errors.New("agent database not configured (AIRLOCK_DB_URL not set)")
-			}
-			res, err := db.ExecContext(run.ctx, in.SQL, in.Params...)
-			if err != nil {
-				return tool.Result{}, err
-			}
-			affected, _ := res.RowsAffected()
-			return jsonResult(execDBOutput{RowsAffected: affected})
 		}).Build()
 }
 

@@ -60,6 +60,27 @@ func (a *AgentDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*AgentTx, e
 // AgentDB methods so future framework instrumentation applies to your code.
 func (a *AgentDB) Underlying() *sql.DB { return a.db }
 
+// queryReadOnly runs query inside a read-only transaction that is always
+// rolled back, then materializes the rows. This is the single enforcement
+// point for the admin queryDB binding/tool: Postgres refuses every write
+// (INSERT/UPDATE/DELETE/DDL/nextval/...) inside a READ ONLY transaction, so a
+// mutating statement fails loudly rather than persisting, and the unconditional
+// rollback guarantees nothing the query touched survives even if a future
+// driver stopped honoring the flag. No commit path exists here by design.
+func queryReadOnly(ctx context.Context, db *AgentDB, query string, params ...any) ([]map[string]any, error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return rowsToMaps(rows)
+}
+
 // AgentTx wraps a *sql.Tx with the same shape as AgentDB so sqlc's
 // q.WithTx(tx) accepts it transparently.
 type AgentTx struct {
