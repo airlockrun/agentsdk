@@ -3,10 +3,14 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -158,6 +162,41 @@ func TestParseDeployFlags(t *testing.T) {
 	}
 	if _, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--agent", "todo"}); err == nil {
 		t.Fatal("--create with --agent returned nil error")
+	}
+}
+
+func TestResolveDeployTargetFailsOnBindingSlugMismatch(t *testing.T) {
+	const id = "11111111-1111-1111-1111-111111111111"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/"+id {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"agent":{"id":"` + id + `","slug":"real-slug"}}`))
+	}))
+	defer srv.Close()
+
+	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "", agentBinding{AgentID: id, Slug: "stale-slug"})
+	if err == nil || !strings.Contains(err.Error(), "stale-slug") || !strings.Contains(err.Error(), "real-slug") {
+		t.Fatalf("resolveDeployTarget error = %v", err)
+	}
+}
+
+func TestResolveDeployTargetFailsOnBindingIDMismatch(t *testing.T) {
+	const boundID = "11111111-1111-1111-1111-111111111111"
+	const realID = "22222222-2222-2222-2222-222222222222"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"agents":[{"id":"` + realID + `","slug":"todo"}]}`))
+	}))
+	defer srv.Close()
+
+	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "todo", agentBinding{AgentID: boundID, Slug: "todo"})
+	if err == nil || !strings.Contains(err.Error(), boundID) || !strings.Contains(err.Error(), realID) {
+		t.Fatalf("resolveDeployTarget error = %v", err)
 	}
 }
 
