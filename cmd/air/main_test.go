@@ -200,6 +200,13 @@ func TestResolveDeployTargetFailsOnBindingIDMismatch(t *testing.T) {
 	}
 }
 
+func TestResolveDeployTargetRejectsSlugOnlyBinding(t *testing.T) {
+	_, err := resolveDeployTarget(context.Background(), "https://airlock.example.com", "tok", "", agentBinding{Slug: "todo"})
+	if err == nil || !strings.Contains(err.Error(), "no agent_id") || !strings.Contains(err.Error(), "--agent todo") {
+		t.Fatalf("resolveDeployTarget error = %v", err)
+	}
+}
+
 func TestWriteSourceArchiveSkipsLocalState(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
