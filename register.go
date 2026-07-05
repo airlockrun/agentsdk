@@ -246,7 +246,7 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 		compiled = re
 	}
 	a.envVars[e.Slug] = e
-	return &EnvVarHandle{slug: e.Slug, secret: e.Secret, pattern: compiled, agent: a}
+	return &EnvVarHandle{slug: e.Slug, secret: e.Secret, defaultValue: e.Default, pattern: compiled, agent: a}
 }
 
 // RegisterDirectory declares an S3-backed directory at the given path,

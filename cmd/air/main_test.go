@@ -89,10 +89,10 @@ func TestEnsureEmptyDir(t *testing.T) {
 	})
 }
 
-func TestCmdScaffoldSmoke(t *testing.T) {
+func TestCmdInitSmoke(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "myagent")
-	if err := cmdScaffold([]string{dir}); err != nil {
-		t.Fatalf("cmdScaffold: %v", err)
+	if err := cmdInit([]string{dir}); err != nil {
+		t.Fatalf("cmdInit: %v", err)
 	}
 	for _, f := range []string{"go.mod", "AGENTS.md", "Dockerfile", "main.go"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
@@ -101,37 +101,36 @@ func TestCmdScaffoldSmoke(t *testing.T) {
 	}
 }
 
-func TestCmdScaffoldRejectsNonEmpty(t *testing.T) {
+func TestCmdInitRejectsNonEmpty(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "existing"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := cmdScaffold([]string{dir}); err == nil {
-		t.Fatal("cmdScaffold overwrote a non-empty dir")
+	if err := cmdInit([]string{dir}); err == nil {
+		t.Fatal("cmdInit overwrote a non-empty dir")
 	}
 }
 
-func TestCmdRegenRequiresGoMod(t *testing.T) {
+func TestCmdUpdateRequiresGoMod(t *testing.T) {
 	t.Run("errors without go.mod", func(t *testing.T) {
-		if err := cmdRegen([]string{t.TempDir()}); err == nil {
-			t.Fatal("cmdRegen ran without a go.mod")
+		if err := cmdUpdate([]string{t.TempDir()}); err == nil {
+			t.Fatal("cmdUpdate ran without a go.mod")
 		}
 	})
 
-	t.Run("regenerates managed files", func(t *testing.T) {
+	t.Run("updates managed files", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "agent")
-		if err := cmdScaffold([]string{dir}); err != nil {
-			t.Fatalf("cmdScaffold: %v", err)
+		if err := cmdInit([]string{dir}); err != nil {
+			t.Fatalf("cmdInit: %v", err)
 		}
-		// Remove a managed file, then confirm regen recreates it.
 		if err := os.Remove(filepath.Join(dir, "Dockerfile")); err != nil {
 			t.Fatal(err)
 		}
-		if err := cmdRegen([]string{dir}); err != nil {
-			t.Fatalf("cmdRegen: %v", err)
+		if err := cmdUpdate([]string{dir}); err != nil {
+			t.Fatalf("cmdUpdate: %v", err)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
-			t.Fatalf("Dockerfile not regenerated: %v", err)
+			t.Fatalf("Dockerfile not updated: %v", err)
 		}
 	})
 }

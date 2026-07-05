@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 )
 
@@ -63,10 +64,11 @@ type EnvVar struct {
 // lifetime of the agent process — call Refresh() to force a re-fetch
 // (e.g. after the operator rotates the value).
 type EnvVarHandle struct {
-	slug    string
-	secret  bool
-	pattern *regexp.Regexp // nil when EnvVar.Pattern == ""
-	agent   *Agent
+	slug         string
+	secret       bool
+	defaultValue string
+	pattern      *regexp.Regexp // nil when EnvVar.Pattern == ""
+	agent        *Agent
 
 	mu     sync.Mutex
 	cached string
@@ -106,7 +108,10 @@ func (h *EnvVarHandle) Get(ctx context.Context) (string, error) {
 
 	var resp EnvVarValueResponse
 	if err := h.agent.client.doJSON(ctx, "GET", "/api/agent/env-vars/"+h.slug, nil, &resp); err != nil {
-		return "", fmt.Errorf("agentsdk: get env var %q: %w", h.slug, err)
+		if h.defaultValue == "" || !isMissingEnvVarValue(err) {
+			return "", fmt.Errorf("agentsdk: get env var %q: %w", h.slug, err)
+		}
+		resp.Value = h.defaultValue
 	}
 
 	if h.pattern != nil && !h.pattern.MatchString(resp.Value) {
@@ -139,3 +144,8 @@ func (h *EnvVarHandle) Slug() string { return h.slug }
 
 // IsSecret reports whether this var was registered as a secret.
 func (h *EnvVarHandle) IsSecret() bool { return h.secret }
+
+func isMissingEnvVarValue(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "status 404") && strings.Contains(msg, "env var has no configured value")
+}
