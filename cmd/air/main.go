@@ -1,13 +1,13 @@
-// Command create-agent authors an Airlock agent repo outside airlock.
+// Command air authors and maintains Airlock agent repos outside airlock.
 //
 // It wraps the agentsdk/scaffold package with three subcommands:
 //
-//	create-agent [scaffold] <dir>   scaffold a new agent into <dir>
-//	create-agent regen [dir]        regenerate the airlock-managed files in place
-//	create-agent install-toolchain  install the pinned frontend toolchain
+//	air [init] <dir>             scaffold a new agent into <dir>
+//	air update [dir]             regenerate the airlock-managed files in place
+//	air toolchain install        install the pinned frontend toolchain
 //
-// scaffold and regen render the same airlock-managed files airlock's builder
-// produces; install-toolchain fetches the exact templ/tailwind/daisyui versions
+// init and update render the same airlock-managed files airlock's builder
+// produces; toolchain install fetches the exact templ/tailwind/daisyui versions
 // the scaffold pins so local `templ generate` and `tailwindcss` builds match.
 package main
 
@@ -31,7 +31,7 @@ const defaultBaseImage = "ghcr.io/airlockrun/airlock-agent-base:latest"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "create-agent: %v\n", err)
+		fmt.Fprintf(os.Stderr, "air: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -46,42 +46,42 @@ func run(args []string) error {
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return nil
-	case "scaffold":
-		return cmdScaffold(args[1:])
-	case "regen":
-		return cmdRegen(args[1:])
-	case "install-toolchain":
-		return cmdInstallToolchain(args[1:])
+	case "init":
+		return cmdInit(args[1:])
+	case "update":
+		return cmdUpdate(args[1:])
+	case "toolchain":
+		return cmdToolchain(args[1:])
 	default:
-		// Bare `create-agent <dir>` is shorthand for `create-agent scaffold <dir>`.
-		return cmdScaffold(args)
+		// Bare `air <dir>` is shorthand for `air init <dir>`.
+		return cmdInit(args)
 	}
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, `create-agent — author an Airlock agent repo outside airlock
+	fmt.Fprintf(w, `air - author an Airlock agent repo outside airlock
 
 Usage:
-  create-agent [scaffold] <dir> [flags]   scaffold a new agent into <dir>
-  create-agent regen [dir] [flags]        regenerate the airlock-managed files in place
-  create-agent install-toolchain [flags]  install the pinned frontend toolchain
+  air [init] <dir> [flags]        scaffold a new agent into <dir>
+  air update [dir] [flags]        regenerate the airlock-managed files in place
+  air toolchain install [flags]   install the pinned frontend toolchain
 
-Scaffold flags:
+Init flags:
   --module <name>            Go module path for the agent (default "agent")
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
   --base-image <ref>         runtime base image for the Dockerfile FROM line
                              (default "%s")
 
-Regen flags (dir defaults to "."):
+Update flags (dir defaults to "."):
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
   --base-image <ref>         runtime base image for the Dockerfile FROM line
                              (default "%s")
 
-  Regenerates the airlock-managed files (Dockerfile, AGENTS.md, %s)
-  in place — the external equivalent of airlock's build housekeeping. Run it
+  Updates the airlock-managed files (Dockerfile, AGENTS.md, %s)
+  in place - the external equivalent of airlock's build housekeeping. Run it
   after bumping the agentsdk pin. Requires an existing go.mod in dir.
 
-Install-toolchain flags:
+Toolchain install flags:
   --prefix <dir>             install prefix (default "/usr/local")
 
   Installs the frontend toolchain pinned by the scaffold:
@@ -96,7 +96,7 @@ Install-toolchain flags:
 	)
 }
 
-// scaffoldFlags holds the flags shared by scaffold and regen.
+// scaffoldFlags holds the flags shared by init and update.
 type scaffoldFlags struct {
 	module          string
 	agentSDKVersion string
@@ -105,9 +105,9 @@ type scaffoldFlags struct {
 
 // parseFlags walks a simple `--key value` flag list starting at args, calling
 // set for each recognized flag. It returns the non-flag positional arguments.
-// We hand-roll this (rather than flag.FlagSet) so a bare `create-agent <dir>`
-// and `create-agent scaffold <dir>` share one positional/flag parser and the
-// help text stays a single source of truth.
+// We hand-roll this (rather than flag.FlagSet) so a bare `air <dir>` and
+// `air init <dir>` share one positional/flag parser and the help text stays a
+// single source of truth.
 func parseFlags(args []string, set func(key, value string) error) ([]string, error) {
 	var positional []string
 	for i := 0; i < len(args); i++ {
@@ -150,13 +150,13 @@ func parseScaffoldFlags(args []string) (scaffoldFlags, []string, error) {
 	return f, positional, err
 }
 
-func cmdScaffold(args []string) error {
+func cmdInit(args []string) error {
 	f, positional, err := parseScaffoldFlags(args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("scaffold requires exactly one argument: the target directory")
+		return errors.New("init requires exactly one argument: the target directory")
 	}
 	dir := positional[0]
 
@@ -179,12 +179,12 @@ func cmdScaffold(args []string) error {
 		return fmt.Errorf("materialize agent: %w", err)
 	}
 
-	fmt.Printf("Scaffolded agent %s into %s\n", id, dir)
+	fmt.Printf("Initialized agent %s in %s\n", id, dir)
 	fmt.Printf("  module:   %s\n", f.module)
 	fmt.Printf("  agentsdk: %s\n", f.agentSDKVersion)
 	fmt.Println("\nNext steps:")
 	fmt.Printf("  cd %s\n", dir)
-	fmt.Println("  create-agent install-toolchain   # install templ + tailwindcss + daisyui")
+	fmt.Println("  air toolchain install   # install templ + tailwindcss + daisyui")
 	fmt.Println("  go mod tidy")
 	fmt.Println("  templ generate")
 	fmt.Println("  tailwindcss -i styles/app.css -o views/static/app.css --minify")
@@ -192,7 +192,7 @@ func cmdScaffold(args []string) error {
 	return nil
 }
 
-func cmdRegen(args []string) error {
+func cmdUpdate(args []string) error {
 	f, positional, err := parseScaffoldFlags(args)
 	if err != nil {
 		return err
@@ -203,11 +203,11 @@ func cmdRegen(args []string) error {
 	case 1:
 		dir = positional[0]
 	default:
-		return errors.New("regen takes at most one argument: the target directory")
+		return errors.New("update takes at most one argument: the target directory")
 	}
 
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
-		return fmt.Errorf("no go.mod in %s — regen must run in an existing agent repo: %w", dir, err)
+		return fmt.Errorf("no go.mod in %s - update must run in an existing agent repo: %w", dir, err)
 	}
 
 	data := scaffold.ScaffoldData{
@@ -216,16 +216,16 @@ func cmdRegen(args []string) error {
 		AgentBaseImage:  f.baseImage,
 	}
 	if err := scaffold.GenerateDockerfile(dir, data); err != nil {
-		return fmt.Errorf("regenerate Dockerfile: %w", err)
+		return fmt.Errorf("update Dockerfile: %w", err)
 	}
 	if err := scaffold.GenerateAgentsMD(dir, data); err != nil {
-		return fmt.Errorf("regenerate AGENTS.md: %w", err)
+		return fmt.Errorf("update AGENTS.md: %w", err)
 	}
 	if err := scaffold.GenerateNotices(dir); err != nil {
-		return fmt.Errorf("regenerate notices: %w", err)
+		return fmt.Errorf("update notices: %w", err)
 	}
 
-	fmt.Printf("Regenerated airlock-managed files in %s:\n", dir)
+	fmt.Printf("Updated airlock-managed files in %s:\n", dir)
 	fmt.Println("  Dockerfile")
 	fmt.Println("  AGENTS.md")
 	fmt.Printf("  %s\n", scaffold.NoticesFilename)
@@ -261,6 +261,18 @@ func newUUID() (string, error) {
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
+}
+
+func cmdToolchain(args []string) error {
+	if len(args) == 0 {
+		return errors.New("toolchain requires a subcommand: install")
+	}
+	switch args[0] {
+	case "install":
+		return cmdInstallToolchain(args[1:])
+	default:
+		return fmt.Errorf("unknown toolchain subcommand %q", args[0])
+	}
 }
 
 func cmdInstallToolchain(args []string) error {
@@ -381,7 +393,7 @@ func downloadFile(url, dst string, perm os.FileMode) error {
 		return fmt.Errorf("download %s: unexpected status %s", url, resp.Status)
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(dst), ".create-agent-*")
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".air-*")
 	if err != nil {
 		return writeHint(err, dst)
 	}
@@ -406,7 +418,7 @@ func downloadFile(url, dst string, perm os.FileMode) error {
 
 func writeHint(err error, dst string) error {
 	if errors.Is(err, os.ErrPermission) {
-		return fmt.Errorf("%w — %s is not writable; re-run with sudo or pass a writable --prefix", err, filepath.Dir(dst))
+		return fmt.Errorf("%w - %s is not writable; re-run with sudo or pass a writable --prefix", err, filepath.Dir(dst))
 	}
 	return err
 }
