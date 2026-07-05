@@ -191,11 +191,14 @@ func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, 
 		return agentBinding{}, errors.New("deploy needs a target: pass --agent, --create, or set .airlock/agent.toml")
 	}
 	if deployUUIDRe.MatchString(target) {
-		slug := binding.Slug
-		if binding.AgentID != target {
-			slug = target
+		agent, err := getAgentDetail(ctx, baseURL, token, target)
+		if err != nil {
+			return agentBinding{}, err
 		}
-		return agentBinding{AirlockURL: baseURL, AgentID: target, Slug: slug}, nil
+		if binding.AgentID == target && binding.Slug != "" && agent.GetSlug() != binding.Slug {
+			return agentBinding{}, fmt.Errorf("%s has agent_id %s but slug %q; Airlock reports slug %q", agentBindingPath, target, binding.Slug, agent.GetSlug())
+		}
+		return agentBinding{AirlockURL: baseURL, AgentID: target, Slug: agent.GetSlug()}, nil
 	}
 
 	var resp airlockv1.ListAgentsResponse
@@ -204,10 +207,24 @@ func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, 
 	}
 	for _, a := range resp.Agents {
 		if a.GetSlug() == target || a.GetId() == target {
+			if binding.AgentID != "" && binding.Slug == target && a.GetId() != binding.AgentID {
+				return agentBinding{}, fmt.Errorf("%s has slug %q but agent_id %s; Airlock reports agent_id %s", agentBindingPath, binding.Slug, binding.AgentID, a.GetId())
+			}
 			return agentBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug()}, nil
 		}
 	}
 	return agentBinding{}, fmt.Errorf("agent %q not found in %s", target, baseURL)
+}
+
+func getAgentDetail(ctx context.Context, baseURL, token, agentID string) (*airlockv1.AgentInfo, error) {
+	var resp airlockv1.GetAgentDetailResponse
+	if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/agents/"+agentID, token, nil, &resp); err != nil {
+		return nil, fmt.Errorf("resolve agent %q: %w", agentID, err)
+	}
+	if resp.Agent == nil || resp.Agent.Id == "" {
+		return nil, fmt.Errorf("resolve agent %q: response did not include agent detail", agentID)
+	}
+	return resp.Agent, nil
 }
 
 func uploadSource(ctx context.Context, baseURL, token, agentID, dir string) error {
