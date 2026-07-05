@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -91,13 +94,20 @@ func TestEnsureEmptyDir(t *testing.T) {
 
 func TestCmdInitSmoke(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "myagent")
-	if err := cmdInit([]string{dir}); err != nil {
+	if err := cmdInit([]string{dir, "--airlock", "https://airlock.example.com/"}); err != nil {
 		t.Fatalf("cmdInit: %v", err)
 	}
 	for _, f := range []string{"go.mod", "AGENTS.md", "Dockerfile", "main.go"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Fatalf("expected %s: %v", f, err)
 		}
+	}
+	b, ok, err := loadAgentBinding(dir)
+	if err != nil {
+		t.Fatalf("loadAgentBinding: %v", err)
+	}
+	if !ok || b.AirlockURL != "https://airlock.example.com" {
+		t.Fatalf("binding = %#v, %v", b, ok)
 	}
 }
 
@@ -133,4 +143,64 @@ func TestCmdUpdateRequiresGoMod(t *testing.T) {
 			t.Fatalf("Dockerfile not updated: %v", err)
 		}
 	})
+}
+
+func TestParseDeployFlags(t *testing.T) {
+	f, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--url", "https://airlock.example.com", "repo"})
+	if err != nil {
+		t.Fatalf("parseDeployFlags: %v", err)
+	}
+	if !f.create || f.slug != "todo" || f.url != "https://airlock.example.com" || f.dir != "repo" {
+		t.Fatalf("flags = %#v", f)
+	}
+	if _, err := parseDeployFlags([]string{"--create"}); err == nil {
+		t.Fatal("--create without --slug returned nil error")
+	}
+	if _, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--agent", "todo"}); err == nil {
+		t.Fatal("--create with --agent returned nil error")
+	}
+}
+
+func TestWriteSourceArchiveSkipsLocalState(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
+	mustWrite(t, filepath.Join(dir, "main.go"), "package main\n")
+	mustWrite(t, filepath.Join(dir, ".git", "config"), "secret")
+	mustWrite(t, filepath.Join(dir, ".airlock", "agent.toml"), "slug = \"todo\"\n")
+	mustWrite(t, filepath.Join(dir, ".airlock", "local", "storage", "uploads", "doc.txt"), "local")
+
+	pr, pw := io.Pipe()
+	go func() { pw.CloseWithError(writeSourceArchive(pw, dir)) }()
+	gz, err := gzip.NewReader(pr)
+	if err != nil {
+		t.Fatalf("gzip: %v", err)
+	}
+	tr := tar.NewReader(gz)
+	seen := map[string]bool{}
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar: %v", err)
+		}
+		seen[h.Name] = true
+	}
+	if !seen["go.mod"] || !seen["main.go"] || !seen[".airlock/agent.toml"] {
+		t.Fatalf("archive missing expected files: %#v", seen)
+	}
+	if seen[".git/config"] || seen[".airlock/local/storage/uploads/doc.txt"] {
+		t.Fatalf("archive included local state: %#v", seen)
+	}
+}
+
+func mustWrite(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

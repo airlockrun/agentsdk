@@ -100,7 +100,7 @@ func TestMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	for _, want := range []string{"go.work", "go.work.sum"} {
+	for _, want := range []string{"go.work", "go.work.sum", ".airlock/local/"} {
 		if !strings.Contains(string(gitignore), want) {
 			t.Errorf(".gitignore missing %q entry", want)
 		}

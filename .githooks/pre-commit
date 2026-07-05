@@ -46,6 +46,12 @@ fi
 
 echo "agentsdk version invariants: OK"
 
+scripts/sync-airlock-protos.sh check || {
+	echo "ERROR: internal Airlock protos are out of sync; run scripts/sync-airlock-protos.sh" >&2
+	exit 1
+}
+echo "agentsdk airlock proto sync: OK"
+
 # gofmt on staged Go files — block, don't auto-rewrite (explicit, no surprise
 # edits to the working tree). Only files staged in this commit, so an unrelated
 # unformatted file elsewhere doesn't block you.
