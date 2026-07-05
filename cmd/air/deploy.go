@@ -184,8 +184,8 @@ func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, 
 	if target == "" {
 		target = binding.AgentID
 	}
-	if target == "" {
-		target = binding.Slug
+	if target == "" && binding.Slug != "" {
+		return agentBinding{}, fmt.Errorf("%s has slug %q but no agent_id; run air deploy --agent %s once to resolve and persist the stable binding", agentBindingPath, binding.Slug, binding.Slug)
 	}
 	if target == "" {
 		return agentBinding{}, errors.New("deploy needs a target: pass --agent, --create, or set .airlock/agent.toml")
