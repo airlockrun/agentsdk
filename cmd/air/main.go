@@ -5,6 +5,8 @@
 //	air [init] <dir>             scaffold a new agent into <dir>
 //	air update [dir]             regenerate the airlock-managed files in place
 //	air toolchain install        install the pinned frontend toolchain
+//	air login <airlock-url>      store CLI credentials outside the repo
+//	air deploy                  upload this repo's source and start a build
 //
 // init and update render the same airlock-managed files airlock's builder
 // produces; toolchain install fetches the exact templ/tailwind/daisyui versions
@@ -52,6 +54,10 @@ func run(args []string) error {
 		return cmdUpdate(args[1:])
 	case "toolchain":
 		return cmdToolchain(args[1:])
+	case "login":
+		return cmdLogin(args[1:])
+	case "deploy":
+		return cmdDeploy(args[1:])
 	default:
 		// Bare `air <dir>` is shorthand for `air init <dir>`.
 		return cmdInit(args)
@@ -65,12 +71,15 @@ Usage:
   air [init] <dir> [flags]        scaffold a new agent into <dir>
   air update [dir] [flags]        regenerate the airlock-managed files in place
   air toolchain install [flags]   install the pinned frontend toolchain
+  air login <airlock-url>         store CLI credentials outside the repo
+  air deploy [dir] [flags]        upload source and start a build
 
 Init flags:
   --module <name>            Go module path for the agent (default "agent")
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
   --base-image <ref>         runtime base image for the Dockerfile FROM line
                              (default "%s")
+  --airlock <url>            write .airlock/agent.toml with this Airlock URL
 
 Update flags (dir defaults to "."):
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
@@ -88,6 +97,17 @@ Toolchain install flags:
     templ       %s (via go install)
     tailwindcss %s (standalone binary -> <prefix>/bin)
     daisyui     %s (plugin mjs files -> <prefix>/lib/tailwind)
+
+Login flags:
+  --email <email>            Airlock account email (otherwise prompts)
+
+Deploy flags:
+  --create                   create a draft agent before uploading source
+  --slug <slug>              agent slug for --create
+  --agent <slug-or-id>       existing agent target; overrides .airlock/agent.toml
+  --url <url>                Airlock URL; overrides .airlock/agent.toml
+  --name <name>              display name for --create (default slug)
+  --description <text>       description for --create
 `,
 		agentsdk.Version, defaultBaseImage,
 		agentsdk.Version, defaultBaseImage,
@@ -101,6 +121,7 @@ type scaffoldFlags struct {
 	module          string
 	agentSDKVersion string
 	baseImage       string
+	airlockURL      string
 }
 
 // parseFlags walks a simple `--key value` flag list starting at args, calling
@@ -142,6 +163,8 @@ func parseScaffoldFlags(args []string) (scaffoldFlags, []string, error) {
 			f.agentSDKVersion = value
 		case "base-image":
 			f.baseImage = value
+		case "airlock":
+			f.airlockURL = value
 		default:
 			return fmt.Errorf("unknown flag --%s", key)
 		}
@@ -177,6 +200,11 @@ func cmdInit(args []string) error {
 	}
 	if err := scaffold.Materialize(dir, data); err != nil {
 		return fmt.Errorf("materialize agent: %w", err)
+	}
+	if f.airlockURL != "" {
+		if err := writeAgentBinding(dir, agentBinding{AirlockURL: normalizeBaseURL(f.airlockURL)}); err != nil {
+			return fmt.Errorf("write agent binding: %w", err)
+		}
 	}
 
 	fmt.Printf("Initialized agent %s in %s\n", id, dir)
@@ -215,6 +243,18 @@ func cmdUpdate(args []string) error {
 		AgentSDKVersion: f.agentSDKVersion,
 		AgentBaseImage:  f.baseImage,
 	}
+	if err := runUpdate(dir, data); err != nil {
+		return err
+	}
+
+	fmt.Printf("Updated airlock-managed files in %s:\n", dir)
+	fmt.Println("  Dockerfile")
+	fmt.Println("  AGENTS.md")
+	fmt.Printf("  %s\n", scaffold.NoticesFilename)
+	return nil
+}
+
+func runUpdate(dir string, data scaffold.ScaffoldData) error {
 	if err := scaffold.GenerateDockerfile(dir, data); err != nil {
 		return fmt.Errorf("update Dockerfile: %w", err)
 	}
@@ -224,11 +264,6 @@ func cmdUpdate(args []string) error {
 	if err := scaffold.GenerateNotices(dir); err != nil {
 		return fmt.Errorf("update notices: %w", err)
 	}
-
-	fmt.Printf("Updated airlock-managed files in %s:\n", dir)
-	fmt.Println("  Dockerfile")
-	fmt.Println("  AGENTS.md")
-	fmt.Printf("  %s\n", scaffold.NoticesFilename)
 	return nil
 }
 
