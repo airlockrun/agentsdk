@@ -154,14 +154,48 @@ func TestParseDeployFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseDeployFlags: %v", err)
 	}
-	if !f.create || f.slug != "todo" || f.url != "https://airlock.example.com" || f.dir != "repo" {
+	if !f.create || f.slug != "todo" || f.name != "todo" || f.url != "https://airlock.example.com" || f.dir != "repo" {
 		t.Fatalf("flags = %#v", f)
 	}
-	if _, err := parseDeployFlags([]string{"--create"}); err == nil {
-		t.Fatal("--create without --slug returned nil error")
+	f, err = parseDeployFlags([]string{"--create", "--name", "Sales Deck", "repo"})
+	if err != nil {
+		t.Fatalf("parseDeployFlags with derived slug: %v", err)
+	}
+	if f.slug != "sales-deck" || f.name != "Sales Deck" {
+		t.Fatalf("derived flags = %#v", f)
 	}
 	if _, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--agent", "todo"}); err == nil {
 		t.Fatal("--create with --agent returned nil error")
+	}
+}
+
+func TestSlugFromName(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "Sales Deck", want: "sales-deck"},
+		{name: " presentations_v2 ", want: "presentations-v2"},
+		{name: "A", want: ""},
+		{name: "--", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := slugFromName(tt.name); got != tt.want {
+				t.Fatalf("slugFromName(%q) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCmdBuildRequiresToolchain(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	if err := cmdInit([]string{dir}); err != nil {
+		t.Fatalf("cmdInit: %v", err)
+	}
+	err := cmdBuild([]string{dir})
+	if err == nil || !strings.Contains(err.Error(), "toolchain install") {
+		t.Fatalf("cmdBuild error = %v", err)
 	}
 }
 
@@ -214,6 +248,7 @@ func TestWriteSourceArchiveSkipsLocalState(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, ".git", "config"), "secret")
 	mustWrite(t, filepath.Join(dir, ".airlock", "agent.toml"), "slug = \"todo\"\n")
 	mustWrite(t, filepath.Join(dir, ".airlock", "local", "storage", "uploads", "doc.txt"), "local")
+	mustWrite(t, filepath.Join(dir, ".airlock", "toolchain", "bin", "tailwindcss"), "binary")
 
 	pr, pw := io.Pipe()
 	go func() { pw.CloseWithError(writeSourceArchive(pw, dir)) }()
@@ -236,7 +271,7 @@ func TestWriteSourceArchiveSkipsLocalState(t *testing.T) {
 	if !seen["go.mod"] || !seen["main.go"] || !seen[".airlock/agent.toml"] {
 		t.Fatalf("archive missing expected files: %#v", seen)
 	}
-	if seen[".git/config"] || seen[".airlock/local/storage/uploads/doc.txt"] {
+	if seen[".git/config"] || seen[".airlock/local/storage/uploads/doc.txt"] || seen[".airlock/toolchain/bin/tailwindcss"] {
 		t.Fatalf("archive included local state: %#v", seen)
 	}
 }

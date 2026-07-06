@@ -87,7 +87,7 @@ var templateFiles = []templateFile{
 	// gives you.
 	{"templates/AGENTS.md.tmpl", "AGENTS.md"},
 	// styles/app.css is the Tailwind source. The build runs
-	//   tailwindcss -i styles/app.css -o views/static/app.css --minify
+	//   .airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify
 	// and the agent embeds the output via views/assets.go.
 	{"templates/app.css.tmpl", "styles/app.css"},
 	// views/static/app.css is a placeholder so views/assets.go's

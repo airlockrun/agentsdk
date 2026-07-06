@@ -19,12 +19,6 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	// The scaffold build needs the templ CLI (templ generate). Skip where
-	// the toolchain isn't installed (offline CI, pre-commit) rather than fail.
-	if _, err := exec.LookPath("templ"); err != nil {
-		t.Skip("templ not on PATH; skipping scaffold build integration test")
-	}
-
 	// Resolve the sibling lib source trees so the scaffolded agent builds
 	// against the agentsdk/goai/sol we're editing (via replace directives),
 	// not a published proxy version — this test validates the scaffold against
@@ -56,7 +50,8 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 		t.Fatalf("Materialize: %v", err)
 	}
 
-	// Overwrite go.mod: require the libs + templ, and replace the owned libs
+	// Overwrite go.mod: require the libs + templ, expose templ as a tool,
+	// and replace the owned libs
 	// with local source so their resolution needs no network or published
 	// version. templ and the transitive external deps still resolve via the
 	// module cache / proxy. GoVersion + TemplVersion come from the scaffold's
@@ -75,6 +70,8 @@ require (
 replace github.com/airlockrun/agentsdk => %s
 replace github.com/airlockrun/goai => %s
 replace github.com/airlockrun/sol => %s
+
+tool github.com/a-h/templ/cmd/templ
 `, GoVersion, TemplVersion, agentsdkPath, goaiPath, solPath)
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
@@ -94,7 +91,7 @@ replace github.com/airlockrun/sol => %s
 	}
 
 	// --- Step 1: Generate templ + Tailwind + Build ---
-	templGen := exec.Command("templ", "generate")
+	templGen := exec.Command("go", "tool", "templ", "generate")
 	templGen.Dir = dir
 	templGen.Env = env
 	if out, err := templGen.CombinedOutput(); err != nil {
@@ -103,11 +100,11 @@ replace github.com/airlockrun/sol => %s
 
 	// tailwindcss is optional in CI / dev — the scaffold ships a
 	// placeholder views/static/app.css the //go:embed reads, so the
-	// agent compiles without it. When the binary is on PATH (toolserver
-	// image, dev machines that apt-installed it) we run it so the test
-	// exercises the same chain as the prod Docker build.
-	if _, err := exec.LookPath("tailwindcss"); err == nil {
-		tw := exec.Command("tailwindcss",
+	// agent compiles without it. When the repo-local binary exists, we run
+	// it so the test exercises the same chain as the prod Docker build.
+	tailwindPath := filepath.Join(dir, ".airlock", "toolchain", "bin", "tailwindcss")
+	if _, err := os.Stat(tailwindPath); err == nil {
+		tw := exec.Command(tailwindPath,
 			"-i", "styles/app.css",
 			"-o", "views/static/app.css",
 			"--minify")
@@ -117,7 +114,7 @@ replace github.com/airlockrun/sol => %s
 			t.Fatalf("tailwindcss compile failed:\n%s", out)
 		}
 	} else {
-		t.Log("tailwindcss not on PATH; using scaffold placeholder views/static/app.css")
+		t.Log("repo-local tailwindcss not installed; using scaffold placeholder views/static/app.css")
 	}
 
 	binPath := filepath.Join(dir, "agent")
