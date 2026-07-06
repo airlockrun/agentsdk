@@ -6,6 +6,6 @@
 package agentsdk
 
 // Version is the agentsdk API version. Reported to Airlock during sync.
-// Bump on breaking changes — see CLAUDE.md for versioning rules. Pre-commit
+// Bump on breaking changes — see AGENTS.md for versioning rules. Pre-commit
 // gate enforces Version > latest git tag in this repo.
 const Version = "0.4.0-rc.7"
