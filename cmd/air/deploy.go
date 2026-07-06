@@ -19,7 +19,10 @@ import (
 	"github.com/airlockrun/agentsdk/scaffold"
 )
 
-var deployUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var (
+	deployUUIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	agentSlugRe  = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+)
 
 type deployFlags struct {
 	create      bool
@@ -152,10 +155,57 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 	if f.create && f.agent != "" {
 		return deployFlags{}, errors.New("deploy cannot combine --create and --agent")
 	}
-	if f.create && f.slug == "" {
-		return deployFlags{}, errors.New("deploy --create requires --slug")
+	if f.create {
+		if f.name == "" {
+			if f.slug != "" {
+				f.name = f.slug
+			} else {
+				f.name = filepath.Base(filepath.Clean(f.dir))
+			}
+		}
+		if f.slug == "" {
+			f.slug = slugFromName(f.name)
+			if f.slug == "" {
+				return deployFlags{}, fmt.Errorf("could not derive a slug from name %q; pass --slug", f.name)
+			}
+		}
+		if !validAgentSlug(f.slug) {
+			return deployFlags{}, fmt.Errorf("invalid slug %q: use 2-63 lowercase letters, digits, and single dashes", f.slug)
+		}
 	}
 	return f, nil
+}
+
+func slugFromName(name string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			lastDash = false
+		default:
+			if b.Len() > 0 && !lastDash {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+		if b.Len() >= 63 {
+			break
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) < 2 || !validAgentSlug(out) {
+		return ""
+	}
+	return out
+}
+
+func validAgentSlug(s string) bool {
+	if len(s) < 2 || len(s) > 63 {
+		return false
+	}
+	return agentSlugRe.MatchString(s)
 }
 
 func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags) (agentBinding, error) {
@@ -320,6 +370,9 @@ func skipArchivePath(rel string, isDir bool) bool {
 		return true
 	}
 	if rel == ".airlock/local" || strings.HasPrefix(rel, ".airlock/local/") {
+		return true
+	}
+	if rel == ".airlock/toolchain" || strings.HasPrefix(rel, ".airlock/toolchain/") {
 		return true
 	}
 	if isDir {

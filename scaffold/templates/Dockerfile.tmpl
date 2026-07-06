@@ -23,18 +23,14 @@ WORKDIR /build
 COPY go.mod go.sum* ./
 COPY . .
 
-# Tailwind v4 standalone — Rust binary, no Node. Fetched fresh per build;
-# small (~30MB) and the layer caches.
-ADD https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /usr/local/bin/tailwindcss
-# DaisyUI v5 — Tailwind plugin loaded by styles/app.css via `@plugin
-# "/usr/local/lib/tailwind/daisyui.mjs"`. The .mjs is a self-contained
-# plugin file the standalone Tailwind binary loads directly (no Node).
-# mkdir before ADD so the directory is world-traversable (ADD would
-# create it 0700 root, blocking non-root access in case USER changes).
-RUN mkdir -p /usr/local/lib/tailwind && chmod 0755 /usr/local/lib/tailwind
-ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /usr/local/lib/tailwind/daisyui.mjs
-ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /usr/local/lib/tailwind/daisyui-theme.mjs
-RUN chmod +x /usr/local/bin/tailwindcss && mkdir -p views/static
+# Tailwind v4 standalone + DaisyUI live under the same repo-local path the
+# local CLI installer writes, so styles/app.css can load the plugin by one
+# relative path in both local builds and Docker builds.
+RUN mkdir -p .airlock/toolchain/bin .airlock/toolchain/lib/tailwind views/static
+ADD https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /build/.airlock/toolchain/bin/tailwindcss
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /build/.airlock/toolchain/lib/tailwind/daisyui.mjs
+ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /build/.airlock/toolchain/lib/tailwind/daisyui-theme.mjs
+RUN chmod +x .airlock/toolchain/bin/tailwindcss
 
 # Resolve modules via the bind-mounted goproxy first, public proxy second.
 # The goproxy bind is build-time only (not baked into a layer). The dev proxy
@@ -54,7 +50,7 @@ RUN --mount=type=bind,from=goproxy,target=/goproxy \
     GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off \
     go mod tidy && \
     go tool templ generate && \
-    tailwindcss -i styles/app.css -o views/static/app.css --minify && \
+    .airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify && \
     go build -o /agent .
 
 # Runtime

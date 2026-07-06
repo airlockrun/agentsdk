@@ -4,13 +4,16 @@
 //
 //	air [init] <dir>             scaffold a new agent into <dir>
 //	air update [dir]             regenerate the airlock-managed files in place
-//	air toolchain install        install the pinned frontend toolchain
+//	go tool air toolchain install
+//	                             install the pinned frontend toolchain
+//	go tool air build            run the local build chain
 //	air login <airlock-url>      store CLI credentials outside the repo
 //	air deploy                  upload this repo's source and start a build
 //
 // init and update render the same airlock-managed files airlock's builder
 // produces; toolchain install fetches the exact templ/tailwind/daisyui versions
-// the scaffold pins so local `templ generate` and `tailwindcss` builds match.
+// the scaffold pins so local `go tool templ generate` and repo-local
+// `tailwindcss` builds match.
 package main
 
 import (
@@ -29,7 +32,10 @@ import (
 	"github.com/airlockrun/agentsdk/scaffold"
 )
 
-const defaultBaseImage = "ghcr.io/airlockrun/airlock-agent-base:latest"
+const (
+	defaultBaseImage     = "ghcr.io/airlockrun/airlock-agent-base:latest"
+	localToolchainPrefix = ".airlock/toolchain"
+)
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -54,6 +60,8 @@ func run(args []string) error {
 		return cmdUpdate(args[1:])
 	case "toolchain":
 		return cmdToolchain(args[1:])
+	case "build":
+		return cmdBuild(args[1:])
 	case "login":
 		return cmdLogin(args[1:])
 	case "deploy":
@@ -71,6 +79,7 @@ Usage:
   air [init] <dir> [flags]        scaffold a new agent into <dir>
   air update [dir] [flags]        regenerate the airlock-managed files in place
   air toolchain install [flags]   install the pinned frontend toolchain
+  air build [dir]                 run the local build chain
   air login <airlock-url>         store CLI credentials outside the repo
   air deploy [dir] [flags]        upload source and start a build
 
@@ -91,10 +100,10 @@ Update flags (dir defaults to "."):
   after bumping the agentsdk pin. Requires an existing go.mod in dir.
 
 Toolchain install flags:
-  --prefix <dir>             install prefix (default "/usr/local")
+  --prefix <dir>             install prefix (default ".airlock/toolchain")
 
   Installs the frontend toolchain pinned by the scaffold:
-    templ       %s (via go install)
+    templ       %s (via go tool templ)
     tailwindcss %s (standalone binary -> <prefix>/bin)
     daisyui     %s (plugin mjs files -> <prefix>/lib/tailwind)
 
@@ -103,10 +112,10 @@ Login flags:
 
 Deploy flags:
   --create                   create a draft agent before uploading source
-  --slug <slug>              agent slug for --create
+  --slug <slug>              agent slug for --create (derived from --name or dir if omitted)
   --agent <slug-or-id>       existing agent target; overrides .airlock/agent.toml
   --url <url>                Airlock URL; overrides .airlock/agent.toml
-  --name <name>              display name for --create (default slug)
+  --name <name>              display name for --create (default dir or slug)
   --description <text>       description for --create
 `,
 		agentsdk.Version, defaultBaseImage,
@@ -212,11 +221,9 @@ func cmdInit(args []string) error {
 	fmt.Printf("  agentsdk: %s\n", f.agentSDKVersion)
 	fmt.Println("\nNext steps:")
 	fmt.Printf("  cd %s\n", dir)
-	fmt.Println("  air toolchain install   # install templ + tailwindcss + daisyui")
 	fmt.Println("  go mod tidy")
-	fmt.Println("  templ generate")
-	fmt.Println("  tailwindcss -i styles/app.css -o views/static/app.css --minify")
-	fmt.Println("  go build .")
+	fmt.Println("  go tool air toolchain install   # install tailwindcss + daisyui")
+	fmt.Println("  go tool air build")
 	return nil
 }
 
@@ -267,6 +274,52 @@ func runUpdate(dir string, data scaffold.ScaffoldData) error {
 	return nil
 }
 
+func cmdBuild(args []string) error {
+	dir := "."
+	switch len(args) {
+	case 0:
+	case 1:
+		dir = args[0]
+	default:
+		return errors.New("build takes at most one argument: the agent repo directory")
+	}
+	return runBuild(dir)
+}
+
+func runBuild(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
+		return fmt.Errorf("build requires an agent repo with go.mod in %s: %w", dir, err)
+	}
+	tailwindCmd := filepath.Join(localToolchainPrefix, "bin", "tailwindcss")
+	tailwindPath := filepath.Join(dir, tailwindCmd)
+	if _, err := os.Stat(tailwindPath); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("tailwindcss is not installed at %s; run go tool air toolchain install", tailwindPath)
+		}
+		return err
+	}
+	steps := []struct {
+		name string
+		cmd  []string
+	}{
+		{"go mod tidy", []string{"go", "mod", "tidy"}},
+		{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
+		{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
+		{"go build", []string{"go", "build", "."}},
+	}
+	for _, step := range steps {
+		fmt.Printf("==> %s\n", step.name)
+		cmd := exec.Command(step.cmd[0], step.cmd[1:]...)
+		cmd.Dir = dir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("%s: %w", step.name, err)
+		}
+	}
+	return nil
+}
+
 // ensureEmptyDir creates dir if missing and errors if it exists and is
 // non-empty, so scaffolding never clobbers an existing repo.
 func ensureEmptyDir(dir string) error {
@@ -311,7 +364,7 @@ func cmdToolchain(args []string) error {
 }
 
 func cmdInstallToolchain(args []string) error {
-	prefix := "/usr/local"
+	prefix := localToolchainPrefix
 	if _, err := parseFlags(args, func(key, value string) error {
 		switch key {
 		case "prefix":
@@ -324,9 +377,6 @@ func cmdInstallToolchain(args []string) error {
 		return err
 	}
 
-	if err := installTempl(); err != nil {
-		return err
-	}
 	if err := installTailwind(prefix); err != nil {
 		return err
 	}
@@ -335,21 +385,9 @@ func cmdInstallToolchain(args []string) error {
 	}
 
 	fmt.Println("\nInstalled frontend toolchain:")
-	fmt.Printf("  templ       %s\n", scaffold.TemplVersion)
+	fmt.Printf("  templ       %s -> go tool templ\n", scaffold.TemplVersion)
 	fmt.Printf("  tailwindcss %s -> %s\n", scaffold.TailwindVersion, filepath.Join(prefix, "bin", "tailwindcss"))
 	fmt.Printf("  daisyui     %s -> %s\n", scaffold.DaisyUIVersion, filepath.Join(prefix, "lib", "tailwind"))
-	return nil
-}
-
-func installTempl() error {
-	pkg := "github.com/a-h/templ/cmd/templ@" + scaffold.TemplVersion
-	fmt.Printf("Installing templ %s (go install %s)\n", scaffold.TemplVersion, pkg)
-	cmd := exec.Command("go", "install", pkg)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("go install templ: %w", err)
-	}
 	return nil
 }
 

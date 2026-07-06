@@ -91,6 +91,12 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(goModStr, "agentsdk v1.0.0") {
 		t.Errorf("go.mod should pin agentsdk to AgentSDKVersion (v1.0.0); got:\n%s", goModStr)
 	}
+	if !strings.Contains(goModStr, "tool github.com/airlockrun/agentsdk/cmd/air") {
+		t.Errorf("go.mod should expose air as a module-local tool; got:\n%s", goModStr)
+	}
+	if !strings.Contains(goModStr, "tool github.com/a-h/templ/cmd/templ") {
+		t.Errorf("go.mod should expose templ as a module-local tool; got:\n%s", goModStr)
+	}
 
 	// .gitignore lists the build-time-only files airlock generates
 	// (go.work pair). Dockerfile is committed so users can build the
