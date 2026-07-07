@@ -1,17 +1,18 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
-	"golang.org/x/term"
 )
 
 type credentialsFile struct {
@@ -25,18 +26,20 @@ type credentialSession struct {
 }
 
 func cmdLogin(args []string) error {
-	var email string
-	positional, err := parseFlags(args, func(key, value string) error {
-		switch key {
-		case "email":
-			email = value
+	noBrowser := false
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if len(a) < 2 || a[:2] != "--" {
+			positional = append(positional, a)
+			continue
+		}
+		switch key := a[2:]; key {
+		case "no-browser":
+			noBrowser = true
 		default:
 			return fmt.Errorf("unknown flag --%s", key)
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 	if len(positional) != 1 {
 		return errors.New("login requires exactly one argument: the Airlock URL")
@@ -45,42 +48,89 @@ func cmdLogin(args []string) error {
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		return errors.New("Airlock URL must start with http:// or https://")
 	}
-	if email == "" {
-		fmt.Print("Email: ")
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-		if err != nil {
-			return err
-		}
-		email = strings.TrimSpace(line)
-	}
-	password := os.Getenv("AIRLOCK_PASSWORD")
-	if password == "" {
-		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			return errors.New("AIRLOCK_PASSWORD is required when stdin is not a terminal")
-		}
-		fmt.Print("Password: ")
-		b, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Println()
-		if err != nil {
-			return err
-		}
-		password = string(b)
-	}
+	return loginWithDeviceCode(context.Background(), baseURL, !noBrowser)
+}
 
-	var resp airlockv1.LoginResponse
-	if err := doProto(context.Background(), baseURL, httpMethodPost, "/auth/login", "", &airlockv1.LoginRequest{Email: email, Password: password}, &resp); err != nil {
-		return fmt.Errorf("login: %w", err)
+func loginWithDeviceCode(ctx context.Context, baseURL string, openBrowser bool) error {
+	var begin airlockv1.DeviceLoginBeginResponse
+	if err := doProto(ctx, baseURL, httpMethodPost, "/auth/device/begin", "", &airlockv1.DeviceLoginBeginRequest{ClientName: "air CLI"}, &begin); err != nil {
+		return fmt.Errorf("begin device login: %w", err)
 	}
+	if begin.DeviceCode == "" || begin.UserCode == "" || begin.VerificationUrl == "" {
+		return errors.New("begin device login: server response missing device_code, user_code, or verification_url")
+	}
+	fmt.Println("Open this URL to log in:")
+	fmt.Printf("  %s\n\n", begin.VerificationUrl)
+	fmt.Println("Enter this code in the browser:")
+	fmt.Printf("  %s\n\n", begin.UserCode)
+	if openBrowser {
+		if err := openURL(begin.VerificationUrl); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not open browser: %v\n", err)
+		}
+	}
+	fmt.Println("Waiting for approval...")
+	interval := time.Duration(begin.PollIntervalSeconds) * time.Second
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	deadline := time.Now().Add(time.Duration(begin.ExpiresInSeconds) * time.Second)
+	if begin.ExpiresInSeconds <= 0 {
+		deadline = time.Now().Add(10 * time.Minute)
+	}
+	for {
+		if time.Now().After(deadline) {
+			return errors.New("device login expired")
+		}
+		time.Sleep(interval)
+		var poll airlockv1.DeviceLoginPollResponse
+		if err := doProto(ctx, baseURL, httpMethodPost, "/auth/device/poll", "", &airlockv1.DeviceLoginPollRequest{DeviceCode: begin.DeviceCode}, &poll); err != nil {
+			return fmt.Errorf("poll device login: %w", err)
+		}
+		if poll.PollIntervalSeconds > 0 {
+			interval = time.Duration(poll.PollIntervalSeconds) * time.Second
+		}
+		switch poll.Status {
+		case "pending", "slow_down":
+			continue
+		case "denied":
+			return errors.New("device login denied")
+		case "expired":
+			return errors.New("device login expired")
+		case "approved":
+			if poll.AccessToken == "" || poll.RefreshToken == "" || poll.User == nil {
+				return errors.New("device login approved without credentials")
+			}
+			if err := saveLoginCredentials(baseURL, poll.User.GetEmail(), poll.AccessToken, poll.RefreshToken); err != nil {
+				return err
+			}
+			fmt.Printf("Logged in to %s as %s\n", baseURL, poll.User.GetEmail())
+			return nil
+		default:
+			return fmt.Errorf("device login returned unknown status %q", poll.Status)
+		}
+	}
+}
+
+func saveLoginCredentials(baseURL, email, accessToken, refreshToken string) error {
 	creds, err := loadCredentials()
 	if err != nil {
 		return err
 	}
-	creds.Sessions[baseURL] = credentialSession{Email: email, AccessToken: resp.AccessToken, RefreshToken: resp.RefreshToken}
-	if err := saveCredentials(creds); err != nil {
-		return err
+	creds.Sessions[baseURL] = credentialSession{Email: email, AccessToken: accessToken, RefreshToken: refreshToken}
+	return saveCredentials(creds)
+}
+
+func openURL(url string) error {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
 	}
-	fmt.Printf("Logged in to %s as %s\n", baseURL, email)
-	return nil
+	return cmd.Start()
 }
 
 const httpMethodPost = "POST"
