@@ -11,9 +11,9 @@
 //	air deploy                  upload this repo's source and start a build
 //
 // init and update render the same airlock-managed files airlock's builder
-// produces; toolchain install fetches the exact templ/tailwind/daisyui versions
-// the scaffold pins so local `go tool templ generate` and repo-local
-// `tailwindcss` builds match.
+// produces; toolchain install ensures the pinned templ/tailwind/daisyui versions
+// are available so local `go tool templ generate` and repo-local `tailwindcss`
+// builds match.
 package main
 
 import (
@@ -35,6 +35,7 @@ import (
 const (
 	defaultBaseImage     = "ghcr.io/airlockrun/airlock-agent-base:latest"
 	localToolchainPrefix = ".airlock/toolchain"
+	toolchainMarkerFile  = "air-toolchain.version"
 )
 
 func main() {
@@ -78,7 +79,7 @@ func usage(w io.Writer) {
 Usage:
   air [init] <dir> [flags]        scaffold a new agent into <dir>
   air update [dir] [flags]        regenerate the airlock-managed files in place
-  air toolchain install [flags]   install the pinned frontend toolchain
+  air toolchain install [flags]   ensure the pinned frontend toolchain
   air build [dir]                 run the local build chain
   air login <airlock-url>         store CLI credentials outside the repo
   air deploy [dir] [flags]        upload source and start a build
@@ -100,9 +101,9 @@ Update flags (dir defaults to "."):
   after bumping the agentsdk pin. Requires an existing go.mod in dir.
 
 Toolchain install flags:
-  --prefix <dir>             install prefix (default ".airlock/toolchain")
+  --prefix <dir>             toolchain prefix (default ".airlock/toolchain")
 
-  Installs the frontend toolchain pinned by the scaffold:
+  Ensures the frontend toolchain pinned by the scaffold:
     templ       %s (via go tool templ)
     tailwindcss %s (standalone binary -> <prefix>/bin)
     daisyui     %s (plugin mjs files -> <prefix>/lib/tailwind)
@@ -290,14 +291,10 @@ func runBuild(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
 		return fmt.Errorf("build requires an agent repo with go.mod in %s: %w", dir, err)
 	}
-	tailwindCmd := filepath.Join(localToolchainPrefix, "bin", "tailwindcss")
-	tailwindPath := filepath.Join(dir, tailwindCmd)
-	if _, err := os.Stat(tailwindPath); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("tailwindcss is not installed at %s; run go tool air toolchain install", tailwindPath)
-		}
+	if err := ensureToolchain(filepath.Join(dir, localToolchainPrefix)); err != nil {
 		return err
 	}
+	tailwindCmd := tailwindBinaryPath(localToolchainPrefix)
 	steps := []struct {
 		name string
 		cmd  []string
@@ -377,28 +374,131 @@ func cmdInstallToolchain(args []string) error {
 		return err
 	}
 
-	if err := installTailwind(prefix); err != nil {
-		return err
-	}
-	if err := installDaisyUI(prefix); err != nil {
+	if err := ensureToolchain(prefix); err != nil {
 		return err
 	}
 
-	fmt.Println("\nInstalled frontend toolchain:")
+	fmt.Println("\nFrontend toolchain ready:")
 	fmt.Printf("  templ       %s -> go tool templ\n", scaffold.TemplVersion)
-	fmt.Printf("  tailwindcss %s -> %s\n", scaffold.TailwindVersion, filepath.Join(prefix, "bin", "tailwindcss"))
+	fmt.Printf("  tailwindcss %s -> %s\n", scaffold.TailwindVersion, tailwindBinaryPath(prefix))
 	fmt.Printf("  daisyui     %s -> %s\n", scaffold.DaisyUIVersion, filepath.Join(prefix, "lib", "tailwind"))
 	return nil
 }
 
-func installTailwind(prefix string) error {
+func ensureToolchain(prefix string) error {
+	if toolchainComplete(prefix) {
+		return nil
+	}
+	cacheDir, err := toolchainCacheDir()
+	if err != nil {
+		return err
+	}
+	if err := ensureToolchainCache(cacheDir); err != nil {
+		return err
+	}
+	if err := projectToolchain(prefix, cacheDir); err != nil {
+		return err
+	}
+	if err := writeToolchainMarker(prefix); err != nil {
+		return err
+	}
+	if !toolchainComplete(prefix) {
+		return fmt.Errorf("projected toolchain into %s, but required files are still missing", prefix)
+	}
+	return nil
+}
+
+func toolchainCacheDir() (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user cache dir: %w", err)
+	}
+	return filepath.Join(dir, "airlock", "toolchain"), nil
+}
+
+func ensureToolchainCache(cacheDir string) error {
+	if _, err := os.Stat(tailwindCachePath(cacheDir)); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := installTailwind(cacheDir); err != nil {
+			return err
+		}
+	}
+	for _, file := range []string{"daisyui.mjs", "daisyui-theme.mjs"} {
+		if _, err := os.Stat(filepath.Join(daisyUICacheDir(cacheDir), file)); err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+			if err := installDaisyUI(cacheDir); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func projectToolchain(prefix, cacheDir string) error {
+	links := map[string]struct {
+		src  string
+		perm os.FileMode
+	}{
+		tailwindBinaryPath(prefix): {src: tailwindCachePath(cacheDir), perm: 0o755},
+		filepath.Join(prefix, "lib", "tailwind", "daisyui.mjs"): {
+			src:  filepath.Join(daisyUICacheDir(cacheDir), "daisyui.mjs"),
+			perm: 0o644,
+		},
+		filepath.Join(prefix, "lib", "tailwind", "daisyui-theme.mjs"): {
+			src:  filepath.Join(daisyUICacheDir(cacheDir), "daisyui-theme.mjs"),
+			perm: 0o644,
+		},
+	}
+	for dst, link := range links {
+		if err := linkOrCopy(link.src, dst, link.perm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func toolchainComplete(prefix string) bool {
+	marker, err := os.ReadFile(filepath.Join(prefix, toolchainMarkerFile))
+	if err != nil || string(marker) != toolchainMarker() {
+		return false
+	}
+	for _, path := range []string{
+		tailwindBinaryPath(prefix),
+		filepath.Join(prefix, "lib", "tailwind", "daisyui.mjs"),
+		filepath.Join(prefix, "lib", "tailwind", "daisyui-theme.mjs"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func writeToolchainMarker(prefix string) error {
+	path := filepath.Join(prefix, toolchainMarkerFile)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(toolchainMarker()), 0o644)
+}
+
+func toolchainMarker() string {
+	return fmt.Sprintf("templ=%s\ntailwindcss=%s\ndaisyui=%s\n", scaffold.TemplVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion)
+}
+
+func installTailwind(cacheDir string) error {
 	asset, err := tailwindAsset(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
 	}
 	url := fmt.Sprintf("https://github.com/tailwindlabs/tailwindcss/releases/download/%s/%s",
 		scaffold.TailwindVersion, asset)
-	dst := filepath.Join(prefix, "bin", "tailwindcss")
+	dst := tailwindCachePath(cacheDir)
 	fmt.Printf("Installing tailwindcss %s (%s) -> %s\n", scaffold.TailwindVersion, asset, dst)
 	if err := downloadFile(url, dst, 0o755); err != nil {
 		return fmt.Errorf("install tailwindcss: %w", err)
@@ -406,8 +506,8 @@ func installTailwind(prefix string) error {
 	return nil
 }
 
-func installDaisyUI(prefix string) error {
-	dir := filepath.Join(prefix, "lib", "tailwind")
+func installDaisyUI(cacheDir string) error {
+	dir := daisyUICacheDir(cacheDir)
 	for _, file := range []string{"daisyui.mjs", "daisyui-theme.mjs"} {
 		url := fmt.Sprintf("https://github.com/saadeghi/daisyui/releases/download/%s/%s",
 			scaffold.DaisyUIVersion, file)
@@ -420,6 +520,75 @@ func installDaisyUI(prefix string) error {
 	return nil
 }
 
+func tailwindBinaryPath(prefix string) string {
+	return filepath.Join(prefix, "bin", tailwindBinaryName())
+}
+
+func tailwindCachePath(cacheDir string) string {
+	return filepath.Join(cacheDir, "tailwindcss", scaffold.TailwindVersion, runtime.GOOS+"-"+runtime.GOARCH, tailwindBinaryName())
+}
+
+func daisyUICacheDir(cacheDir string) string {
+	return filepath.Join(cacheDir, "daisyui", scaffold.DaisyUIVersion)
+}
+
+func tailwindBinaryName() string {
+	name := "tailwindcss"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+func linkOrCopy(src, dst string, perm os.FileMode) error {
+	if _, err := os.Stat(src); err != nil {
+		return fmt.Errorf("cached toolchain file %s missing: %w", src, err)
+	}
+	if filepath.Clean(dst) == filepath.Clean(src) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Symlink(src, dst); err == nil {
+		return nil
+	}
+	return copyFile(src, dst, perm)
+}
+
+func copyFile(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			os.Remove(dst)
+		}
+	}()
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(dst, perm); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
+
 // tailwindAsset maps a Go OS/arch pair to the standalone Tailwind release asset
 // name. It is a pure function so it can be unit-tested without networking.
 func tailwindAsset(goos, goarch string) (string, error) {
@@ -429,17 +598,25 @@ func tailwindAsset(goos, goarch string) (string, error) {
 		osPart = "linux"
 	case "darwin":
 		osPart = "macos"
+	case "windows":
+		osPart = "windows"
 	default:
-		return "", fmt.Errorf("unsupported OS %q for tailwindcss (supported: linux, darwin)", goos)
+		return "", fmt.Errorf("unsupported OS %q for tailwindcss (supported: linux, darwin, windows)", goos)
 	}
 	var archPart string
 	switch goarch {
 	case "amd64":
 		archPart = "x64"
 	case "arm64":
+		if goos == "windows" {
+			return "", errors.New("unsupported architecture \"arm64\" for tailwindcss on windows (supported: amd64)")
+		}
 		archPart = "arm64"
 	default:
 		return "", fmt.Errorf("unsupported architecture %q for tailwindcss (supported: amd64, arm64)", goarch)
+	}
+	if goos == "windows" {
+		return fmt.Sprintf("tailwindcss-%s-%s.exe", osPart, archPart), nil
 	}
 	return fmt.Sprintf("tailwindcss-%s-%s", osPart, archPart), nil
 }

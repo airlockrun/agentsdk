@@ -59,6 +59,9 @@ func cmdDeploy(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := ensureDeploySDKVersion(ctx, baseURL, token); err != nil {
+		return err
+	}
 
 	before, err := snapshotManagedFiles(f.dir)
 	if err != nil {
@@ -174,6 +177,26 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 		}
 	}
 	return f, nil
+}
+
+func ensureDeploySDKVersion(ctx context.Context, baseURL, token string) error {
+	var resp airlockv1.GetAgentSDKInfoResponse
+	if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/agent-sdk", token, nil, &resp); err != nil {
+		return fmt.Errorf("check Airlock SDK version: %w", err)
+	}
+	serverVersion := strings.TrimPrefix(resp.GetVersion(), "v")
+	localVersion := strings.TrimPrefix(agentsdk.Version, "v")
+	if serverVersion == "" {
+		return errors.New("check Airlock SDK version: server response did not include a version")
+	}
+	if serverVersion == localVersion {
+		return nil
+	}
+	commandImport := resp.GetCommandImport()
+	if commandImport == "" {
+		commandImport = "github.com/airlockrun/agentsdk/cmd/air"
+	}
+	return fmt.Errorf("Airlock uses agentsdk v%s, but this air CLI is v%s; update this repo, validate the build, then rerun deploy:\n  go get github.com/airlockrun/agentsdk@v%s\n  go get -tool %s@v%s\n  go mod tidy\n  go tool air build", serverVersion, localVersion, serverVersion, commandImport, serverVersion)
 }
 
 func slugFromName(name string) string {
