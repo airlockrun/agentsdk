@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/agentsdk"
 )
 
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -45,7 +47,9 @@ func TestTailwindAsset(t *testing.T) {
 		{name: "linux arm64", goos: "linux", goarch: "arm64", want: "tailwindcss-linux-arm64"},
 		{name: "darwin amd64", goos: "darwin", goarch: "amd64", want: "tailwindcss-macos-x64"},
 		{name: "darwin arm64", goos: "darwin", goarch: "arm64", want: "tailwindcss-macos-arm64"},
-		{name: "unsupported os", goos: "windows", goarch: "amd64", wantErr: true},
+		{name: "windows amd64", goos: "windows", goarch: "amd64", want: "tailwindcss-windows-x64.exe"},
+		{name: "windows arm64", goos: "windows", goarch: "arm64", wantErr: true},
+		{name: "unsupported os", goos: "freebsd", goarch: "amd64", wantErr: true},
 		{name: "unsupported arch", goos: "linux", goarch: "386", wantErr: true},
 	}
 	for _, tt := range tests {
@@ -188,14 +192,90 @@ func TestSlugFromName(t *testing.T) {
 	}
 }
 
-func TestCmdBuildRequiresToolchain(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "agent")
-	if err := cmdInit([]string{dir}); err != nil {
-		t.Fatalf("cmdInit: %v", err)
+func TestEnsureDeploySDKVersion(t *testing.T) {
+	t.Run("accepts matching version", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/agent-sdk" {
+				t.Fatalf("unexpected path %s", r.URL.Path)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer tok" {
+				t.Fatalf("Authorization = %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"version":"` + agentsdk.Version + `","commandImport":"github.com/airlockrun/agentsdk/cmd/air"}`))
+		}))
+		defer srv.Close()
+
+		if err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok"); err != nil {
+			t.Fatalf("ensureDeploySDKVersion: %v", err)
+		}
+	})
+
+	t.Run("rejects mismatched version", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"version":"9.9.9","commandImport":"github.com/airlockrun/agentsdk/cmd/air"}`))
+		}))
+		defer srv.Close()
+
+		err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok")
+		if err == nil {
+			t.Fatal("ensureDeploySDKVersion accepted mismatched version")
+		}
+		for _, want := range []string{
+			"Airlock uses agentsdk v9.9.9",
+			"this air CLI is v" + agentsdk.Version,
+			"go get github.com/airlockrun/agentsdk@v9.9.9",
+			"go get -tool github.com/airlockrun/agentsdk/cmd/air@v9.9.9",
+			"go mod tidy",
+			"go tool air build",
+		} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error %q missing %q", err, want)
+			}
+		}
+	})
+}
+
+func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	cacheDir, err := toolchainCacheDir()
+	if err != nil {
+		t.Fatalf("toolchainCacheDir: %v", err)
 	}
-	err := cmdBuild([]string{dir})
-	if err == nil || !strings.Contains(err.Error(), "toolchain install") {
-		t.Fatalf("cmdBuild error = %v", err)
+	prefix := filepath.Join(t.TempDir(), ".airlock", "toolchain")
+	mustWrite(t, tailwindCachePath(cacheDir), "tailwind")
+	mustWrite(t, filepath.Join(daisyUICacheDir(cacheDir), "daisyui.mjs"), "daisyui")
+	mustWrite(t, filepath.Join(daisyUICacheDir(cacheDir), "daisyui-theme.mjs"), "theme")
+
+	if err := ensureToolchain(prefix); err != nil {
+		t.Fatalf("ensureToolchain: %v", err)
+	}
+	if !toolchainComplete(prefix) {
+		t.Fatal("toolchain is incomplete after projecting cached tools")
+	}
+	marker, err := os.ReadFile(filepath.Join(prefix, toolchainMarkerFile))
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	if string(marker) != toolchainMarker() {
+		t.Fatalf("marker = %q, want %q", marker, toolchainMarker())
+	}
+	for _, tt := range []struct {
+		path string
+		want string
+	}{
+		{path: tailwindBinaryPath(prefix), want: "tailwind"},
+		{path: filepath.Join(prefix, "lib", "tailwind", "daisyui.mjs"), want: "daisyui"},
+		{path: filepath.Join(prefix, "lib", "tailwind", "daisyui-theme.mjs"), want: "theme"},
+	} {
+		got, err := os.ReadFile(tt.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tt.path, err)
+		}
+		if string(got) != tt.want {
+			t.Fatalf("%s = %q, want %q", tt.path, got, tt.want)
+		}
 	}
 }
 
