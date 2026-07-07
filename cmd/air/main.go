@@ -109,7 +109,10 @@ Toolchain install flags:
     daisyui     %s (plugin mjs files -> <prefix>/lib/tailwind)
 
 Login flags:
-  --email <email>            Airlock account email (otherwise prompts)
+  --no-browser               print the device login URL without opening a browser
+
+  Login uses browser approval with a manually entered device code. User
+  authentication happens in Airlock's web UI, including password and passkeys.
 
 Deploy flags:
   --create                   create a draft agent before uploading source
