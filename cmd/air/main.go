@@ -110,15 +110,20 @@ Toolchain install flags:
 
 Login flags:
   --no-browser               print the device login URL without opening a browser
+  --no-wait                  start device login, save pending state, and exit
+  --wait                     wait for browser approval even without a TTY
+  --check                    check one pending device login once and exit
 
-  Login uses browser approval with a manually entered device code. User
-  authentication happens in Airlock's web UI, including password and passkeys.
+  Login uses browser approval with a manually entered device code. In a TTY,
+  air login waits for approval. Without a TTY, it behaves like --no-wait so
+  code harnesses do not hang on a foreground poll loop.
 
 Deploy flags:
   --create                   create a draft agent before uploading source
   --slug <slug>              agent slug for --create (derived from --name or dir if omitted)
   --agent <slug-or-id>       existing agent target; overrides .airlock/agent.toml
   --url <url>                Airlock URL; overrides .airlock/agent.toml
+  --remote <name>            named remote in .airlock/agent.toml (default "default")
   --name <name>              display name for --create (default dir or slug)
   --description <text>       description for --create
 `,
@@ -215,7 +220,9 @@ func cmdInit(args []string) error {
 		return fmt.Errorf("materialize agent: %w", err)
 	}
 	if f.airlockURL != "" {
-		if err := writeAgentBinding(dir, agentBinding{AirlockURL: normalizeBaseURL(f.airlockURL)}); err != nil {
+		binding := agentBinding{}
+		binding.setRemote(defaultRemoteName, agentRemoteBinding{AirlockURL: normalizeBaseURL(f.airlockURL)})
+		if err := writeAgentBinding(dir, binding); err != nil {
 			return fmt.Errorf("write agent binding: %w", err)
 		}
 	}

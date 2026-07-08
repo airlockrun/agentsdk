@@ -29,6 +29,7 @@ type deployFlags struct {
 	slug        string
 	agent       string
 	url         string
+	remote      string
 	name        string
 	description string
 	dir         string
@@ -46,9 +47,17 @@ func cmdDeploy(args []string) error {
 	if err != nil {
 		return err
 	}
+	remoteName := f.remote
+	if remoteName == "" {
+		remoteName = binding.DefaultRemote
+	}
+	if remoteName == "" {
+		remoteName = defaultRemoteName
+	}
+	boundRemote, _ := binding.remote(remoteName)
 	baseURL := normalizeBaseURL(f.url)
 	if baseURL == "" {
-		baseURL = binding.AirlockURL
+		baseURL = boundRemote.AirlockURL
 	}
 	if baseURL == "" {
 		return errors.New("deploy needs an Airlock URL: pass --url or run air init --airlock <url>")
@@ -81,20 +90,19 @@ func cmdDeploy(args []string) error {
 		return fmt.Errorf("update changed airlock-managed files (%s); review the changes and rerun deploy", strings.Join(changed, ", "))
 	}
 
-	var target agentBinding
+	var target agentRemoteBinding
 	if f.create {
 		target, err = createDraftAgent(ctx, baseURL, token, f)
 		if err != nil {
 			return err
 		}
-		binding.AirlockURL = baseURL
-		binding.AgentID = target.AgentID
-		binding.Slug = target.Slug
+		target.AirlockURL = baseURL
+		binding.setRemote(remoteName, target)
 		if err := writeAgentBinding(f.dir, binding); err != nil {
 			return err
 		}
 	} else {
-		target, err = resolveDeployTarget(ctx, baseURL, token, f.agent, binding)
+		target, err = resolveDeployTarget(ctx, baseURL, token, f.agent, boundRemote)
 		if err != nil {
 			return err
 		}
@@ -104,9 +112,8 @@ func cmdDeploy(args []string) error {
 	if err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir); err != nil {
 		return err
 	}
-	binding.AirlockURL = baseURL
-	binding.AgentID = target.AgentID
-	binding.Slug = target.Slug
+	target.AirlockURL = baseURL
+	binding.setRemote(remoteName, target)
 	if err := writeAgentBinding(f.dir, binding); err != nil {
 		return err
 	}
@@ -140,6 +147,8 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 			f.agent = value
 		case "url":
 			f.url = value
+		case "remote":
+			f.remote = value
 		case "name":
 			f.name = value
 		case "description":
@@ -157,6 +166,9 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 	}
 	if f.create && f.agent != "" {
 		return deployFlags{}, errors.New("deploy cannot combine --create and --agent")
+	}
+	if f.remote != "" && !validRemoteName(f.remote) {
+		return deployFlags{}, fmt.Errorf("invalid remote %q: use letters, digits, dashes, and underscores", f.remote)
 	}
 	if f.create {
 		if f.name == "" {
@@ -231,7 +243,7 @@ func validAgentSlug(s string) bool {
 	return agentSlugRe.MatchString(s)
 }
 
-func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags) (agentBinding, error) {
+func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags) (agentRemoteBinding, error) {
 	name := f.name
 	if name == "" {
 		name = f.slug
@@ -244,49 +256,49 @@ func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags)
 		SkipInitialBuild: true,
 	}, &resp)
 	if err != nil {
-		return agentBinding{}, fmt.Errorf("create agent: %w", err)
+		return agentRemoteBinding{}, fmt.Errorf("create agent: %w", err)
 	}
 	if resp.Agent == nil || resp.Agent.Id == "" {
-		return agentBinding{}, errors.New("create agent response did not include an agent id")
+		return agentRemoteBinding{}, errors.New("create agent response did not include an agent id")
 	}
-	return agentBinding{AirlockURL: baseURL, AgentID: resp.Agent.Id, Slug: resp.Agent.Slug}, nil
+	return agentRemoteBinding{AirlockURL: baseURL, AgentID: resp.Agent.Id, Slug: resp.Agent.Slug}, nil
 }
 
-func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, binding agentBinding) (agentBinding, error) {
+func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, binding agentRemoteBinding) (agentRemoteBinding, error) {
 	target := flagAgent
 	if target == "" {
 		target = binding.AgentID
 	}
 	if target == "" && binding.Slug != "" {
-		return agentBinding{}, fmt.Errorf("%s has slug %q but no agent_id; run air deploy --agent %s once to resolve and persist the stable binding", agentBindingPath, binding.Slug, binding.Slug)
+		return agentRemoteBinding{}, fmt.Errorf("%s has slug %q but no agent_id; run air deploy --agent %s once to resolve and persist the stable binding", agentBindingPath, binding.Slug, binding.Slug)
 	}
 	if target == "" {
-		return agentBinding{}, errors.New("deploy needs a target: pass --agent, --create, or set .airlock/agent.toml")
+		return agentRemoteBinding{}, errors.New("deploy needs a target: pass --agent, --create, or set .airlock/agent.toml")
 	}
 	if deployUUIDRe.MatchString(target) {
 		agent, err := getAgentDetail(ctx, baseURL, token, target)
 		if err != nil {
-			return agentBinding{}, err
+			return agentRemoteBinding{}, err
 		}
 		if binding.AgentID == target && binding.Slug != "" && agent.GetSlug() != binding.Slug {
-			return agentBinding{}, fmt.Errorf("%s has agent_id %s but slug %q; Airlock reports slug %q", agentBindingPath, target, binding.Slug, agent.GetSlug())
+			return agentRemoteBinding{}, fmt.Errorf("%s has agent_id %s but slug %q; Airlock reports slug %q", agentBindingPath, target, binding.Slug, agent.GetSlug())
 		}
-		return agentBinding{AirlockURL: baseURL, AgentID: target, Slug: agent.GetSlug()}, nil
+		return agentRemoteBinding{AirlockURL: baseURL, AgentID: target, Slug: agent.GetSlug()}, nil
 	}
 
 	var resp airlockv1.ListAgentsResponse
 	if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/agents", token, nil, &resp); err != nil {
-		return agentBinding{}, fmt.Errorf("resolve agent %q: %w", target, err)
+		return agentRemoteBinding{}, fmt.Errorf("resolve agent %q: %w", target, err)
 	}
 	for _, a := range resp.Agents {
 		if a.GetSlug() == target || a.GetId() == target {
 			if binding.AgentID != "" && binding.Slug == target && a.GetId() != binding.AgentID {
-				return agentBinding{}, fmt.Errorf("%s has slug %q but agent_id %s; Airlock reports agent_id %s", agentBindingPath, binding.Slug, binding.AgentID, a.GetId())
+				return agentRemoteBinding{}, fmt.Errorf("%s has slug %q but agent_id %s; Airlock reports agent_id %s", agentBindingPath, binding.Slug, binding.AgentID, a.GetId())
 			}
-			return agentBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug()}, nil
+			return agentRemoteBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug()}, nil
 		}
 	}
-	return agentBinding{}, fmt.Errorf("agent %q not found in %s", target, baseURL)
+	return agentRemoteBinding{}, fmt.Errorf("agent %q not found in %s", target, baseURL)
 }
 
 func getAgentDetail(ctx context.Context, baseURL, token, agentID string) (*airlockv1.AgentInfo, error) {

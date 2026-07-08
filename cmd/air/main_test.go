@@ -12,8 +12,10 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/agentsdk"
+	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 )
 
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -114,8 +116,34 @@ func TestCmdInitSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAgentBinding: %v", err)
 	}
-	if !ok || b.AirlockURL != "https://airlock.example.com" {
+	remote, hasRemote := b.remote(defaultRemoteName)
+	if !ok || !hasRemote || b.DefaultRemote != defaultRemoteName || remote.AirlockURL != "https://airlock.example.com" {
 		t.Fatalf("binding = %#v, %v", b, ok)
+	}
+}
+
+func TestAgentBindingRemoteSections(t *testing.T) {
+	dir := t.TempDir()
+	b := agentBinding{}
+	b.setRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com/", AgentID: "agent-1", Slug: "todo"})
+	b.setRemote("staging", agentRemoteBinding{AirlockURL: "https://staging.example.com", AgentID: "agent-2", Slug: "todo-staging"})
+	if err := writeAgentBinding(dir, b); err != nil {
+		t.Fatalf("writeAgentBinding: %v", err)
+	}
+	got, ok, err := loadAgentBinding(dir)
+	if err != nil {
+		t.Fatalf("loadAgentBinding: %v", err)
+	}
+	if !ok || got.DefaultRemote != "staging" {
+		t.Fatalf("binding = %#v, ok=%v", got, ok)
+	}
+	prod, ok := got.remote("prod")
+	if !ok || prod.AirlockURL != "https://airlock.example.com" || prod.AgentID != "agent-1" || prod.Slug != "todo" {
+		t.Fatalf("prod remote = %#v, ok=%v", prod, ok)
+	}
+	staging, ok := got.remote("")
+	if !ok || staging.AirlockURL != "https://staging.example.com" || staging.AgentID != "agent-2" || staging.Slug != "todo-staging" {
+		t.Fatalf("default remote = %#v, ok=%v", staging, ok)
 	}
 }
 
@@ -154,11 +182,11 @@ func TestCmdUpdateRequiresGoMod(t *testing.T) {
 }
 
 func TestParseDeployFlags(t *testing.T) {
-	f, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--url", "https://airlock.example.com", "repo"})
+	f, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--url", "https://airlock.example.com", "--remote", "prod", "repo"})
 	if err != nil {
 		t.Fatalf("parseDeployFlags: %v", err)
 	}
-	if !f.create || f.slug != "todo" || f.name != "todo" || f.url != "https://airlock.example.com" || f.dir != "repo" {
+	if !f.create || f.slug != "todo" || f.name != "todo" || f.url != "https://airlock.example.com" || f.remote != "prod" || f.dir != "repo" {
 		t.Fatalf("flags = %#v", f)
 	}
 	f, err = parseDeployFlags([]string{"--create", "--name", "Sales Deck", "repo"})
@@ -170,6 +198,9 @@ func TestParseDeployFlags(t *testing.T) {
 	}
 	if _, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--agent", "todo"}); err == nil {
 		t.Fatal("--create with --agent returned nil error")
+	}
+	if _, err := parseDeployFlags([]string{"--remote", "bad remote"}); err == nil {
+		t.Fatal("invalid --remote returned nil error")
 	}
 }
 
@@ -237,6 +268,47 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 	})
 }
 
+func TestDeviceLoginPendingState(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	baseURL := "https://airlock.example.com/"
+	pending := pendingDeviceLogin{
+		DeviceCode:          "device-secret",
+		UserCode:            "ABCD-EFGH",
+		VerificationURL:     "https://airlock.example.com/device-login",
+		ExpiresAt:           time.Now().Add(10 * time.Minute),
+		PollIntervalSeconds: 3,
+	}
+	if err := savePendingDeviceLogin(baseURL, pending); err != nil {
+		t.Fatalf("savePendingDeviceLogin: %v", err)
+	}
+	creds, err := loadCredentials()
+	if err != nil {
+		t.Fatalf("loadCredentials: %v", err)
+	}
+	if got := creds.PendingDeviceLogins["https://airlock.example.com"]; got.DeviceCode != pending.DeviceCode || got.UserCode != pending.UserCode {
+		t.Fatalf("pending = %#v", got)
+	}
+	done, err := handleDeviceLoginPoll("https://airlock.example.com", &airlockv1.DeviceLoginPollResponse{
+		Status:       "approved",
+		AccessToken:  "access",
+		RefreshToken: "refresh",
+		User:         &airlockv1.User{Email: "dev@example.com"},
+	})
+	if err != nil || !done {
+		t.Fatalf("handleDeviceLoginPoll done=%v err=%v", done, err)
+	}
+	creds, err = loadCredentials()
+	if err != nil {
+		t.Fatalf("loadCredentials after approve: %v", err)
+	}
+	if _, ok := creds.PendingDeviceLogins["https://airlock.example.com"]; ok {
+		t.Fatalf("pending was not cleared: %#v", creds.PendingDeviceLogins)
+	}
+	if got := creds.Sessions["https://airlock.example.com"]; got.Email != "dev@example.com" || got.AccessToken != "access" || got.RefreshToken != "refresh" {
+		t.Fatalf("session = %#v", got)
+	}
+}
+
 func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	cacheDir, err := toolchainCacheDir()
@@ -290,7 +362,7 @@ func TestResolveDeployTargetFailsOnBindingSlugMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "", agentBinding{AgentID: id, Slug: "stale-slug"})
+	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "", agentRemoteBinding{AgentID: id, Slug: "stale-slug"})
 	if err == nil || !strings.Contains(err.Error(), "stale-slug") || !strings.Contains(err.Error(), "real-slug") {
 		t.Fatalf("resolveDeployTarget error = %v", err)
 	}
@@ -308,14 +380,14 @@ func TestResolveDeployTargetFailsOnBindingIDMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "todo", agentBinding{AgentID: boundID, Slug: "todo"})
+	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "todo", agentRemoteBinding{AgentID: boundID, Slug: "todo"})
 	if err == nil || !strings.Contains(err.Error(), boundID) || !strings.Contains(err.Error(), realID) {
 		t.Fatalf("resolveDeployTarget error = %v", err)
 	}
 }
 
 func TestResolveDeployTargetRejectsSlugOnlyBinding(t *testing.T) {
-	_, err := resolveDeployTarget(context.Background(), "https://airlock.example.com", "tok", "", agentBinding{Slug: "todo"})
+	_, err := resolveDeployTarget(context.Background(), "https://airlock.example.com", "tok", "", agentRemoteBinding{Slug: "todo"})
 	if err == nil || !strings.Contains(err.Error(), "no agent_id") || !strings.Contains(err.Error(), "--agent todo") {
 		t.Fatalf("resolveDeployTarget error = %v", err)
 	}
