@@ -8,6 +8,7 @@
 //	                             install the pinned frontend toolchain
 //	go tool air build            run the local build chain
 //	air login <airlock-url>      store CLI credentials outside the repo
+//	air logout <airlock-url>     revoke and remove CLI credentials
 //	air deploy                  upload this repo's source and start a build
 //
 // init and update render the same airlock-managed files airlock's builder
@@ -65,6 +66,8 @@ func run(args []string) error {
 		return cmdBuild(args[1:])
 	case "login":
 		return cmdLogin(args[1:])
+	case "logout":
+		return cmdLogout(args[1:])
 	case "deploy":
 		return cmdDeploy(args[1:])
 	default:
@@ -82,6 +85,7 @@ Usage:
   air toolchain install [flags]   ensure the pinned frontend toolchain
   air build [dir]                 run the local build chain
   air login <airlock-url>         store CLI credentials outside the repo
+  air logout <airlock-url>        revoke and remove CLI credentials
   air deploy [dir] [flags]        upload source and start a build
 
 Init flags:
