@@ -3,6 +3,7 @@ package agentsdk
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -75,6 +76,34 @@ type Agent struct {
 	// bg holds the rolling "background" run used for model calls made with
 	// no dispatcher-bound ctx. See background.go.
 	bg backgroundState
+}
+
+// ErrAgentURLUnavailable means the agent's public URL is not available from
+// the current value or context. Serve syncs with Airlock before accepting
+// requests, so deployed handlers normally have a URL; tests that call Handler
+// directly may need to sync first or omit absolute links.
+var ErrAgentURLUnavailable = errors.New("agentsdk: agent URL is unavailable")
+
+// AgentURL returns the agent's public origin, e.g. https://todo.example.com.
+// Use relative paths such as "/auth" for links within the same agent UI; use
+// AgentURL only when an absolute URL leaves the current request context, such
+// as emails, third-party callbacks, or messages.
+func (a *Agent) AgentURL() (string, error) {
+	a.syncMu.RLock()
+	defer a.syncMu.RUnlock()
+	if a.promptData.AgentRouteURL == "" {
+		return "", ErrAgentURLUnavailable
+	}
+	return a.promptData.AgentRouteURL, nil
+}
+
+// AgentURLFromContext returns AgentURL for the agent bound to ctx.
+func AgentURLFromContext(ctx context.Context) (string, error) {
+	a := AgentFromContext(ctx)
+	if a == nil {
+		return "", ErrAgentURLUnavailable
+	}
+	return a.AgentURL()
 }
 
 // GetDeps retrieves the typed Deps struct from the Agent bound to ctx.

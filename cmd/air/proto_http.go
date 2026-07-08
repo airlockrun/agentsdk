@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,27 @@ var (
 	protoUnmarshal = protojson.UnmarshalOptions{DiscardUnknown: true}
 	apiClient      = &http.Client{Timeout: 10 * time.Minute}
 )
+
+type httpStatusError struct {
+	StatusCode int
+	Status     string
+	Message    string
+}
+
+func (e *httpStatusError) Error() string {
+	if e.Message == "" {
+		return e.Status
+	}
+	return fmt.Sprintf("%s: %s", e.Status, e.Message)
+}
+
+func isAuthRejected(err error) bool {
+	var statusErr *httpStatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	return statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden
+}
 
 func doProto(ctx context.Context, baseURL, method, path, token string, in proto.Message, out proto.Message) error {
 	var body io.Reader
@@ -51,9 +73,9 @@ func doProto(ctx context.Context, baseURL, method, path, token string, in proto.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var er airlockv1.ErrorResponse
 		if err := protoUnmarshal.Unmarshal(bodyBytes, &er); err == nil && er.Error != "" {
-			return fmt.Errorf("%s: %s", resp.Status, er.Error)
+			return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: er.Error}
 		}
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(bodyBytes)))
+		return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: strings.TrimSpace(string(bodyBytes))}
 	}
 	if out == nil {
 		return nil

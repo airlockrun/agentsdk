@@ -91,7 +91,7 @@ func cmdLogin(args []string) error {
 
 func loginWithDeviceCode(ctx context.Context, baseURL string, openBrowser, wait bool) error {
 	var begin airlockv1.DeviceLoginBeginResponse
-	if err := doProto(ctx, baseURL, httpMethodPost, "/auth/device/begin", "", &airlockv1.DeviceLoginBeginRequest{ClientName: "air CLI"}, &begin); err != nil {
+	if err := doProto(ctx, baseURL, httpMethodPost, "/auth/device/begin", "", &airlockv1.DeviceLoginBeginRequest{ClientName: "air CLI", DeviceName: defaultDeviceName()}, &begin); err != nil {
 		return fmt.Errorf("begin device login: %w", err)
 	}
 	if begin.DeviceCode == "" || begin.UserCode == "" || begin.VerificationUrl == "" {
@@ -217,6 +217,56 @@ func handleDeviceLoginPoll(baseURL string, poll *airlockv1.DeviceLoginPollRespon
 	}
 }
 
+func cmdLogout(args []string) error {
+	if len(args) != 1 {
+		return errors.New("logout requires exactly one argument: the Airlock URL")
+	}
+	baseURL := normalizeBaseURL(args[0])
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		return errors.New("Airlock URL must start with http:// or https://")
+	}
+	creds, err := loadCredentials()
+	if err != nil {
+		return err
+	}
+	sess, hadSession := creds.Sessions[baseURL]
+	if hadSession && sess.RefreshToken != "" {
+		if err := doProto(context.Background(), baseURL, httpMethodPost, "/auth/logout", "", &airlockv1.LogoutRequest{RefreshToken: sess.RefreshToken}, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not revoke server session: %v\n", err)
+		}
+	}
+	delete(creds.Sessions, baseURL)
+	delete(creds.PendingDeviceLogins, baseURL)
+	if err := saveCredentials(creds); err != nil {
+		return err
+	}
+	if hadSession {
+		fmt.Printf("Logged out of %s\n", baseURL)
+	} else {
+		fmt.Printf("No saved login for %s\n", baseURL)
+	}
+	return nil
+}
+
+func defaultDeviceName() string {
+	userName := strings.TrimSpace(os.Getenv("USER"))
+	if userName == "" {
+		userName = strings.TrimSpace(os.Getenv("USERNAME"))
+	}
+	host, _ := os.Hostname()
+	host = strings.TrimSpace(host)
+	switch {
+	case userName != "" && host != "":
+		return userName + "@" + host
+	case host != "":
+		return host
+	case userName != "":
+		return userName
+	default:
+		return "air CLI"
+	}
+}
+
 func deviceLoginExpiresAt(expiresInSeconds int32) time.Time {
 	if expiresInSeconds <= 0 {
 		expiresInSeconds = int32((10 * time.Minute) / time.Second)
@@ -282,6 +332,13 @@ func accessTokenForURL(ctx context.Context, baseURL string) (string, error) {
 	}
 	var resp airlockv1.RefreshResponse
 	if err := doProto(ctx, baseURL, httpMethodPost, "/auth/refresh", "", &airlockv1.RefreshRequest{RefreshToken: sess.RefreshToken}, &resp); err != nil {
+		if isAuthRejected(err) {
+			delete(creds.Sessions, normalizeBaseURL(baseURL))
+			if saveErr := saveCredentials(creds); saveErr != nil {
+				return "", saveErr
+			}
+			return "", fmt.Errorf("login expired for %s; run air login %s", baseURL, baseURL)
+		}
 		return "", fmt.Errorf("refresh login for %s: %w", baseURL, err)
 	}
 	sess.AccessToken = resp.AccessToken

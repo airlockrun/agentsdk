@@ -131,6 +131,13 @@ spotify/
 LLM-callable tools live in `tools.go`. HTTP routes live in `handlers/`.
 Both consume the pure layer in `service.go`; neither imports the other.
 
+Use relative paths (`/auth`, `/settings`) for links within the same agent UI.
+`agentsdk.AgentURL()` / `agentsdk.AgentURLFromContext(ctx)` return the agent's
+public origin for absolute URLs that leave the request context, such as emails,
+third-party callbacks, or chat messages. These accessors return an error in
+tests that call `agent.Handler()` without syncing with Airlock first; render
+pages so they can omit absolute links when the URL is unavailable.
+
 ## Build chain
 
 Every time you change a `.templ`, edit `styles/app.css`, or modify any

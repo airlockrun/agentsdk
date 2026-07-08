@@ -309,6 +309,65 @@ func TestDeviceLoginPendingState(t *testing.T) {
 	}
 }
 
+func TestCmdLogoutRevokesAndClearsSession(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	var sawLogout bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/logout" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		sawLogout = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", "access", "refresh"); err != nil {
+		t.Fatalf("saveLoginCredentials: %v", err)
+	}
+	if err := cmdLogout([]string{srv.URL}); err != nil {
+		t.Fatalf("cmdLogout: %v", err)
+	}
+	if !sawLogout {
+		t.Fatal("logout endpoint was not called")
+	}
+	creds, err := loadCredentials()
+	if err != nil {
+		t.Fatalf("loadCredentials: %v", err)
+	}
+	if _, ok := creds.Sessions[normalizeBaseURL(srv.URL)]; ok {
+		t.Fatalf("session was not cleared: %#v", creds.Sessions)
+	}
+}
+
+func TestAccessTokenClearsExpiredLogin(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/refresh" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		http.Error(w, `{"error":"invalid refresh token"}`, http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", "access", "refresh"); err != nil {
+		t.Fatalf("saveLoginCredentials: %v", err)
+	}
+	_, err := accessTokenForURL(context.Background(), srv.URL)
+	if err == nil {
+		t.Fatal("accessTokenForURL returned nil error")
+	}
+	if want := "login expired for " + normalizeBaseURL(srv.URL) + "; run air login " + normalizeBaseURL(srv.URL); err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+	creds, err := loadCredentials()
+	if err != nil {
+		t.Fatalf("loadCredentials: %v", err)
+	}
+	if _, ok := creds.Sessions[normalizeBaseURL(srv.URL)]; ok {
+		t.Fatalf("expired session was not cleared: %#v", creds.Sessions)
+	}
+}
+
 func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	cacheDir, err := toolchainCacheDir()
