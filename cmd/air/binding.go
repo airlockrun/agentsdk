@@ -5,13 +5,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 const agentBindingPath = ".airlock/agent.toml"
+const defaultRemoteName = "default"
 
 type agentBinding struct {
+	DefaultRemote string
+	Remotes       map[string]agentRemoteBinding
+}
+
+type agentRemoteBinding struct {
 	AirlockURL string
 	AgentID    string
 	Slug       string
@@ -28,11 +35,29 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 	}
 	defer f.Close()
 
-	var b agentBinding
+	b := agentBinding{Remotes: map[string]agentRemoteBinding{}}
+	currentRemote := ""
 	s := bufio.NewScanner(f)
 	for s.Scan() {
 		line := strings.TrimSpace(s.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			if !strings.HasSuffix(line, "]") {
+				return agentBinding{}, false, fmt.Errorf("%s: invalid section %q", path, line)
+			}
+			name := strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
+			if !strings.HasPrefix(name, "remotes.") {
+				return agentBinding{}, false, fmt.Errorf("%s: unknown section %q", path, name)
+			}
+			currentRemote = strings.TrimPrefix(name, "remotes.")
+			if !validRemoteName(currentRemote) {
+				return agentBinding{}, false, fmt.Errorf("%s: invalid remote name %q", path, currentRemote)
+			}
+			if _, ok := b.Remotes[currentRemote]; !ok {
+				b.Remotes[currentRemote] = agentRemoteBinding{}
+			}
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -45,19 +70,33 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 		if err != nil {
 			return agentBinding{}, false, fmt.Errorf("%s: invalid value for %s: %w", path, key, err)
 		}
+		if currentRemote == "" {
+			switch key {
+			case "default_remote":
+				b.DefaultRemote = unquoted
+			default:
+				return agentBinding{}, false, fmt.Errorf("%s: unknown top-level key %q", path, key)
+			}
+			continue
+		}
+		remote := b.Remotes[currentRemote]
 		switch key {
-		case "airlock_url":
-			b.AirlockURL = normalizeBaseURL(unquoted)
+		case "url":
+			remote.AirlockURL = normalizeBaseURL(unquoted)
 		case "agent_id":
-			b.AgentID = unquoted
+			remote.AgentID = unquoted
 		case "slug":
-			b.Slug = unquoted
+			remote.Slug = unquoted
 		default:
 			return agentBinding{}, false, fmt.Errorf("%s: unknown key %q", path, key)
 		}
+		b.Remotes[currentRemote] = remote
 	}
 	if err := s.Err(); err != nil {
 		return agentBinding{}, false, err
+	}
+	if b.DefaultRemote == "" && len(b.Remotes) > 0 {
+		return agentBinding{}, false, fmt.Errorf("%s: default_remote is required", path)
 	}
 	return b, true, nil
 }
@@ -72,16 +111,69 @@ func writeAgentBinding(dir string, b agentBinding) error {
 		return err
 	}
 	defer f.Close()
-	if b.AirlockURL != "" {
-		fmt.Fprintf(f, "airlock_url = %s\n", strconv.Quote(normalizeBaseURL(b.AirlockURL)))
+	if b.DefaultRemote == "" {
+		b.DefaultRemote = defaultRemoteName
 	}
-	if b.AgentID != "" {
-		fmt.Fprintf(f, "agent_id = %s\n", strconv.Quote(b.AgentID))
+	fmt.Fprintf(f, "default_remote = %s\n", strconv.Quote(b.DefaultRemote))
+	var names []string
+	for name := range b.Remotes {
+		names = append(names, name)
 	}
-	if b.Slug != "" {
-		fmt.Fprintf(f, "slug = %s\n", strconv.Quote(b.Slug))
+	sort.Strings(names)
+	for _, name := range names {
+		remote := b.Remotes[name]
+		fmt.Fprintf(f, "\n[remotes.%s]\n", name)
+		if remote.AirlockURL != "" {
+			fmt.Fprintf(f, "url = %s\n", strconv.Quote(normalizeBaseURL(remote.AirlockURL)))
+		}
+		if remote.AgentID != "" {
+			fmt.Fprintf(f, "agent_id = %s\n", strconv.Quote(remote.AgentID))
+		}
+		if remote.Slug != "" {
+			fmt.Fprintf(f, "slug = %s\n", strconv.Quote(remote.Slug))
+		}
 	}
 	return nil
+}
+
+func (b agentBinding) remote(name string) (agentRemoteBinding, bool) {
+	if name == "" {
+		name = b.DefaultRemote
+	}
+	if name == "" {
+		return agentRemoteBinding{}, false
+	}
+	remote, ok := b.Remotes[name]
+	return remote, ok
+}
+
+func (b *agentBinding) setRemote(name string, remote agentRemoteBinding) {
+	if name == "" {
+		name = b.DefaultRemote
+	}
+	if name == "" {
+		name = defaultRemoteName
+	}
+	if b.Remotes == nil {
+		b.Remotes = map[string]agentRemoteBinding{}
+	}
+	b.DefaultRemote = name
+	b.Remotes[name] = remote
+}
+
+func validRemoteName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeBaseURL(raw string) string {
