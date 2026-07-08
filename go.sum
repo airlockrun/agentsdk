@@ -2,8 +2,12 @@ github.com/Masterminds/semver/v3 v3.2.1 h1:RN9w6+7QoMeJVGyfmbcgs28Br8cvmnucEXnY0
 github.com/Masterminds/semver/v3 v3.2.1/go.mod h1:qvl/7zhW3nngYb5+80sSMF+FG2BjYrf8m9wsX0PNOMQ=
 github.com/airlockrun/goai v0.1.5-rc.7 h1:nynXvuNX+mH5+wGb5AP99gu1TxQNsONKMemmNrkubs8=
 github.com/airlockrun/goai v0.1.5-rc.7/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
+github.com/airlockrun/goai v0.1.5-rc.9 h1:fgOZcNPpNO2LMb/rfbN0d/Ic8yDiLHxYqj6P/htUmj4=
+github.com/airlockrun/goai v0.1.5-rc.9/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
 github.com/airlockrun/sol v0.1.8-rc.6 h1:ouYpI+suTQmm8pl/XfFqCWCiC2yXWX0oWaxePR9HtEk=
 github.com/airlockrun/sol v0.1.8-rc.6/go.mod h1:2hM5SaOwMAKi+rRcxPJ6GxbC7ZqcDvb25w83iH+bnt4=
+github.com/airlockrun/sol v0.1.8-rc.7 h1:SjKDGhfHLOxU9ibuPfd3eJl0ENamSqp9+sVgKReCv0o=
+github.com/airlockrun/sol v0.1.8-rc.7/go.mod h1:qKV9tVvfDtNSdCeJctT/AkEXnDozMRnzywzd7/jotko=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dlclark/regexp2 v1.11.4 h1:rPYF9/LECdNymJufQKmri9gV604RvvABwgOA8un7yAo=
