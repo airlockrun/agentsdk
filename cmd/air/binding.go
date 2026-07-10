@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const agentBindingPath = ".airlock/agent.toml"
+const agentBindingPath = ".airlock/local/agent.toml"
 const defaultRemoteName = "default"
 
 type agentBinding struct {
@@ -19,9 +19,10 @@ type agentBinding struct {
 }
 
 type agentRemoteBinding struct {
-	AirlockURL string
-	AgentID    string
-	Slug       string
+	AirlockURL  string
+	AgentID     string
+	Slug        string
+	SourceState string
 }
 
 func loadAgentBinding(dir string) (agentBinding, bool, error) {
@@ -87,6 +88,8 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 			remote.AgentID = unquoted
 		case "slug":
 			remote.Slug = unquoted
+		case "source_state":
+			remote.SourceState = unquoted
 		default:
 			return agentBinding{}, false, fmt.Errorf("%s: unknown key %q", path, key)
 		}
@@ -131,6 +134,9 @@ func writeAgentBinding(dir string, b agentBinding) error {
 		}
 		if remote.Slug != "" {
 			fmt.Fprintf(f, "slug = %s\n", strconv.Quote(remote.Slug))
+		}
+		if remote.SourceState != "" {
+			fmt.Fprintf(f, "source_state = %s\n", strconv.Quote(remote.SourceState))
 		}
 	}
 	return nil

@@ -125,7 +125,7 @@ func TestCmdInitSmoke(t *testing.T) {
 func TestAgentBindingRemoteSections(t *testing.T) {
 	dir := t.TempDir()
 	b := agentBinding{}
-	b.setRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com/", AgentID: "agent-1", Slug: "todo"})
+	b.setRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com/", AgentID: "agent-1", Slug: "todo", SourceState: "sha256:prod"})
 	b.setRemote("staging", agentRemoteBinding{AirlockURL: "https://staging.example.com", AgentID: "agent-2", Slug: "todo-staging"})
 	if err := writeAgentBinding(dir, b); err != nil {
 		t.Fatalf("writeAgentBinding: %v", err)
@@ -138,7 +138,7 @@ func TestAgentBindingRemoteSections(t *testing.T) {
 		t.Fatalf("binding = %#v, ok=%v", got, ok)
 	}
 	prod, ok := got.remote("prod")
-	if !ok || prod.AirlockURL != "https://airlock.example.com" || prod.AgentID != "agent-1" || prod.Slug != "todo" {
+	if !ok || prod.AirlockURL != "https://airlock.example.com" || prod.AgentID != "agent-1" || prod.Slug != "todo" || prod.SourceState != "sha256:prod" {
 		t.Fatalf("prod remote = %#v, ok=%v", prod, ok)
 	}
 	staging, ok := got.remote("")
@@ -457,7 +457,7 @@ func TestWriteSourceArchiveSkipsLocalState(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
 	mustWrite(t, filepath.Join(dir, "main.go"), "package main\n")
 	mustWrite(t, filepath.Join(dir, ".git", "config"), "secret")
-	mustWrite(t, filepath.Join(dir, ".airlock", "agent.toml"), "slug = \"todo\"\n")
+	mustWrite(t, filepath.Join(dir, ".airlock", "local", "agent.toml"), "slug = \"todo\"\n")
 	mustWrite(t, filepath.Join(dir, ".airlock", "local", "storage", "uploads", "doc.txt"), "local")
 	mustWrite(t, filepath.Join(dir, ".airlock", "toolchain", "bin", "tailwindcss"), "binary")
 
@@ -479,10 +479,10 @@ func TestWriteSourceArchiveSkipsLocalState(t *testing.T) {
 		}
 		seen[h.Name] = true
 	}
-	if !seen["go.mod"] || !seen["main.go"] || !seen[".airlock/agent.toml"] {
+	if !seen["go.mod"] || !seen["main.go"] {
 		t.Fatalf("archive missing expected files: %#v", seen)
 	}
-	if seen[".git/config"] || seen[".airlock/local/storage/uploads/doc.txt"] || seen[".airlock/toolchain/bin/tailwindcss"] {
+	if seen[".git/config"] || seen[".airlock/local/agent.toml"] || seen[".airlock/local/storage/uploads/doc.txt"] || seen[".airlock/toolchain/bin/tailwindcss"] {
 		t.Fatalf("archive included local state: %#v", seen)
 	}
 }
