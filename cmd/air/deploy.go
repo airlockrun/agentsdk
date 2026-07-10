@@ -1,8 +1,6 @@
 package main
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -12,11 +10,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/airlockrun/agentsdk"
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"github.com/airlockrun/agentsdk/scaffold"
+	"github.com/airlockrun/agentsdk/sourcebundle"
 )
 
 var (
@@ -26,6 +24,7 @@ var (
 
 type deployFlags struct {
 	create      bool
+	force       bool
 	slug        string
 	agent       string
 	url         string
@@ -109,15 +108,40 @@ func cmdDeploy(args []string) error {
 	}
 
 	fmt.Printf("Deploying %s to %s (%s) at %s\n", f.dir, target.Slug, target.AgentID, baseURL)
-	if err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir); err != nil {
+	localState, err := sourcebundle.Digest(f.dir)
+	if err != nil {
+		return fmt.Errorf("hash source: %w", err)
+	}
+	previousState := target.SourceState
+	newState, err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir, previousState, f.force)
+	if err != nil {
+		var stale *staleSourceError
+		if errors.As(err, &stale) {
+			if stale.gitRemote != "" {
+				branchArg := ""
+				if stale.gitBranch != "" {
+					branchArg = " --branch " + stale.gitBranch
+				}
+				return fmt.Errorf("the connected Git branch changed since this workspace last synced.\n\nClone the current branch into another directory:\n  git clone%s %s ../%s-latest\n\nMerge your changes there and push through Git", branchArg, stale.gitRemote, target.Slug)
+			}
+			return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  air deploy\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, baseURL, target.Slug)
+		}
 		return err
 	}
+	if newState != localState {
+		return fmt.Errorf("Airlock returned source state %s, want uploaded state %s", newState, localState)
+	}
+	target.SourceState = newState
 	target.AirlockURL = baseURL
 	binding.setRemote(remoteName, target)
 	if err := writeAgentBinding(f.dir, binding); err != nil {
 		return err
 	}
-	fmt.Println("Source uploaded; build started")
+	if previousState == newState && !f.force {
+		fmt.Println("Source is unchanged; no build started")
+	} else {
+		fmt.Println("Source uploaded; build started")
+	}
 	return nil
 }
 
@@ -133,6 +157,10 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 		key := a[2:]
 		if key == "create" {
 			f.create = true
+			continue
+		}
+		if key == "force" {
+			f.force = true
 			continue
 		}
 		if i+1 >= len(args) {
@@ -273,7 +301,7 @@ func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, 
 		return agentRemoteBinding{}, fmt.Errorf("%s has slug %q but no agent_id; run air deploy --agent %s once to resolve and persist the stable binding", agentBindingPath, binding.Slug, binding.Slug)
 	}
 	if target == "" {
-		return agentRemoteBinding{}, errors.New("deploy needs a target: pass --agent, --create, or set .airlock/agent.toml")
+		return agentRemoteBinding{}, fmt.Errorf("deploy needs a target: pass --agent, --create, or set %s", agentBindingPath)
 	}
 	if deployUUIDRe.MatchString(target) {
 		agent, err := getAgentDetail(ctx, baseURL, token, target)
@@ -283,7 +311,7 @@ func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, 
 		if binding.AgentID == target && binding.Slug != "" && agent.GetSlug() != binding.Slug {
 			return agentRemoteBinding{}, fmt.Errorf("%s has agent_id %s but slug %q; Airlock reports slug %q", agentBindingPath, target, binding.Slug, agent.GetSlug())
 		}
-		return agentRemoteBinding{AirlockURL: baseURL, AgentID: target, Slug: agent.GetSlug()}, nil
+		return agentRemoteBinding{AirlockURL: baseURL, AgentID: target, Slug: agent.GetSlug(), SourceState: binding.SourceState}, nil
 	}
 
 	var resp airlockv1.ListAgentsResponse
@@ -295,7 +323,7 @@ func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, 
 			if binding.AgentID != "" && binding.Slug == target && a.GetId() != binding.AgentID {
 				return agentRemoteBinding{}, fmt.Errorf("%s has slug %q but agent_id %s; Airlock reports agent_id %s", agentBindingPath, binding.Slug, binding.AgentID, a.GetId())
 			}
-			return agentRemoteBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug()}, nil
+			return agentRemoteBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug(), SourceState: binding.SourceState}, nil
 		}
 	}
 	return agentRemoteBinding{}, fmt.Errorf("agent %q not found in %s", target, baseURL)
@@ -312,111 +340,63 @@ func getAgentDetail(ctx context.Context, baseURL, token, agentID string) (*airlo
 	return resp.Agent, nil
 }
 
-func uploadSource(ctx context.Context, baseURL, token, agentID, dir string) error {
+type staleSourceError struct {
+	gitRemote string
+	gitBranch string
+}
+
+func (e *staleSourceError) Error() string { return "source state is stale" }
+
+func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState string, force bool) (string, error) {
 	pr, pw := io.Pipe()
 	go func() {
 		pw.CloseWithError(writeSourceArchive(pw, dir))
 	}()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", pr)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/gzip")
+	if sourceState != "" {
+		req.Header.Set("If-Match", quoteETag(sourceState))
+	}
+	if force {
+		req.Header.Set("X-Airlock-Force", "true")
+	}
 	resp, err := apiClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusPreconditionFailed || resp.StatusCode == http.StatusPreconditionRequired {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", &staleSourceError{
+			gitRemote: strings.TrimSpace(resp.Header.Get("X-Airlock-Git-Remote")),
+			gitBranch: strings.TrimSpace(resp.Header.Get("X-Airlock-Git-Branch")),
+		}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		var er airlockv1.ErrorResponse
 		if err := protoUnmarshal.Unmarshal(b, &er); err == nil && er.Error != "" {
-			return fmt.Errorf("upload source: %s: %s", resp.Status, er.Error)
+			return "", fmt.Errorf("upload source: %s: %s", resp.Status, er.Error)
 		}
-		return fmt.Errorf("upload source: %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		return "", fmt.Errorf("upload source: %s: %s", resp.Status, strings.TrimSpace(string(b)))
 	}
-	return nil
+	state := unquoteETag(resp.Header.Get("ETag"))
+	if state == "" {
+		return "", errors.New("upload source: Airlock response did not include ETag")
+	}
+	return state, nil
 }
 
 func writeSourceArchive(w io.Writer, dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
 		return fmt.Errorf("source archive requires go.mod at repo root: %w", err)
 	}
-	gz := gzip.NewWriter(w)
-	tw := tar.NewWriter(gz)
-	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if skipArchivePath(rel, d.IsDir()) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		if info.Mode()&os.ModeType != 0 {
-			if d.IsDir() {
-				return nil
-			}
-			return fmt.Errorf("source archive does not support special file %s", rel)
-		}
-		if d.IsDir() {
-			return nil
-		}
-		h := &tar.Header{Name: rel, Mode: int64(info.Mode().Perm()), Size: info.Size(), ModTime: info.ModTime().UTC().Truncate(time.Second)}
-		if err := tw.WriteHeader(h); err != nil {
-			return err
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(tw, f)
-		closeErr := f.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		return closeErr
-	})
-	if closeErr := tw.Close(); err == nil {
-		err = closeErr
-	}
-	if closeErr := gz.Close(); err == nil {
-		err = closeErr
-	}
+	_, err := sourcebundle.WriteArchive(w, dir)
 	return err
-}
-
-func skipArchivePath(rel string, isDir bool) bool {
-	if rel == ".git" || strings.HasPrefix(rel, ".git/") {
-		return true
-	}
-	if rel == ".airlock/local" || strings.HasPrefix(rel, ".airlock/local/") {
-		return true
-	}
-	if rel == ".airlock/toolchain" || strings.HasPrefix(rel, ".airlock/toolchain/") {
-		return true
-	}
-	if isDir {
-		switch rel {
-		case "node_modules", ".cache", ".tmp":
-			return true
-		}
-	}
-	return false
 }
 
 func snapshotManagedFiles(dir string) (map[string][]byte, error) {

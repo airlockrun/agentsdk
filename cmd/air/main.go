@@ -1,6 +1,6 @@
 // Command air authors and maintains Airlock agent repos outside airlock.
 //
-// It wraps the agentsdk/scaffold package with three subcommands:
+// It wraps the agentsdk/scaffold package with local build and source-sync commands:
 //
 //	air [init] <dir>             scaffold a new agent into <dir>
 //	air update [dir]             regenerate the airlock-managed files in place
@@ -9,7 +9,9 @@
 //	go tool air build            run the local build chain
 //	air login <airlock-url>      store CLI credentials outside the repo
 //	air logout <airlock-url>     revoke and remove CLI credentials
-//	air deploy                  upload this repo's source and start a build
+//	air deploy                   upload this repo's source and start a build
+//	air pull                     fast-forward this workspace from Airlock
+//	air clone <agent> <dir>      clone Airlock source without Git
 //
 // init and update render the same airlock-managed files airlock's builder
 // produces; toolchain install ensures the pinned templ/tailwind/daisyui versions
@@ -70,6 +72,10 @@ func run(args []string) error {
 		return cmdLogout(args[1:])
 	case "deploy":
 		return cmdDeploy(args[1:])
+	case "pull":
+		return cmdPull(args[1:])
+	case "clone":
+		return cmdClone(args[1:])
 	default:
 		// Bare `air <dir>` is shorthand for `air init <dir>`.
 		return cmdInit(args)
@@ -87,13 +93,15 @@ Usage:
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
   air deploy [dir] [flags]        upload source and start a build
+  air pull [dir] [flags]          fast-forward a local workspace from Airlock
+  air clone <agent> <dir> [flags] clone Airlock source without Git
 
 Init flags:
   --module <name>            Go module path for the agent (default "agent")
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
   --base-image <ref>         runtime base image for the Dockerfile FROM line
                              (default "%s")
-  --airlock <url>            write .airlock/agent.toml with this Airlock URL
+  --airlock <url>            write .airlock/local/agent.toml with this Airlock URL
 
 Update flags (dir defaults to "."):
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
@@ -125,11 +133,22 @@ Login flags:
 Deploy flags:
   --create                   create a draft agent before uploading source
   --slug <slug>              agent slug for --create (derived from --name or dir if omitted)
-  --agent <slug-or-id>       existing agent target; overrides .airlock/agent.toml
-  --url <url>                Airlock URL; overrides .airlock/agent.toml
-  --remote <name>            named remote in .airlock/agent.toml (default "default")
+  --agent <slug-or-id>       existing agent target; overrides .airlock/local/agent.toml
+  --url <url>                Airlock URL; overrides .airlock/local/agent.toml
+  --remote <name>            named remote in .airlock/local/agent.toml (default "default")
   --name <name>              display name for --create (default dir or slug)
   --description <text>       description for --create
+  --force                    replace stale Airlock source intentionally
+
+Pull flags:
+  --agent <slug-or-id>       existing agent target; overrides local binding
+  --url <url>                Airlock URL; overrides local binding
+  --remote <name>            named local binding (default "default")
+  --force                    discard local source changes
+
+Clone flags:
+  --url <url>                Airlock URL; defaults to the sole saved login
+  --remote <name>            named binding when run inside a bound workspace
 `,
 		agentsdk.Version, defaultBaseImage,
 		agentsdk.Version, defaultBaseImage,
