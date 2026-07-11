@@ -18,27 +18,23 @@ const migrationsDir = "db/migrations"
 // an agent has no migrations yet (a fresh scaffold ships only doc.go).
 var migrationFilePattern = regexp.MustCompile(`^\d+_.*\.(sql|go)$`)
 
-// UseDB points the agent at the test database named by $TEST_DB_URL and brings
-// its schema to a clean, fully-migrated state. It skips the test when
-// $TEST_DB_URL is unset, so DB-backed tests run only where a test database is
-// provisioned (the agent build environment sets it).
+// UseDB brings the database configured by NewDBEnv to a clean, fully-migrated
+// state.
 //
-// It sets AIRLOCK_DB_URL (so agent.DB() connects there), then resets the schema
-// — goose down to 0, then up — applying db/migrations. Go migrations run with
-// the agent attached, exactly as in production. Call it after constructing the
-// agent and before using agent.DB():
+// It resets the schema — goose down to 0, then up — applying db/migrations. Go
+// migrations run with the agent attached, exactly as in production. Call it
+// after constructing the agent and before using agent.DB():
 //
-//	env := agenttest.NewEnv(t)
+//	env := agenttest.NewDBEnv(t)
 //	a := newAgent()
 //	agenttest.UseDB(t, a)
 //	// a.DB() now points at a freshly migrated test schema
 func UseDB(t *testing.T, a *agentsdk.Agent) {
 	t.Helper()
-	dsn := os.Getenv("TEST_DB_URL")
+	dsn := os.Getenv("AIRLOCK_DB_URL")
 	if dsn == "" {
-		t.Skip("TEST_DB_URL not set; skipping DB-backed test")
+		t.Fatal("agenttest: database not configured; call NewDBEnv before constructing the agent")
 	}
-	t.Setenv("AIRLOCK_DB_URL", dsn)
 
 	db := a.DB()
 	if db == nil {

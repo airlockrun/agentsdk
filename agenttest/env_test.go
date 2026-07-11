@@ -5,11 +5,23 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/agenttest"
 )
+
+func TestNewDBEnvUsesConfiguredDatabase(t *testing.T) {
+	t.Setenv("TEST_DB_URL", "postgres://configured/test")
+	t.Setenv("AIRLOCK_DB_URL", "")
+
+	agenttest.NewDBEnv(t)
+
+	if got := os.Getenv("AIRLOCK_DB_URL"); got != "postgres://configured/test" {
+		t.Errorf("AIRLOCK_DB_URL = %q, want configured test database", got)
+	}
+}
 
 // TestEnv_RouteRoundTrip exercises the full helper surface: NewEnv wires the
 // env, agentsdk.New builds the agent, and a registered route is reachable

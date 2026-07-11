@@ -182,7 +182,14 @@ the committed sqlc output + your source are already present.
 ## Testing
 
 Write Go tests for what you add and run `go test ./...` as part of the build
-chain. A failing test means the build isn't done.
+chain. A failing test means the build isn't done. Keep the suite focused: test
+complex logic, regressions, and important route behavior, not every function or
+handler by default.
+
+Tests must not load secrets, connection credentials, or MCP credentials from
+`.env` or the developer's environment. Secrets stay in Airlock. Use
+`agenttest.NewEnv(t)` and its mock Airlock when a focused test needs
+Airlock-mediated behavior.
 
 - **Unit tests** sit next to the code they cover, one `_test.go` per source
   file: `<domain>/service_test.go` for business logic, `handlers/home_test.go`
@@ -205,28 +212,26 @@ chain. A failing test means the build isn't done.
   ```
 
   The scaffold ships `TestStaticStylesheetServed` and `TestHomePageRenders` as
-  worked examples; keep them. **Every rendered page needs a test that GETs it
-  through `Handler()` and asserts 200 — `GET /` always, plus each route you add
-  — exercised in the empty/resting state (no rows, nil pointers), which is where
-  a view nil-derefs.** A panic inside a view is recovered as a 500, so this
-  render test catches it before the build ships; calling the handler func
-  directly would miss it. For a DB-backed page, call `agenttest.UseDB(t, a)`
-  first (it migrates a clean, empty schema — exactly the resting state).
-- **DB-backed tests:** `agenttest.NewEnv` points the agent at the test database
-  (`$TEST_DB_URL`) *before* you build it, so caching `agent.DB()` in your Deps at
-  construction works the same as in production — no need to fetch the DB per
-  request. Then call `agenttest.UseDB(t, a)` after `newAgent()`: it resets the
-  schema and applies `db/migrations`, so each test starts clean and fully
-  migrated. It **skips the test when `$TEST_DB_URL` is unset**, so the suite
-  still runs where no database is provisioned. After it returns, `agent.DB()` is
-  live; pass it to your sqlc `New()` and assert on real rows. The scaffold ships
-  `TestDBMigratesAndConnects` as the worked example.
+  minimal examples; keep them. Add `httptest` coverage for other routes only
+  where it protects important behavior or a likely regression. Exercise render
+  tests in the empty/resting state (no rows, nil pointers), where view failures
+  commonly occur. A panic inside a view is recovered as a 500, so testing
+  through the mux catches failures that calling a handler directly can miss.
+- **DB-backed tests:** `agenttest.NewDBEnv` uses Airlock's `$TEST_DB_URL` when
+  available, otherwise it starts a throwaway `pgvector/pgvector:pg17` container.
+  It sets the database URL *before* you build the agent, so caching `agent.DB()`
+  in Deps at construction works as in production. If neither an Airlock database
+  nor Docker is available, it reports why and skips the DB-backed test. Then call
+  `agenttest.UseDB(t, a)` after `newAgent()`: it resets the schema and applies
+  `db/migrations`, so each test starts clean and fully migrated. After it
+  returns, pass `agent.DB()` to your sqlc `New()` and assert on real rows. The
+  scaffold ships `TestDBMigratesAndConnects` as the worked example.
 
   ```go
   func TestThing(t *testing.T) {
-      agenttest.NewEnv(t)
+      agenttest.NewDBEnv(t)
       a := newAgent()
-      agenttest.UseDB(t, a) // skips if no $TEST_DB_URL
+      agenttest.UseDB(t, a)
       q := db.New(a.DB())
       // exercise queries, assert results
   }
