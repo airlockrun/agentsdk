@@ -408,6 +408,15 @@ func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 			t.Fatalf("%s = %q, want %q", tt.path, got, tt.want)
 		}
 	}
+	for _, path := range []string{
+		filepath.Join(prefix, "skills", "daisyui", "SKILL.md"),
+		filepath.Join(prefix, "skills", "templ", "reference", "03-syntax-and-usage", "06-if-else.md"),
+		filepath.Join(prefix, "skills", "htmx", "reference", "docs.md"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("projected skill file %s: %v", path, err)
+		}
+	}
 }
 
 func TestResolveDeployTargetFailsOnBindingSlugMismatch(t *testing.T) {

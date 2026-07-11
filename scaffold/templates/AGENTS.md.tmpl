@@ -5,7 +5,7 @@ MVC split, the build chain, and the high-level UI conventions. It is the
 authoritative reference for *this* repo's shape.
 
 > **Managed by the scaffold — do not edit.** It is regenerated from the
-> scaffold template (airlock does this on every build; `create-agent regen`
+> scaffold template (airlock does this on every build; `go tool air update`
 > does it in a standalone checkout), so edits here are overwritten. Put
 > agent-specific decisions in `NOTES.md`, which the tooling never touches.
 
@@ -280,10 +280,11 @@ the agent's own `/static/app.{hash}.css` route (see `views/assets.go`
 and `main.go`'s `/static/{name}` handler).
 
 **Read the version-matched `templ`, `htmx`, and `daisyui` skill references
-before writing UI** — each carries the language/library reference. (In the
-airlock toolserver these load via the `skill` tool; the templ and htmx skill
-docs also ship in the agentsdk module under `scaffold/skills/`.) The gotchas
-below are the high-frequency traps; the skills have
+before writing UI** — each carries the language/library reference. In a plain
+checkout, run `go tool air toolchain install` and read their entry points at
+`.airlock/toolchain/skills/{templ,htmx,daisyui}/SKILL.md`. In the airlock
+toolserver, load those same bundled references through the `skill` tool. The
+gotchas below are the high-frequency traps; the skills have
 the full rules. templ markup is not a Go function body and an `hx-*` swap
 is not a free-form DOM write — when in doubt, read the skill, don't guess.
 
@@ -338,9 +339,10 @@ Design principles:
 ### Theming
 
 DaisyUI ships ~35 built-in themes. **Pick the one that fits the app's tone
-and use it — don't hand-author a palette.** (In the airlock toolserver, run
-`daisyui-themes` via the bash tool to list the ones installed in this build,
-grouped light/dark.) Set it in `styles/app.css` and on the page:
+and use it — don't hand-author a palette.** The installed DaisyUI config skill
+lists the built-in themes. In the airlock toolserver, `daisyui-themes` also
+lists the exact installed set grouped by light/dark. Set it in `styles/app.css`
+and on the page:
 
 ```css
 @plugin "../.airlock/toolchain/lib/tailwind/daisyui.mjs" {
