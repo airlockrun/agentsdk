@@ -44,8 +44,21 @@ func cmdClone(args []string) error {
 		return err
 	}
 	dst := positional[1]
+	_, statErr := os.Stat(dst)
+	createdDst := os.IsNotExist(statErr)
+	if statErr != nil && !createdDst {
+		return statErr
+	}
 	if err := ensureEmptyDir(dst); err != nil {
 		return err
+	}
+	cloneComplete := false
+	if createdDst {
+		defer func() {
+			if !cloneComplete {
+				_ = os.RemoveAll(dst)
+			}
+		}()
 	}
 	tmp, state, err := downloadSource(ctx, baseURL, token, target.AgentID)
 	if err != nil {
@@ -62,6 +75,7 @@ func cmdClone(args []string) error {
 	if err := writeAgentBinding(dst, binding); err != nil {
 		return err
 	}
+	cloneComplete = true
 	fmt.Printf("Cloned %s (%s) from %s into %s\n", target.Slug, target.AgentID, baseURL, dst)
 	return nil
 }
@@ -245,11 +259,7 @@ func downloadSource(ctx context.Context, baseURL, token, agentID string) (string
 	if err != nil {
 		return "", "", err
 	}
-	if err := sourcebundle.ExtractArchive(resp.Body, tmp); err != nil {
-		os.RemoveAll(tmp)
-		return "", "", err
-	}
-	got, err := sourcebundle.Digest(tmp)
+	got, err := sourcebundle.ExtractArchiveState(resp.Body, tmp)
 	if err != nil {
 		os.RemoveAll(tmp)
 		return "", "", err
