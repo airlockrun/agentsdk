@@ -15,6 +15,7 @@ import (
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/agentsdk/sourcebundle"
+	"golang.org/x/mod/semver"
 )
 
 var (
@@ -229,7 +230,7 @@ func ensureDeploySDKVersion(ctx context.Context, baseURL, token string) error {
 	if serverVersion == "" {
 		return errors.New("check Airlock SDK version: server response did not include a version")
 	}
-	if serverVersion == localVersion {
+	if compatibleSDKVersions(serverVersion, localVersion) {
 		return nil
 	}
 	commandImport := resp.GetCommandImport()
@@ -237,6 +238,26 @@ func ensureDeploySDKVersion(ctx context.Context, baseURL, token string) error {
 		commandImport = "github.com/airlockrun/agentsdk/cmd/air"
 	}
 	return fmt.Errorf("Airlock uses agentsdk v%s, but this air CLI is v%s; update this repo, validate the build, then rerun deploy:\n  go get github.com/airlockrun/agentsdk@v%s\n  go get -tool %s@v%s\n  go mod tidy\n  go tool air build", serverVersion, localVersion, serverVersion, commandImport, serverVersion)
+}
+
+// compatibleSDKVersions follows Airlock's source-rebuild compatibility policy:
+// pre-1.0 releases are compatible within one minor series, while stable
+// releases are compatible within one major series. Patch, prerelease, and build
+// metadata differences do not force users with multiple remotes to repin the
+// CLI for every Airlock release.
+func compatibleSDKVersions(a, b string) bool {
+	a = "v" + strings.TrimPrefix(a, "v")
+	b = "v" + strings.TrimPrefix(b, "v")
+	if !semver.IsValid(a) || !semver.IsValid(b) {
+		return false
+	}
+	if semver.Major(a) != semver.Major(b) {
+		return false
+	}
+	if semver.Major(a) == "v0" {
+		return semver.MajorMinor(a) == semver.MajorMinor(b)
+	}
+	return true
 }
 
 func slugFromName(name string) string {
