@@ -41,18 +41,8 @@ func Digest(root string) (string, error) {
 		return "", err
 	}
 	h := sha256.New()
-	var length [8]byte
 	for _, entry := range entries {
-		binary.BigEndian.PutUint64(length[:], uint64(len(entry.path)))
-		_, _ = h.Write(length[:])
-		_, _ = io.WriteString(h, entry.path)
-		if entry.mode&0o111 != 0 {
-			_, _ = h.Write([]byte{1})
-		} else {
-			_, _ = h.Write([]byte{0})
-		}
-		binary.BigEndian.PutUint64(length[:], uint64(entry.size))
-		_, _ = h.Write(length[:])
+		writeDigestHeader(h, entry.path, entry.mode&0o111 != 0, entry.size)
 		f, err := os.Open(filepath.Join(root, filepath.FromSlash(entry.path)))
 		if err != nil {
 			return "", fmt.Errorf("open %s: %w", entry.path, err)
@@ -67,6 +57,20 @@ func Digest(root string) (string, error) {
 		}
 	}
 	return StatePrefix + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func writeDigestHeader(w io.Writer, path string, executable bool, size int64) {
+	var length [8]byte
+	binary.BigEndian.PutUint64(length[:], uint64(len(path)))
+	_, _ = w.Write(length[:])
+	_, _ = io.WriteString(w, path)
+	if executable {
+		_, _ = w.Write([]byte{1})
+	} else {
+		_, _ = w.Write([]byte{0})
+	}
+	binary.BigEndian.PutUint64(length[:], uint64(size))
+	_, _ = w.Write(length[:])
 }
 
 // WriteArchive writes root as a deterministic tar.gz source archive and
@@ -127,45 +131,61 @@ func WriteArchive(w io.Writer, root string) (string, error) {
 // ExtractArchive extracts a source archive into an empty or existing directory.
 // Only regular files with safe relative paths are accepted.
 func ExtractArchive(r io.Reader, dst string) error {
+	_, err := ExtractArchiveState(r, dst)
+	return err
+}
+
+// ExtractArchiveState extracts a canonical source archive and returns the state
+// represented by its paths, executable bits, sizes, and contents. Computing the
+// state from archive metadata keeps verification portable to filesystems that
+// cannot represent Unix executable bits, including Windows.
+func ExtractArchiveState(r io.Reader, dst string) (string, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
-		return fmt.Errorf("open gzip: %w", err)
+		return "", fmt.Errorf("open gzip: %w", err)
 	}
 	defer gz.Close()
 	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
+		return "", err
 	}
 	tr := tar.NewReader(gz)
+	h := sha256.New()
+	previous := ""
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			return StatePrefix + hex.EncodeToString(h.Sum(nil)), nil
 		}
 		if err != nil {
-			return fmt.Errorf("read tar: %w", err)
+			return "", fmt.Errorf("read tar: %w", err)
 		}
 		rel := filepath.ToSlash(filepath.Clean(hdr.Name))
 		if rel == "." || rel == "" || strings.HasPrefix(rel, "/") || rel == ".." || strings.HasPrefix(rel, "../") || fixedExcluded(rel) {
-			return fmt.Errorf("source archive contains invalid path %q", hdr.Name)
+			return "", fmt.Errorf("source archive contains invalid path %q", hdr.Name)
 		}
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
-			return fmt.Errorf("source archive contains unsupported entry %s", rel)
+			return "", fmt.Errorf("source archive contains unsupported entry %s", rel)
 		}
+		if previous != "" && rel <= previous {
+			return "", fmt.Errorf("source archive entries are not in canonical order: %q after %q", rel, previous)
+		}
+		previous = rel
+		writeDigestHeader(h, rel, fs.FileMode(hdr.Mode)&0o111 != 0, hdr.Size)
 		path := filepath.Join(dst, filepath.FromSlash(rel))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return err
+			return "", err
 		}
 		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, fs.FileMode(hdr.Mode)&0o777)
 		if err != nil {
-			return fmt.Errorf("create %s: %w", rel, err)
+			return "", fmt.Errorf("create %s: %w", rel, err)
 		}
-		_, copyErr := io.Copy(f, tr)
+		_, copyErr := io.Copy(io.MultiWriter(f, h), tr)
 		closeErr := f.Close()
 		if copyErr != nil {
-			return fmt.Errorf("extract %s: %w", rel, copyErr)
+			return "", fmt.Errorf("extract %s: %w", rel, copyErr)
 		}
 		if closeErr != nil {
-			return fmt.Errorf("close %s: %w", rel, closeErr)
+			return "", fmt.Errorf("close %s: %w", rel, closeErr)
 		}
 	}
 }

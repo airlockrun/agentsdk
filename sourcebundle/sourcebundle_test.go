@@ -2,6 +2,7 @@ package sourcebundle
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"io"
 	"os"
@@ -9,6 +10,32 @@ import (
 	"sort"
 	"testing"
 )
+
+func TestExtractArchiveStatePreservesExecutableMetadata(t *testing.T) {
+	source := t.TempDir()
+	writeTestFile(t, source, "go.mod", "module test\n")
+	writeTestFile(t, source, "setup.sh", "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(source, "setup.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var archive bytes.Buffer
+	want, err := WriteArchive(&archive, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	got, err := ExtractArchiveState(&archive, dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("extracted archive state = %q, want %q", got, want)
+	}
+	if body, err := os.ReadFile(filepath.Join(dst, "setup.sh")); err != nil || string(body) != "#!/bin/sh\n" {
+		t.Fatalf("extracted setup.sh = %q, %v", body, err)
+	}
+}
 
 func TestDigestAndArchiveUseCanonicalFiles(t *testing.T) {
 	root := t.TempDir()

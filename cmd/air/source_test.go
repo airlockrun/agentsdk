@@ -18,6 +18,10 @@ func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 	source := t.TempDir()
 	mustWrite(t, filepath.Join(source, "go.mod"), "module cloned\n")
 	mustWrite(t, filepath.Join(source, "main.go"), "package main\n")
+	mustWrite(t, filepath.Join(source, "setup.sh"), "#!/bin/sh\n")
+	if err := os.Chmod(filepath.Join(source, "setup.sh"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	state, err := sourcebundle.Digest(source)
 	if err != nil {
 		t.Fatal(err)
@@ -44,6 +48,26 @@ func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dst, ".airlock", "local", "agent.toml")); err != nil {
 		t.Fatalf("local binding missing: %v", err)
+	}
+}
+
+func TestCmdCloneRemovesCreatedDestinationOnInvalidState(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const agentID = "11111111-1111-1111-1111-111111111111"
+	source := t.TempDir()
+	mustWrite(t, filepath.Join(source, "go.mod"), "module cloned\n")
+	srv := sourceServer(t, agentID, "cloned-agent", source, "sha256:wrong")
+	defer srv.Close()
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "clone")
+	err := cmdClone([]string{agentID, dst, "--url", srv.URL})
+	if err == nil || !strings.Contains(err.Error(), "response declared sha256:wrong") {
+		t.Fatalf("cmdClone error = %v", err)
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatalf("failed clone destination remains: %v", err)
 	}
 }
 
