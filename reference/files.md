@@ -1,6 +1,6 @@
 # File storage — RegisterDirectory & file access
 
-> Companion to `/libs/agentsdk/llms.md` — read that first. Come here when your task involves reading/writing the agent's object storage or handling LLM-supplied paths.
+> Companion to `/libs/agentsdk/REFERENCE.md` — read that first. Come here when your task involves reading/writing the agent's object storage or handling LLM-supplied paths.
 
 The agent has its own **S3-like object storage**. There is no container
 filesystem you expose to tools or to the LLM — every path you read or write is
@@ -262,4 +262,3 @@ directory's `Read` cap at fetch time:
 - `AccessUser` — requires agent membership (proxy redirects through
   relay-login).
 - `AccessAdmin` — same, admin role.
-

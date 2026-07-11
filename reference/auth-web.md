@@ -1,6 +1,6 @@
 # Auth flows that need user input — an admin web page
 
-> Companion to `/libs/agentsdk/llms.md` — read that first. Come here when your task involves an interactive login (one-time code, password, click) that must be driven from an admin page.
+> Companion to `/libs/agentsdk/REFERENCE.md` — read that first. Come here when your task involves an interactive login (one-time code, password, click) that must be driven from an admin page.
 
 Many credentials can't be minted headlessly: the login emits a one-time code,
 asks for a password, or needs a click. That input is **ephemeral and
@@ -125,4 +125,3 @@ current user from the agent's session (cookie / token / however its pages
 identify the request) and loads that row instead of `ReadFile`. The
 seal/unseal calls are identical — only where you keep the ciphertext, and how
 you identify whose it is, changes.
-

@@ -1,6 +1,6 @@
 # Database access
 
-> Companion to `/libs/agentsdk/llms.md` — read that first. Come here when your task involves Postgres tables, sqlc, or goose migrations.
+> Companion to `/libs/agentsdk/REFERENCE.md` — read that first. Come here when your task involves Postgres tables, sqlc, or goose migrations.
 
 You have a full Postgres database available (well, a single schema, but you can
 create as many tables in it as you like). Usually the database has pgvector
