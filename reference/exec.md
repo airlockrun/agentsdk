@@ -1,6 +1,6 @@
 # RegisterExecEndpoint — run commands on a remote target
 
-> Companion to `/libs/agentsdk/llms.md` — read that first. Come here when your task involves running commands on a remote machine over SSH.
+> Companion to `/libs/agentsdk/REFERENCE.md` — read that first. Come here when your task involves running commands on a remote machine over SSH.
 
 Use when the agent needs to run a command on a server its container can't
 reach as a built-in tool (managing a VPS via SSH, kicking a CI runner,
@@ -166,4 +166,3 @@ Don't re-read an older `savedTo` after a fresh call to the same binding
 — each call gets a unique `callID` so paths don't collide within a run,
 but holding onto a stale path across multiple LLM steps is a bug source
 the `note` field warns about.
-

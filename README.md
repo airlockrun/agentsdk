@@ -18,10 +18,10 @@ go get github.com/airlockrun/agentsdk
 Requires Go 1.26+.
 
 For the complete SDK surface and runtime contracts, read the
-[agentsdk API reference](llms.md). Its focused companions cover
-[object storage](llms/files.md), [remote execution](llms/exec.md),
-[interactive authentication](llms/auth-web.md), and
-[Postgres-backed agents](llms/database.md).
+[agentsdk API reference](REFERENCE.md). Its focused companions cover
+[object storage](reference/files.md), [remote execution](reference/exec.md),
+[interactive authentication](reference/auth-web.md), and
+[Postgres-backed agents](reference/database.md).
 
 ## Hello-world agent
 
@@ -55,7 +55,7 @@ func main() {
 }
 ```
 
-In a real agent you'd also call `RegisterTool`, `RegisterWebhook`, `RegisterCron`, `RegisterConnection`, and so on. The [API reference](llms.md) documents the full surface.
+In a real agent you'd also call `RegisterTool`, `RegisterWebhook`, `RegisterCron`, `RegisterConnection`, and so on. The [API reference](REFERENCE.md) documents the full surface.
 
 ## Stability
 

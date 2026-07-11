@@ -44,15 +44,15 @@ enough to read in one pass. This file covers everything else in full and gives
 each of the four a short stub at its API slot. **Read the companion when your
 task touches it** (paths are where they live in the build container):
 
-- **[Object storage](llms/files.md)** (`/libs/agentsdk/llms/files.md`) — `RegisterDirectory`, the
+- **[Object storage](reference/files.md)** (`/libs/agentsdk/reference/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
   `CheckFileAccess`, shelling out to CLIs over storage, presigned URLs.
-- **[Remote execution](llms/exec.md)** (`/libs/agentsdk/llms/exec.md`) — `RegisterExecEndpoint`: running commands
+- **[Remote execution](reference/exec.md)** (`/libs/agentsdk/reference/exec.md`) — `RegisterExecEndpoint`: running commands
   on a remote machine over SSH, plus the shared overflow-response shape
   (`*SavedTo` + `fileRead`) used by connections, exec, and `httpRequest`.
-- **[Interactive authentication](llms/auth-web.md)** (`/libs/agentsdk/llms/auth-web.md`) — login flows (one-time
+- **[Interactive authentication](reference/auth-web.md)** (`/libs/agentsdk/reference/auth-web.md`) — login flows (one-time
   code / password / click) driven from an admin web page, ending in `Seal`.
-- **[Database](llms/database.md)** (`/libs/agentsdk/llms/database.md`) — Postgres: goose migrations, sqlc
+- **[Database](reference/database.md)** (`/libs/agentsdk/reference/database.md`) — Postgres: goose migrations, sqlc
   queries, Go migrations, build-time validation.
 
 ## Verifying a build
@@ -573,7 +573,7 @@ non-obvious conventions (path prefixes, special headers).
 (≤ 8 KiB) come back inline (`body` / `data`); larger ones auto-spill to
 `tmp/conn-{slug}-{callID}.bin` with `bodyPreview` + `bodySavedTo` set
 (no `body`/`data`). Read the spilled payload with `fileRead(bodySavedTo)` —
-see the shared overflow shape in **`/libs/agentsdk/llms/exec.md`**.
+see the shared overflow shape in **`/libs/agentsdk/reference/exec.md`**.
 
 ## RegisterMCP
 
@@ -640,7 +640,7 @@ res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build", Args: []stri
 ```
 
 → Full API (Run vs RunStream, the `exec_{slug}.run` JS binding, shell features,
-errors, and the shared `*SavedTo` overflow handling): **`/libs/agentsdk/llms/exec.md`**.
+errors, and the shared `*SavedTo` overflow handling): **`/libs/agentsdk/reference/exec.md`**.
 
 ## RegisterEnvVar — operator-configured environment variables
 
@@ -717,7 +717,7 @@ without sealing first — storage is not encrypted at rest.
 > code, asks for a password, or needs a click. Drive that interactive step from
 > an `AccessAdmin` `RegisterRoute` page, finish the login, and `Seal` the
 > resulting long-lived credential. Full worked example (admin login page,
-> sealing the session, per-user variant): **`/libs/agentsdk/llms/auth-web.md`**.
+> sealing the session, per-user variant): **`/libs/agentsdk/reference/auth-web.md`**.
 
 ## RegisterModel — named model slots
 
@@ -805,7 +805,7 @@ gated first with `agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead)`.
 
 → Full directory ACL model, the complete file API, untrusted-path gating,
 shelling out to a CLI over storage, and presigned URLs:
-**`/libs/agentsdk/llms/files.md`**.
+**`/libs/agentsdk/reference/files.md`**.
 
 ## Agent methods (ctx-first)
 
@@ -830,7 +830,7 @@ log := agent.Logger(ctx)
 log.Info("imported rows", zap.Int("count", 42))
 // Levels: Debug, Info, Warn, Error. import "go.uber.org/zap"
 
-// Storage — trusted; no CheckFileAccess. See /libs/agentsdk/llms/files.md.
+// Storage — trusted; no CheckFileAccess. See /libs/agentsdk/reference/files.md.
 agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir / DeleteFile / CopyFile
 agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead) // gate paths from untrusted sources
 agent.DB() // *AgentDB — pass to sqlc-generated New() (nil if AIRLOCK_DB_URL unset)
@@ -1209,4 +1209,4 @@ users, err := queries.ListActiveUsers(ctx)
 
 → Migration file format, numbering, Go migrations (Tx vs NoTx), guarding
 external side effects with `IsValidatingMigrations()`, and build-time
-validation: **`/libs/agentsdk/llms/database.md`**.
+validation: **`/libs/agentsdk/reference/database.md`**.
