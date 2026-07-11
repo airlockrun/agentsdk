@@ -166,3 +166,33 @@ func TestMaterialize_RequiresSDKVersion(t *testing.T) {
 		t.Fatalf("error = %v, want mention of AgentSDKVersion", err)
 	}
 }
+
+func TestInstallSkills(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "skills")
+	if err := os.MkdirAll(filepath.Join(dir, "removed"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "removed", "stale.md"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InstallSkills(dir); err != nil {
+		t.Fatalf("InstallSkills: %v", err)
+	}
+	for _, path := range []string{
+		"manifest.json",
+		"daisyui/SKILL.md",
+		"htmx/reference/docs.md",
+		"templ/reference/03-syntax-and-usage/06-if-else.md",
+	} {
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(path))); err != nil {
+			t.Errorf("installed skill file %s: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "removed", "stale.md")); !os.IsNotExist(err) {
+		t.Fatalf("stale skill file remains after replacement: %v", err)
+	}
+	if SkillsDigest() == "" {
+		t.Fatal("SkillsDigest is empty")
+	}
+}

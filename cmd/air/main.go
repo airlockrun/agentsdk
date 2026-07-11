@@ -15,8 +15,8 @@
 //
 // init and update render the same airlock-managed files airlock's builder
 // produces; toolchain install ensures the pinned templ/tailwind/daisyui versions
-// are available so local `go tool templ generate` and repo-local `tailwindcss`
-// builds match.
+// and their coding skills are available so local harnesses and builds match
+// airlock codegen.
 package main
 
 import (
@@ -88,7 +88,7 @@ func usage(w io.Writer) {
 Usage:
   air [init] <dir> [flags]        scaffold a new agent into <dir>
   air update [dir] [flags]        regenerate the airlock-managed files in place
-  air toolchain install [flags]   ensure the pinned frontend toolchain
+  air toolchain install [flags]   ensure the pinned frontend toolchain and skills
   air build [dir]                 run the local build chain
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
@@ -119,6 +119,7 @@ Toolchain install flags:
     templ       %s (via go tool templ)
     tailwindcss %s (standalone binary -> <prefix>/bin)
     daisyui     %s (plugin mjs files -> <prefix>/lib/tailwind)
+    skills         (version-matched references -> <prefix>/skills)
 
 Login flags:
   --no-browser               print the device login URL without opening a browser
@@ -256,7 +257,7 @@ func cmdInit(args []string) error {
 	fmt.Println("\nNext steps:")
 	fmt.Printf("  cd %s\n", dir)
 	fmt.Println("  go mod tidy")
-	fmt.Println("  go tool air toolchain install   # install tailwindcss + daisyui")
+	fmt.Println("  go tool air toolchain install   # install frontend tools + coding skills")
 	fmt.Println("  go tool air build")
 	return nil
 }
@@ -415,6 +416,7 @@ func cmdInstallToolchain(args []string) error {
 	fmt.Printf("  templ       %s -> go tool templ\n", scaffold.TemplVersion)
 	fmt.Printf("  tailwindcss %s -> %s\n", scaffold.TailwindVersion, tailwindBinaryPath(prefix))
 	fmt.Printf("  daisyui     %s -> %s\n", scaffold.DaisyUIVersion, filepath.Join(prefix, "lib", "tailwind"))
+	fmt.Printf("  skills      %s -> %s\n", scaffold.SkillsDigest(), filepath.Join(prefix, "skills"))
 	return nil
 }
 
@@ -492,6 +494,9 @@ func projectToolchain(prefix, cacheDir string) error {
 			return err
 		}
 	}
+	if err := scaffold.InstallSkills(filepath.Join(prefix, "skills")); err != nil {
+		return fmt.Errorf("install coding skills: %w", err)
+	}
 	return nil
 }
 
@@ -504,6 +509,9 @@ func toolchainComplete(prefix string) bool {
 		tailwindBinaryPath(prefix),
 		filepath.Join(prefix, "lib", "tailwind", "daisyui.mjs"),
 		filepath.Join(prefix, "lib", "tailwind", "daisyui-theme.mjs"),
+		filepath.Join(prefix, "skills", "daisyui", "SKILL.md"),
+		filepath.Join(prefix, "skills", "templ", "SKILL.md"),
+		filepath.Join(prefix, "skills", "htmx", "SKILL.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			return false
@@ -521,7 +529,7 @@ func writeToolchainMarker(prefix string) error {
 }
 
 func toolchainMarker() string {
-	return fmt.Sprintf("templ=%s\ntailwindcss=%s\ndaisyui=%s\n", scaffold.TemplVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion)
+	return fmt.Sprintf("templ=%s\ntailwindcss=%s\ndaisyui=%s\nskills=%s\n", scaffold.TemplVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion, scaffold.SkillsDigest())
 }
 
 func installTailwind(cacheDir string) error {

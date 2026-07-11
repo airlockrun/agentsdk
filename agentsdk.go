@@ -1,11 +1,11 @@
 // Package agentsdk provides the Go SDK for building Airlock agents.
 //
-// This package will contain the client library that agents use to communicate
-// with the Airlock platform — registering connections, receiving triggers,
-// and streaming run results.
+// Agents register typed tools, routes, webhooks, schedules, connections, and
+// other capabilities, then serve them through the Airlock runtime. See the
+// repository README and llms.md for the project guide and complete API reference.
 package agentsdk
 
 // Version is the agentsdk API version. Reported to Airlock during sync.
 // Bump on breaking changes — see AGENTS.md for versioning rules. Pre-commit
 // gate enforces Version > latest git tag in this repo.
-const Version = "0.4.0-rc.15"
+const Version = "0.4.0-rc.16"

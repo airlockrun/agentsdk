@@ -44,15 +44,15 @@ enough to read in one pass. This file covers everything else in full and gives
 each of the four a short stub at its API slot. **Read the companion when your
 task touches it** (paths are where they live in the build container):
 
-- **`/libs/agentsdk/llms/files.md`** — object storage: `RegisterDirectory`, the
+- **[Object storage](llms/files.md)** (`/libs/agentsdk/llms/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
   `CheckFileAccess`, shelling out to CLIs over storage, presigned URLs.
-- **`/libs/agentsdk/llms/exec.md`** — `RegisterExecEndpoint`: running commands
+- **[Remote execution](llms/exec.md)** (`/libs/agentsdk/llms/exec.md`) — `RegisterExecEndpoint`: running commands
   on a remote machine over SSH, plus the shared overflow-response shape
   (`*SavedTo` + `fileRead`) used by connections, exec, and `httpRequest`.
-- **`/libs/agentsdk/llms/auth-web.md`** — interactive login flows (one-time
+- **[Interactive authentication](llms/auth-web.md)** (`/libs/agentsdk/llms/auth-web.md`) — login flows (one-time
   code / password / click) driven from an admin web page, ending in `Seal`.
-- **`/libs/agentsdk/llms/database.md`** — Postgres: goose migrations, sqlc
+- **[Database](llms/database.md)** (`/libs/agentsdk/llms/database.md`) — Postgres: goose migrations, sqlc
   queries, Go migrations, build-time validation.
 
 ## Verifying a build

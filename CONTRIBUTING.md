@@ -61,6 +61,15 @@ Test:
 
     go test ./...
 
+The version-matched UI references under `scaffold/skills/` are checked-in
+generated assets. After changing the templ, DaisyUI, or htmx version, refresh
+them explicitly (this downloads pinned upstream documentation):
+
+    go run ./internal/cmd/syncskills
+
+The pre-commit hook verifies the bundle offline with the command's `--check`
+mode and never rewrites it.
+
 ## Contributions involving AI
 
 We're not anti-AI — many of us use AI as part of our development workflow, and that's fine. But there's a real difference between "I used AI to help write this" and "I asked an AI to make a PR and submitted whatever came out."
