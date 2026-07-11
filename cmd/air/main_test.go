@@ -242,6 +242,18 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts same pre-1.0 minor series", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"version":"0.4.0-rc.18"}`))
+		}))
+		defer srv.Close()
+
+		if err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok"); err != nil {
+			t.Fatalf("ensureDeploySDKVersion: %v", err)
+		}
+	})
+
 	t.Run("rejects mismatched version", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -266,6 +278,32 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestCompatibleSDKVersions(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{name: "exact", a: "0.4.0-rc.19", b: "0.4.0-rc.19", want: true},
+		{name: "leading v", a: "v0.4.0-rc.18", b: "0.4.0-rc.19", want: true},
+		{name: "rc mismatch", a: "0.4.0-rc.18", b: "0.4.0-rc.19", want: true},
+		{name: "patch mismatch before v1", a: "0.4.0", b: "0.4.7", want: true},
+		{name: "minor mismatch before v1", a: "0.4.9", b: "0.5.0", want: false},
+		{name: "same stable major", a: "1.2.3", b: "1.9.0", want: true},
+		{name: "stable major mismatch", a: "1.9.0", b: "2.0.0", want: false},
+		{name: "build metadata", a: "1.2.3+one", b: "1.2.3+two", want: true},
+		{name: "invalid", a: "dev", b: "0.4.0", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := compatibleSDKVersions(tt.a, tt.b); got != tt.want {
+				t.Errorf("compatibleSDKVersions(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestDeviceLoginPendingState(t *testing.T) {
