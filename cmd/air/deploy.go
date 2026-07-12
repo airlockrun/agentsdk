@@ -240,24 +240,20 @@ func ensureDeploySDKVersion(ctx context.Context, baseURL, token string) error {
 	return fmt.Errorf("Airlock uses agentsdk v%s, but this air CLI is v%s; update this repo, validate the build, then rerun deploy:\n  go get github.com/airlockrun/agentsdk@v%s\n  go get -tool %s@v%s\n  go mod tidy\n  go tool air build", serverVersion, localVersion, serverVersion, commandImport, serverVersion)
 }
 
-// compatibleSDKVersions follows Airlock's source-rebuild compatibility policy:
-// pre-1.0 releases are compatible within one minor series, while stable
-// releases are compatible within one major series. Patch, prerelease, and build
-// metadata differences do not force users with multiple remotes to repin the
-// CLI for every Airlock release.
-func compatibleSDKVersions(a, b string) bool {
-	a = "v" + strings.TrimPrefix(a, "v")
-	b = "v" + strings.TrimPrefix(b, "v")
-	if !semver.IsValid(a) || !semver.IsValid(b) {
+// compatibleSDKVersions accepts a local CLI from the same major/minor series
+// when it is at least as new as the SDK pinned by Airlock. This lets one current
+// workspace deploy to multiple slightly older remotes without allowing an old
+// CLI to drive a newer Airlock deployment protocol.
+func compatibleSDKVersions(server, local string) bool {
+	server = "v" + strings.TrimPrefix(server, "v")
+	local = "v" + strings.TrimPrefix(local, "v")
+	if !semver.IsValid(server) || !semver.IsValid(local) {
 		return false
 	}
-	if semver.Major(a) != semver.Major(b) {
+	if semver.MajorMinor(server) != semver.MajorMinor(local) {
 		return false
 	}
-	if semver.Major(a) == "v0" {
-		return semver.MajorMinor(a) == semver.MajorMinor(b)
-	}
-	return true
+	return semver.Compare(local, server) >= 0
 }
 
 func slugFromName(name string) string {
