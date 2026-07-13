@@ -12,7 +12,6 @@ func TestMaterialize(t *testing.T) {
 
 	data := ScaffoldData{
 		AgentID:         "550e8400-e29b-41d4-a716-446655440000",
-		Module:          "github.com/airlockrun/agents/550e8400-e29b-41d4-a716-446655440000",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 		AgentBaseImage:  "airlock-agent-base",
@@ -80,8 +79,8 @@ func TestMaterialize(t *testing.T) {
 		t.Fatalf("read go.mod: %v", err)
 	}
 	goModStr := string(goMod)
-	if !strings.Contains(goModStr, data.Module) {
-		t.Error("go.mod missing module path")
+	if !strings.Contains(goModStr, "module agent") {
+		t.Error("go.mod missing managed module path")
 	}
 	for _, unwanted := range []string{"/libs/agentsdk", "/libs/goai", "/libs/sol", "/libs/goose", "/libs/templ"} {
 		if strings.Contains(goModStr, unwanted) {
@@ -156,7 +155,6 @@ func TestMaterialize_RequiresSDKVersion(t *testing.T) {
 	// with an empty version and produce invalid Go module syntax).
 	err := Materialize(dir, ScaffoldData{
 		AgentID:   "550e8400-e29b-41d4-a716-446655440000",
-		Module:    "agent",
 		GoVersion: "1.26",
 	})
 	if err == nil {

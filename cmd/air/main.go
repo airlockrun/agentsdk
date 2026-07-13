@@ -58,6 +58,9 @@ func run(args []string) error {
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return nil
+	case "--version", "version":
+		fmt.Printf("air v%s\n", agentsdk.Version)
+		return nil
 	case "init":
 		return cmdInit(args[1:])
 	case "update":
@@ -83,12 +86,13 @@ func run(args []string) error {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, `air - author an Airlock agent repo outside airlock
+	fmt.Fprintf(w, `air v%s - author an Airlock agent repo outside airlock
 
 Usage:
+  air version                     print the selected CLI version
   air [init] <dir> [flags]        scaffold a new agent into <dir>
   air update [dir] [flags]        regenerate the airlock-managed files in place
-  air toolchain install [flags]   ensure the pinned frontend toolchain and skills
+  air toolchain install           ensure the pinned frontend toolchain and skills
   air build [dir]                 run the local build chain
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
@@ -97,29 +101,22 @@ Usage:
   air clone <agent> <dir> [flags] clone Airlock source without Git
 
 Init flags:
-  --module <name>            Go module path for the agent (default "agent")
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
-  --base-image <ref>         runtime base image for the Dockerfile FROM line
-                             (default "%s")
   --airlock <url>            write .airlock/local/agent.toml with this Airlock URL
 
 Update flags (dir defaults to "."):
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
-  --base-image <ref>         runtime base image for the Dockerfile FROM line
-                             (default "%s")
 
   Updates the airlock-managed files (Dockerfile, AGENTS.md, %s)
   in place - the external equivalent of airlock's build housekeeping. Run it
   after bumping the agentsdk pin. Requires an existing go.mod in dir.
 
-Toolchain install flags:
-  --prefix <dir>             toolchain prefix (default ".airlock/toolchain")
-
+Toolchain install:
   Ensures the frontend toolchain pinned by the scaffold:
     templ       %s (via go tool templ)
-    tailwindcss %s (standalone binary -> <prefix>/bin)
-    daisyui     %s (plugin mjs files -> <prefix>/lib/tailwind)
-    skills         (version-matched references -> <prefix>/skills)
+    tailwindcss %s (standalone binary -> .airlock/toolchain/bin)
+    daisyui     %s (plugin mjs files -> .airlock/toolchain/lib/tailwind)
+    skills         (version-matched references -> .airlock/toolchain/skills)
 
 Login flags:
   --no-browser               print the device login URL without opening a browser
@@ -150,9 +147,10 @@ Pull flags:
 Clone flags:
   --url <url>                Airlock URL; defaults to the sole saved login
   --remote <name>            named binding when run inside a bound workspace
-`,
-		agentsdk.Version, defaultBaseImage,
-		agentsdk.Version, defaultBaseImage,
+	`,
+		agentsdk.Version,
+		agentsdk.Version,
+		agentsdk.Version,
 		scaffold.NoticesFilename,
 		scaffold.TemplVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion,
 	)
@@ -160,9 +158,7 @@ Clone flags:
 
 // scaffoldFlags holds the flags shared by init and update.
 type scaffoldFlags struct {
-	module          string
 	agentSDKVersion string
-	baseImage       string
 	airlockURL      string
 }
 
@@ -193,18 +189,12 @@ func parseFlags(args []string, set func(key, value string) error) ([]string, err
 
 func parseScaffoldFlags(args []string) (scaffoldFlags, []string, error) {
 	f := scaffoldFlags{
-		module:          "agent",
 		agentSDKVersion: "v" + agentsdk.Version,
-		baseImage:       defaultBaseImage,
 	}
 	positional, err := parseFlags(args, func(key, value string) error {
 		switch key {
-		case "module":
-			f.module = value
 		case "agentsdk-version":
 			f.agentSDKVersion = value
-		case "base-image":
-			f.baseImage = value
 		case "airlock":
 			f.airlockURL = value
 		default:
@@ -216,6 +206,10 @@ func parseScaffoldFlags(args []string) (scaffoldFlags, []string, error) {
 }
 
 func cmdInit(args []string) error {
+	return runInit(args, tidyModule)
+}
+
+func runInit(args []string, tidy func(string) error) error {
 	f, positional, err := parseScaffoldFlags(args)
 	if err != nil {
 		return err
@@ -236,9 +230,8 @@ func cmdInit(args []string) error {
 
 	data := scaffold.ScaffoldData{
 		AgentID:         id,
-		Module:          f.module,
 		AgentSDKVersion: f.agentSDKVersion,
-		AgentBaseImage:  f.baseImage,
+		AgentBaseImage:  defaultBaseImage,
 	}
 	if err := scaffold.Materialize(dir, data); err != nil {
 		return fmt.Errorf("materialize agent: %w", err)
@@ -250,13 +243,14 @@ func cmdInit(args []string) error {
 			return fmt.Errorf("write agent binding: %w", err)
 		}
 	}
+	if err := tidy(dir); err != nil {
+		return err
+	}
 
 	fmt.Printf("Initialized agent %s in %s\n", id, dir)
-	fmt.Printf("  module:   %s\n", f.module)
 	fmt.Printf("  agentsdk: %s\n", f.agentSDKVersion)
 	fmt.Println("\nNext steps:")
 	fmt.Printf("  cd %s\n", dir)
-	fmt.Println("  go mod tidy")
 	fmt.Println("  go tool air toolchain install   # install frontend tools + coding skills")
 	fmt.Println("  go tool air build")
 	return nil
@@ -281,9 +275,8 @@ func cmdUpdate(args []string) error {
 	}
 
 	data := scaffold.ScaffoldData{
-		Module:          f.module,
 		AgentSDKVersion: f.agentSDKVersion,
-		AgentBaseImage:  f.baseImage,
+		AgentBaseImage:  defaultBaseImage,
 	}
 	if err := runUpdate(dir, data); err != nil {
 		return err
@@ -305,6 +298,17 @@ func runUpdate(dir string, data scaffold.ScaffoldData) error {
 	}
 	if err := scaffold.GenerateNotices(dir); err != nil {
 		return fmt.Errorf("update notices: %w", err)
+	}
+	return nil
+}
+
+func tidyModule(dir string) error {
+	cmd := exec.Command("go", "mod", "tidy")
+	cmd.Dir = dir
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("initialize module dependencies: %w", err)
 	}
 	return nil
 }
@@ -395,18 +399,10 @@ func cmdToolchain(args []string) error {
 }
 
 func cmdInstallToolchain(args []string) error {
-	prefix := localToolchainPrefix
-	if _, err := parseFlags(args, func(key, value string) error {
-		switch key {
-		case "prefix":
-			prefix = value
-		default:
-			return fmt.Errorf("unknown flag --%s", key)
-		}
-		return nil
-	}); err != nil {
-		return err
+	if len(args) != 0 {
+		return errors.New("toolchain install takes no arguments")
 	}
+	prefix := localToolchainPrefix
 
 	if err := ensureToolchain(prefix); err != nil {
 		return err
@@ -663,8 +659,8 @@ func tailwindAsset(goos, goarch string) (string, error) {
 }
 
 // downloadFile fetches url and writes it to dst with mode perm, creating parent
-// directories first. A permission error on the target carries a hint to re-run
-// with sudo or a writable --prefix.
+// directories first. A permission error identifies the managed directory that
+// must be writable.
 func downloadFile(url, dst string, perm os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return writeHint(err, dst)
@@ -709,7 +705,7 @@ func downloadFile(url, dst string, perm os.FileMode) error {
 
 func writeHint(err error, dst string) error {
 	if errors.Is(err, os.ErrPermission) {
-		return fmt.Errorf("%w - %s is not writable; re-run with sudo or pass a writable --prefix", err, filepath.Dir(dst))
+		return fmt.Errorf("%w - managed toolchain directory %s is not writable", err, filepath.Dir(dst))
 	}
 	return err
 }

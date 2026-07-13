@@ -104,10 +104,17 @@ func TestEnsureEmptyDir(t *testing.T) {
 
 func TestCmdInitSmoke(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "myagent")
-	if err := cmdInit([]string{dir, "--airlock", "https://airlock.example.com/"}); err != nil {
+	var tidied bool
+	if err := runInit([]string{dir, "--airlock", "https://airlock.example.com/"}, func(dir string) error {
+		tidied = true
+		return os.WriteFile(filepath.Join(dir, "go.sum"), []byte("checksums\n"), 0o644)
+	}); err != nil {
 		t.Fatalf("cmdInit: %v", err)
 	}
-	for _, f := range []string{"go.mod", "AGENTS.md", "Dockerfile", "main.go"} {
+	if !tidied {
+		t.Fatal("cmdInit did not tidy the initialized module")
+	}
+	for _, f := range []string{"go.mod", "go.sum", "AGENTS.md", "Dockerfile", "main.go"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Fatalf("expected %s: %v", f, err)
 		}
@@ -166,7 +173,7 @@ func TestCmdUpdateRequiresGoMod(t *testing.T) {
 
 	t.Run("updates managed files", func(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "agent")
-		if err := cmdInit([]string{dir}); err != nil {
+		if err := runInit([]string{dir}, func(string) error { return nil }); err != nil {
 			t.Fatalf("cmdInit: %v", err)
 		}
 		if err := os.Remove(filepath.Join(dir, "Dockerfile")); err != nil {
@@ -179,6 +186,30 @@ func TestCmdUpdateRequiresGoMod(t *testing.T) {
 			t.Fatalf("Dockerfile not updated: %v", err)
 		}
 	})
+}
+
+func TestManagedScaffoldFlagsCannotBeOverridden(t *testing.T) {
+	for _, flag := range []string{"--module", "--base-image"} {
+		t.Run(strings.TrimPrefix(flag, "--"), func(t *testing.T) {
+			if _, _, err := parseScaffoldFlags([]string{flag, "custom"}); err == nil {
+				t.Fatalf("parseScaffoldFlags accepted %s", flag)
+			}
+		})
+	}
+}
+
+func TestToolchainInstallRejectsPrefix(t *testing.T) {
+	if err := cmdInstallToolchain([]string{"--prefix", t.TempDir()}); err == nil {
+		t.Fatal("cmdInstallToolchain accepted --prefix")
+	}
+}
+
+func TestUsageIncludesVersion(t *testing.T) {
+	var out strings.Builder
+	usage(&out)
+	if !strings.Contains(out.String(), "air v"+agentsdk.Version) {
+		t.Fatalf("usage does not identify CLI version:\n%s", out.String())
+	}
 }
 
 func TestParseDeployFlags(t *testing.T) {
