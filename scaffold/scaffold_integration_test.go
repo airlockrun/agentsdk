@@ -41,7 +41,6 @@ func TestScaffoldBuildsAndStarts(t *testing.T) {
 	dir := t.TempDir()
 	data := ScaffoldData{
 		AgentID:         "test-agent-build",
-		Module:          "agent",
 		GoVersion:       "1.26",
 		AgentSDKVersion: "v1.0.0",
 		AgentBaseImage:  "airlock-agent-base",

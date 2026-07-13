@@ -15,7 +15,6 @@ var templates embed.FS
 // ScaffoldData holds values substituted into templates.
 type ScaffoldData struct {
 	AgentID         string // UUID
-	Module          string // Go module name for the agent (typically "agent")
 	GoVersion       string // e.g., "1.26.0"; defaults to the GoVersion const when empty
 	AgentSDKVersion string // displayed in the agent's go.mod require line (informational — replace directives are unconditional)
 	AgentBaseImage  string // runtime base image referenced by the agent's Dockerfile (FROM line). Threaded from cfg.AgentBaseImage so operators can pin it (typically a versioned ghcr ref).
