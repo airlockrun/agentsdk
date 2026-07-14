@@ -136,6 +136,7 @@ Deploy flags:
   --remote <name>            named remote in .airlock/local/agent.toml (default "default")
   --name <name>              display name for --create (default dir or slug)
   --description <text>       description for --create
+  -m, --message <text>       internal source commit message (single line, 200 bytes max)
   --force                    replace stale Airlock source intentionally
 
 Pull flags:
