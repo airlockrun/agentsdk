@@ -23,6 +23,8 @@ var (
 	agentSlugRe  = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 )
 
+const maxDeployMessageBytes = 200
+
 type deployFlags struct {
 	create      bool
 	force       bool
@@ -32,6 +34,7 @@ type deployFlags struct {
 	remote      string
 	name        string
 	description string
+	message     string
 	dir         string
 }
 
@@ -114,7 +117,7 @@ func cmdDeploy(args []string) error {
 		return fmt.Errorf("hash source: %w", err)
 	}
 	previousState := target.SourceState
-	newState, err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir, previousState, f.force)
+	newState, err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir, previousState, f.message, f.force)
 	if err != nil {
 		var stale *staleSourceError
 		if errors.As(err, &stale) {
@@ -149,8 +152,18 @@ func cmdDeploy(args []string) error {
 func parseDeployFlags(args []string) (deployFlags, error) {
 	f := deployFlags{dir: "."}
 	var positional []string
+	messageSet := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "-m" {
+			if i+1 >= len(args) {
+				return deployFlags{}, errors.New("flag -m needs a value")
+			}
+			i++
+			f.message = args[i]
+			messageSet = true
+			continue
+		}
 		if len(a) < 2 || a[:2] != "--" {
 			positional = append(positional, a)
 			continue
@@ -182,6 +195,9 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 			f.name = value
 		case "description":
 			f.description = value
+		case "message":
+			f.message = value
+			messageSet = true
 		default:
 			return deployFlags{}, fmt.Errorf("unknown flag --%s", key)
 		}
@@ -198,6 +214,18 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 	}
 	if f.remote != "" && !validRemoteName(f.remote) {
 		return deployFlags{}, fmt.Errorf("invalid remote %q: use letters, digits, dashes, and underscores", f.remote)
+	}
+	if messageSet {
+		f.message = strings.TrimSpace(f.message)
+		if f.message == "" {
+			return deployFlags{}, errors.New("deploy message must not be blank")
+		}
+		if strings.ContainsAny(f.message, "\r\n") {
+			return deployFlags{}, errors.New("deploy message must be a single line")
+		}
+		if len(f.message) > maxDeployMessageBytes {
+			return deployFlags{}, fmt.Errorf("deploy message is %d bytes; maximum is %d", len(f.message), maxDeployMessageBytes)
+		}
 	}
 	if f.create {
 		if f.name == "" {
@@ -364,7 +392,7 @@ type staleSourceError struct {
 
 func (e *staleSourceError) Error() string { return "source state is stale" }
 
-func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState string, force bool) (string, error) {
+func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState, commitMessage string, force bool) (string, error) {
 	pr, pw := io.Pipe()
 	go func() {
 		pw.CloseWithError(writeSourceArchive(pw, dir))
@@ -377,6 +405,9 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState
 	req.Header.Set("Content-Type", "application/gzip")
 	if sourceState != "" {
 		req.Header.Set("If-Match", quoteETag(sourceState))
+	}
+	if commitMessage != "" {
+		req.Header.Set("X-Airlock-Commit-Message", commitMessage)
 	}
 	if force {
 		req.Header.Set("X-Airlock-Force", "true")

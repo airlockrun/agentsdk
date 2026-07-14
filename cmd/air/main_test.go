@@ -213,11 +213,11 @@ func TestUsageIncludesVersion(t *testing.T) {
 }
 
 func TestParseDeployFlags(t *testing.T) {
-	f, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--url", "https://airlock.example.com", "--remote", "prod", "repo"})
+	f, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--url", "https://airlock.example.com", "--remote", "prod", "--message", "Add reminders", "repo"})
 	if err != nil {
 		t.Fatalf("parseDeployFlags: %v", err)
 	}
-	if !f.create || f.slug != "todo" || f.name != "todo" || f.url != "https://airlock.example.com" || f.remote != "prod" || f.dir != "repo" {
+	if !f.create || f.slug != "todo" || f.name != "todo" || f.url != "https://airlock.example.com" || f.remote != "prod" || f.message != "Add reminders" || f.dir != "repo" {
 		t.Fatalf("flags = %#v", f)
 	}
 	f, err = parseDeployFlags([]string{"--create", "--name", "Sales Deck", "repo"})
@@ -232,6 +232,15 @@ func TestParseDeployFlags(t *testing.T) {
 	}
 	if _, err := parseDeployFlags([]string{"--remote", "bad remote"}); err == nil {
 		t.Fatal("invalid --remote returned nil error")
+	}
+	f, err = parseDeployFlags([]string{"-m", "Fix retries"})
+	if err != nil || f.message != "Fix retries" {
+		t.Fatalf("short message flag = %#v, %v", f, err)
+	}
+	for _, message := range []string{"", " ", "first\nsecond", strings.Repeat("x", maxDeployMessageBytes+1)} {
+		if _, err := parseDeployFlags([]string{"--message", message}); err == nil {
+			t.Errorf("invalid message %q returned nil error", message)
+		}
 	}
 }
 

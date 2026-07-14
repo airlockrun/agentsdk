@@ -115,20 +115,21 @@ func TestUploadSourceSendsPrecondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gotMatch, gotForce string
+	var gotMatch, gotForce, gotMessage string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMatch = r.Header.Get("If-Match")
 		gotForce = r.Header.Get("X-Airlock-Force")
+		gotMessage = r.Header.Get("X-Airlock-Commit-Message")
 		w.Header().Set("ETag", quoteETag(state))
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
-	got, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, state, true)
+	got, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, state, "Add reminders", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != state || unquoteETag(gotMatch) != state || gotForce != "true" {
-		t.Fatalf("state=%q If-Match=%q force=%q", got, gotMatch, gotForce)
+	if got != state || unquoteETag(gotMatch) != state || gotForce != "true" || gotMessage != "Add reminders" {
+		t.Fatalf("state=%q If-Match=%q force=%q message=%q", got, gotMatch, gotForce, gotMessage)
 	}
 }
 
