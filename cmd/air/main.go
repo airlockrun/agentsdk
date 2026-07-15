@@ -333,16 +333,18 @@ func runBuild(dir string) error {
 	if err := ensureToolchain(filepath.Join(dir, localToolchainPrefix)); err != nil {
 		return err
 	}
-	tailwindCmd := tailwindBinaryPath(localToolchainPrefix)
-	steps := []struct {
-		name string
-		cmd  []string
-	}{
-		{"go mod tidy", []string{"go", "mod", "tidy"}},
-		{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
-		{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
-		{"go build", []string{"go", "build", "."}},
+	outputDir, err := os.MkdirTemp("", "air-agent-build-*")
+	if err != nil {
+		return fmt.Errorf("create build output directory: %w", err)
 	}
+	defer os.RemoveAll(outputDir)
+	outputName := "agent"
+	if runtime.GOOS == "windows" {
+		outputName += ".exe"
+	}
+
+	tailwindCmd := tailwindBinaryPath(localToolchainPrefix)
+	steps := buildSteps(tailwindCmd, filepath.Join(outputDir, outputName))
 	for _, step := range steps {
 		fmt.Printf("==> %s\n", step.name)
 		cmd := exec.Command(step.cmd[0], step.cmd[1:]...)
@@ -354,6 +356,20 @@ func runBuild(dir string) error {
 		}
 	}
 	return nil
+}
+
+type buildStep struct {
+	name string
+	cmd  []string
+}
+
+func buildSteps(tailwindCmd, outputPath string) []buildStep {
+	return []buildStep{
+		{"go mod tidy", []string{"go", "mod", "tidy"}},
+		{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
+		{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
+		{"go build", []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
+	}
 }
 
 // ensureEmptyDir creates dir if missing and errors if it exists and is

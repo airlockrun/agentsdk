@@ -57,12 +57,14 @@ task touches it** (paths are where they live in the build container):
 
 ## Verifying a build
 
-After writing code, generate templ output and compile:
+After writing code, run the SDK-owned build chain:
 
 ```bash
-go tool templ generate
-go build ./...
+go tool air build
 ```
+
+This reconciles module sums, generates templ output, compiles Tailwind and
+DaisyUI, and verifies the Go binary without leaving it in the source tree.
 
 Run `sqlc generate` only if you created or changed `.sql` files in
 `db/queries/`. The Docker build re-runs `templ generate` and `tailwindcss`, so

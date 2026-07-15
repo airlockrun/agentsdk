@@ -499,6 +499,19 @@ func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 	}
 }
 
+func TestBuildStepsWritesBinaryOutsideRepository(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "agent")
+	steps := buildSteps(".airlock/toolchain/bin/tailwindcss", output)
+	if len(steps) != 4 {
+		t.Fatalf("len(buildSteps) = %d, want 4", len(steps))
+	}
+	want := []string{"go", "build", "-buildvcs=false", "-o", output, "."}
+	got := steps[len(steps)-1].cmd
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("build command = %q, want %q", got, want)
+	}
+}
+
 func TestResolveDeployTargetFailsOnBindingSlugMismatch(t *testing.T) {
 	const id = "11111111-1111-1111-1111-111111111111"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
