@@ -46,7 +46,7 @@ func TestNormalizePath(t *testing.T) {
 // return ErrNotFound (never distinguishing "denied" from "not found").
 func TestCheckFileAccess_UnregisteredPath(t *testing.T) {
 	a, _ := testAgent(t)
-	ctx := WithCaller(context.Background(), Caller{Access: AccessAdmin})
+	ctx := withCaller(context.Background(), caller{Access: AccessAdmin})
 	if err := a.CheckFileAccess(ctx, "nowhere/foo", OpRead); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -57,7 +57,7 @@ func TestCheckFileAccess_UnregisteredPath(t *testing.T) {
 // for callers debugging input.
 func TestCheckFileAccess_InvalidPath(t *testing.T) {
 	a, _ := testAgent(t)
-	ctx := WithCaller(context.Background(), Caller{Access: AccessAdmin})
+	ctx := withCaller(context.Background(), caller{Access: AccessAdmin})
 	if err := a.CheckFileAccess(ctx, "../etc/passwd", OpRead); !errors.Is(err, ErrInvalidPath) {
 		t.Fatalf("expected ErrInvalidPath, got %v", err)
 	}
@@ -69,12 +69,14 @@ func TestCheckFileAccess_LongestPrefix(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterDirectory("reports", DirectoryOpts{
 		Read: AccessUser, Write: AccessAdmin, List: AccessUser,
+		Description: "Reports",
 	})
 	a.RegisterDirectory("reports/public", DirectoryOpts{
 		Read: AccessPublic, Write: AccessAdmin, List: AccessPublic,
+		Description: "Public reports",
 	})
 
-	publicCtx := WithCaller(context.Background(), Caller{Access: AccessPublic})
+	publicCtx := withCaller(context.Background(), caller{Access: AccessPublic})
 
 	// Path under the more-specific public dir — public read allowed.
 	if err := a.CheckFileAccess(publicCtx, "reports/public/foo.csv", OpRead); err != nil {
@@ -86,12 +88,13 @@ func TestCheckFileAccess_LongestPrefix(t *testing.T) {
 	}
 }
 
-// TestCheckFileAccess_FailClosed confirms the default ctx (no Caller
+// TestCheckFileAccess_FailClosed confirms the default ctx (no caller
 // attached) is treated as AccessPublic and denies anything user-or-above.
 func TestCheckFileAccess_FailClosed(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterDirectory("reports", DirectoryOpts{
 		Read: AccessUser, Write: AccessUser, List: AccessUser,
+		Description: "Reports",
 	})
 	if err := a.CheckFileAccess(context.Background(), "reports/x", OpRead); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected fail-closed deny on plain ctx, got %v", err)
@@ -105,8 +108,9 @@ func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterDirectory("uploads", DirectoryOpts{
 		Read: AccessUser, Write: AccessUser, List: AccessUser,
+		Description: "Uploads",
 	})
-	ctx := WithCaller(context.Background(), Caller{Access: AccessUser})
+	ctx := withCaller(context.Background(), caller{Access: AccessUser})
 	// OpWrite is the operation tag for deletes. The agent.DeleteFile
 	// path bypasses CheckFileAccess (trusted), but the VM binding for
 	// fileDelete() goes through CheckFileAccess(OpWrite) — verify the
@@ -122,11 +126,12 @@ func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
 func TestCheckFileAccess_CapsAreIndependent(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterDirectory("inbox", DirectoryOpts{
-		Read:  AccessAdmin, // contents are admin-only
-		Write: AccessUser,  // anyone signed-in can drop a file
-		List:  AccessUser,  // anyone can see filenames
+		Read:        AccessAdmin, // contents are admin-only
+		Write:       AccessUser,  // anyone signed-in can drop a file
+		List:        AccessUser,  // anyone can see filenames
+		Description: "Inbox",
 	})
-	userCtx := WithCaller(context.Background(), Caller{Access: AccessUser})
+	userCtx := withCaller(context.Background(), caller{Access: AccessUser})
 
 	if err := a.CheckFileAccess(userCtx, "inbox/foo", OpRead); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("user should not have read access to admin-read dir, got %v", err)

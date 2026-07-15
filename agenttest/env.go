@@ -1,12 +1,12 @@
-// Package agenttest provides helpers for testing agents built on agentsdk.
-// It lives in its own package so the testing dependency it pulls in never
-// reaches an agent's production binary — agents import it only from _test.go.
+// Package agenttest provides an atomic environment and database bootstrap for
+// tests of agents built on agentsdk.
 package agenttest
 
 import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/testcontainers/testcontainers-go"
@@ -15,71 +15,74 @@ import (
 
 const postgresImage = "pgvector/pgvector:pg17"
 
-// Env is a test environment for an agent: a mock Airlock server plus the
-// AIRLOCK_* environment variables wired to point at it.
+// Env is a fully constructed test agent with its mock Airlock server.
 type Env struct {
-	// Airlock is the mock Airlock server. Inspect Airlock.Requests() to
-	// assert on the calls a handler made.
-	Airlock *agentsdk.MockAirlock
-	// URL is the mock Airlock's base URL (also set as AIRLOCK_API_URL).
+	Agent *agentsdk.Agent
+	// Airlock records calls made through the platform API.
+	Airlock *MockAirlock
+	// URL is the mock Airlock base URL.
 	URL string
 }
 
-// NewEnv starts a mock Airlock and sets the environment variables agentsdk.New
-// requires (AIRLOCK_API_URL, AIRLOCK_AGENT_ID, AIRLOCK_AGENT_TOKEN) to point at
-// it. Call it before constructing the agent. The mock server and the env vars
-// are torn down automatically when the test ends.
-//
-// When Airlock provisions a test database in TEST_DB_URL, NewEnv also sets
-// AIRLOCK_DB_URL before the caller builds the agent. DB-backed tests should use
-// NewDBEnv, which additionally provisions a local database when needed.
-func NewEnv(t *testing.T) *Env {
+// New configures a mock Airlock and test database before invoking factory.
+// TEST_DB_URL is used when explicitly supplied; otherwise New starts a
+// throwaway pgvector container. agentsdk.New resets and applies db/migrations
+// before it returns to the rest of factory, so dependency construction and
+// registrations always see a clean, migrated schema.
+func New(t *testing.T, factory func() *agentsdk.Agent) *Env {
 	t.Helper()
-	m, url := agentsdk.NewMockAirlock()
-	t.Cleanup(m.Close)
+	if factory == nil {
+		t.Fatal("agenttest: factory is required")
+	}
+
+	mock, url := NewMockAirlock()
+	t.Cleanup(mock.Close)
 	t.Setenv("AIRLOCK_API_URL", url)
 	t.Setenv("AIRLOCK_AGENT_ID", "00000000-0000-0000-0000-000000000000")
 	t.Setenv("AIRLOCK_AGENT_TOKEN", "test-token")
-	if dsn := os.Getenv("TEST_DB_URL"); dsn != "" {
-		t.Setenv("AIRLOCK_DB_URL", dsn)
-	}
-	return &Env{Airlock: m, URL: url}
-}
+	t.Setenv("AGENT_VALIDATE_MIGRATIONS", "")
+	t.Setenv("AGENT_MIGRATE_DOWN_TO", "")
+	t.Setenv("AGENTSDK_TEST_MIGRATIONS", "1")
 
-// NewDBEnv starts a test environment with a PostgreSQL database. It uses the
-// database supplied by Airlock in TEST_DB_URL when available. Otherwise it
-// starts a throwaway pgvector container and skips the test when Docker is not
-// available. Call it before constructing the agent so dependencies may cache
-// agent.DB() safely.
-func NewDBEnv(t *testing.T) *Env {
-	t.Helper()
-	env := NewEnv(t)
-	if os.Getenv("TEST_DB_URL") != "" {
-		return env
+	// AIRLOCK_DB_URL is production input and may be inherited from the shell.
+	// Tests only opt into an existing database through TEST_DB_URL.
+	t.Setenv("AIRLOCK_DB_URL", "")
+	dsn := os.Getenv("TEST_DB_URL")
+	if dsn == "" {
+		testcontainers.SkipIfProviderIsNotHealthy(t)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		ctr, err := postgres.Run(ctx, postgresImage,
+			postgres.WithDatabase("agent_test"),
+			postgres.WithUsername("agent"),
+			postgres.WithPassword("agent"),
+			postgres.BasicWaitStrategies(),
+		)
+		if err != nil {
+			t.Fatalf("agenttest: start PostgreSQL container: %v", err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := ctr.Terminate(ctx); err != nil {
+				t.Errorf("agenttest: stop PostgreSQL container: %v", err)
+			}
+		})
+		dsn, err = ctr.ConnectionString(ctx, "sslmode=disable")
+		if err != nil {
+			t.Fatalf("agenttest: PostgreSQL connection string: %v", err)
+		}
 	}
+	t.Setenv("AIRLOCK_DB_URL", dsn)
 
-	testcontainers.SkipIfProviderIsNotHealthy(t)
-	ctx := context.Background()
-	ctr, err := postgres.Run(ctx, postgresImage,
-		postgres.WithDatabase("agent_test"),
-		postgres.WithUsername("agent"),
-		postgres.WithPassword("agent"),
-		postgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		t.Fatalf("agenttest: start PostgreSQL container: %v", err)
+	a := factory()
+	if a == nil {
+		t.Fatal("agenttest: factory returned nil")
 	}
 	t.Cleanup(func() {
-		if err := ctr.Terminate(context.Background()); err != nil {
-			t.Errorf("agenttest: stop PostgreSQL container: %v", err)
+		if err := a.Close(); err != nil {
+			t.Errorf("agenttest: close agent database: %v", err)
 		}
 	})
-
-	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		t.Fatalf("agenttest: PostgreSQL connection string: %v", err)
-	}
-	t.Setenv("TEST_DB_URL", dsn)
-	t.Setenv("AIRLOCK_DB_URL", dsn)
-	return env
+	return &Env{Agent: a, Airlock: mock, URL: url}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"hash/fnv"
 	"os"
 	"regexp"
 	"strconv"
@@ -15,20 +17,17 @@ import (
 	"go.uber.org/zap"
 )
 
-const migrationsPath = "/migrations"
-
 const (
-	migrateMaxAttempts  = 8
-	migrateRetryBackoff = 250 * time.Millisecond
+	runtimeMigrationsPath  = "/migrations"
+	sourceMigrationsPath   = "db/migrations"
+	testMigrationEnv       = "AGENTSDK_TEST_MIGRATIONS"
+	migrationTimeout       = 10 * time.Minute
+	migrationUnlockTimeout = 5 * time.Second
 )
 
 // isTransientConnError reports whether err is a transient DB connection/auth
-// error worth retrying at boot rather than panicking. Notably 28P01: Airlock
-// reconciles an agent's Postgres role with ALTER ROLE ... PASSWORD, which
-// rewrites the scram-sha-256 verifier (new salt) even for the *same* password.
-// An ALTER that lands mid-handshake makes Postgres reject the correct password
-// with 28P01; a retry once the ALTER completes succeeds. Connection-refused /
-// "starting up" cover the agent racing Postgres coming up.
+// error worth retrying before migrations start. A retry is safe here because
+// no migration code or external side effect has run yet.
 func isTransientConnError(err error) bool {
 	if err == nil {
 		return false
@@ -36,13 +35,7 @@ func isTransientConnError(err error) bool {
 	var pqErr *pq.Error
 	if errors.As(err, &pqErr) {
 		switch string(pqErr.Code) {
-		case "28P01", // invalid_password (verifier rewritten mid-handshake)
-			"28000", // invalid_authorization_specification
-			"57P03", // cannot_connect_now
-			"53300", // too_many_connections
-			"08006", // connection_failure
-			"08001", // unable_to_establish_connection
-			"08004": // rejected_connection
+		case "28P01", "28000", "57P03", "53300", "08006", "08001", "08004":
 			return true
 		default:
 			return false
@@ -56,14 +49,10 @@ func isTransientConnError(err error) bool {
 		strings.Contains(msg, "EOF")
 }
 
-// agentCtxKey is the context key under which the running Agent is stored
-// during migrations. Go migrations retrieve the agent via AgentFromContext
-// to perform storage/API calls.
 type agentCtxKey struct{}
 
 // AgentFromMigrationContext returns the Agent associated with a migration
-// context. Panics if called outside of a migration — migrations receive the
-// context via goose, which propagates it from autoMigrate.
+// context. Panics if called outside a migration.
 func AgentFromMigrationContext(ctx context.Context) *Agent {
 	a, ok := ctx.Value(agentCtxKey{}).(*Agent)
 	if !ok {
@@ -72,142 +61,147 @@ func AgentFromMigrationContext(ctx context.Context) *Agent {
 	return a
 }
 
-// MigrationContext returns ctx with this agent attached, so goose Up/Down calls
-// run the agent's Go migrations — those fetch the agent via
-// AgentFromMigrationContext. autoMigrate uses this for the baked /migrations;
-// tests use it to apply db/migrations against a test database (see
-// agentsdk/agenttest.UseDB).
+// MigrationContext returns ctx with this agent attached for Go migrations.
 func (a *Agent) MigrationContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, agentCtxKey{}, a)
 }
 
-// IsValidatingMigrations reports whether the agent is running in migration
-// validation mode (AGENT_VALIDATE_MIGRATIONS=1). Go migrations that touch
-// external services (S3, Airlock API, connection credentials) should return
-// early when this is true — those services are not available during
-// build-time validation.
-func IsValidatingMigrations() bool {
+func isValidatingMigrations() bool {
 	return os.Getenv("AGENT_VALIDATE_MIGRATIONS") == "1"
 }
 
-// autoMigrate runs pending migrations from /migrations/ if the directory exists
-// and a database is configured. Uses goose, which supports both .sql files and
-// .go migrations registered via init(). Called automatically by New().
-//
-// Go migrations are picked up because main.go blank-imports the agent's
-// db/migrations package, firing each file's init() before this function runs.
-//
-// If AGENT_VALIDATE_MIGRATIONS=1 is set, autoMigrate runs up → down → up to
-// verify migrations are reversible, then calls os.Exit(0). Used by the Airlock
-// build pipeline to validate migrations without booting the full agent. In
-// validate mode, Go migrations that touch external services (S3, Airlock API,
-// connection credentials) should skip their side effects — see doc.go example.
+type migrationMode int
+
+const (
+	migrationUp migrationMode = iota
+	migrationValidate
+	migrationDownTo
+	migrationTestReset
+)
+
+// autoMigrate applies migrations from the runtime image. agenttest selects the
+// canonical source directory and reset/up mode before constructing the agent.
 func (a *Agent) autoMigrate() {
-	dsn := os.Getenv("AIRLOCK_DB_URL")
-	if dsn == "" {
-		return
-	}
-	if !hasMigrationFiles(migrationsPath) {
-		// In validate or down-to mode we always exit — the agent shouldn't
-		// continue to Serve() during these one-shot orchestrator invocations.
-		if IsValidatingMigrations() {
-			agentLogger().Info("no migrations to validate")
-			os.Exit(0)
-		}
-		if os.Getenv("AGENT_MIGRATE_DOWN_TO") != "" {
-			agentLogger().Info("no migrations to down-to")
-			os.Exit(0)
-		}
-		return
-	}
+	dir := runtimeMigrationsPath
+	mode := migrationUp
+	var downTo int64
 
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		panic("agentsdk: open db for migrations: " + err.Error())
-	}
-	defer db.Close()
-
-	if err := goose.SetDialect("postgres"); err != nil {
-		panic("agentsdk: goose dialect: " + err.Error())
-	}
-
-	ctx := a.MigrationContext(context.Background())
-	if IsValidatingMigrations() {
-		agentLogger().Info("validating migrations (up → down → up)")
-		if err := goose.UpContext(ctx, db, migrationsPath); err != nil {
-			panic("agentsdk: validate up: " + err.Error())
-		}
-		if err := goose.DownToContext(ctx, db, migrationsPath, 0); err != nil {
-			panic("agentsdk: validate down: " + err.Error())
-		}
-		if err := goose.UpContext(ctx, db, migrationsPath); err != nil {
-			panic("agentsdk: validate re-up: " + err.Error())
-		}
-		agentLogger().Info("migrations validated successfully")
-		os.Exit(0)
-	}
-
-	// One-shot down-to mode used by rollback. Airlock runs the agent's
-	// current image with this env var set, against either a schema clone
-	// (pre-flight check) or the live agent schema (the destructive step).
-	// Exits 0 on success so the orchestrator can observe completion via
-	// container exit code — same envelope as AGENT_VALIDATE_MIGRATIONS=1.
-	if downStr := os.Getenv("AGENT_MIGRATE_DOWN_TO"); downStr != "" {
+	if os.Getenv(testMigrationEnv) == "1" {
+		dir = sourceMigrationsPath
+		mode = migrationTestReset
+	} else if isValidatingMigrations() {
+		mode = migrationValidate
+	} else if downStr := os.Getenv("AGENT_MIGRATE_DOWN_TO"); downStr != "" {
 		v, err := strconv.ParseInt(downStr, 10, 64)
 		if err != nil {
 			panic("agentsdk: invalid AGENT_MIGRATE_DOWN_TO: " + err.Error())
 		}
-		agentLogger().Info("migrating down", zap.Int64("to_version", v))
-		if err := goose.DownToContext(ctx, db, migrationsPath, v); err != nil {
-			panic("agentsdk: down-to: " + err.Error())
-		}
-		agentLogger().Info("migrated down", zap.Int64("to_version", v))
-		os.Exit(0)
+		mode = migrationDownTo
+		downTo = v
 	}
 
-	// Retry on transient connection/auth errors: Airlock may be reconciling
-	// this role's password (ALTER ROLE rewrites the scram verifier) and an
-	// ALTER landing mid-handshake yields a spurious 28P01 for the correct
-	// password. goose tracks the applied version, so re-running UpContext after
-	// a connect failure is safe (no partial re-apply).
-	var upErr error
-	for attempt := 1; attempt <= migrateMaxAttempts; attempt++ {
-		upErr = goose.UpContext(ctx, db, migrationsPath)
-		if upErr == nil || !isTransientConnError(upErr) {
-			break
-		}
-		backoff := migrateRetryBackoff * time.Duration(attempt)
-		if backoff > time.Second {
-			backoff = time.Second
-		}
-		agentLogger().Warn("migrations: transient DB connection error, retrying",
-			zap.Int("attempt", attempt), zap.Int("max", migrateMaxAttempts), zap.Error(upErr))
-		time.Sleep(backoff)
+	hasFiles, err := hasMigrationFiles(dir)
+	if err != nil {
+		panic("agentsdk: read migrations directory " + dir + ": " + err.Error())
 	}
-	if upErr != nil {
-		panic("agentsdk: run migrations: " + upErr.Error())
+	if !hasFiles {
+		agentLogger().Info("no migrations found", zap.String("directory", dir))
+		if mode == migrationValidate || mode == migrationDownTo {
+			os.Exit(0)
+		}
+		return
 	}
-	agentLogger().Info("migrations applied")
+
+	ctx, cancel := context.WithTimeout(a.MigrationContext(context.Background()), migrationTimeout)
+	defer cancel()
+	if err := a.runMigrationPass(ctx, dir, mode, downTo); err != nil {
+		panic("agentsdk: run migrations: " + err.Error())
+	}
+
+	switch mode {
+	case migrationValidate:
+		agentLogger().Info("migrations validated successfully")
+		os.Exit(0)
+	case migrationDownTo:
+		agentLogger().Info("migrated down", zap.Int64("to_version", downTo))
+		os.Exit(0)
+	default:
+		agentLogger().Info("migrations applied")
+	}
 }
 
-// migrationFilePattern matches goose migration files: numeric prefix + name + .sql/.go.
-// Excludes scaffold helpers like doc.go that share the package but aren't migrations.
+func (a *Agent) runMigrationPass(ctx context.Context, dir string, mode migrationMode, downTo int64) error {
+	if err := goose.SetDialect("postgres"); err != nil {
+		return err
+	}
+	return withMigrationLock(ctx, a.db.db, migrationLockKey(a.agentID), func() error {
+		switch mode {
+		case migrationValidate:
+			agentLogger().Info("validating migrations (up, down, up)")
+			if err := goose.UpContext(ctx, a.db.db, dir); err != nil {
+				return fmt.Errorf("validate up: %w", err)
+			}
+			if err := goose.DownToContext(ctx, a.db.db, dir, 0); err != nil {
+				return fmt.Errorf("validate down: %w", err)
+			}
+			if err := goose.UpContext(ctx, a.db.db, dir); err != nil {
+				return fmt.Errorf("validate re-up: %w", err)
+			}
+			return nil
+		case migrationDownTo:
+			agentLogger().Info("migrating down", zap.Int64("to_version", downTo))
+			return goose.DownToContext(ctx, a.db.db, dir, downTo)
+		case migrationTestReset:
+			if err := goose.DownToContext(ctx, a.db.db, dir, 0); err != nil {
+				return fmt.Errorf("test reset: %w", err)
+			}
+			return goose.UpContext(ctx, a.db.db, dir)
+		default:
+			return goose.UpContext(ctx, a.db.db, dir)
+		}
+	})
+}
+
+// migrationLockKey is stable across replicas of the same agent while allowing
+// unrelated agents in the same PostgreSQL database to migrate independently.
+func migrationLockKey(agentID string) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("agentsdk:migrations:" + agentID))
+	return int64(h.Sum64())
+}
+
+func withMigrationLock(ctx context.Context, db *sql.DB, key int64, fn func() error) (err error) {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock($1)", key); err != nil {
+		return err
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), migrationUnlockTimeout)
+		defer cancel()
+		if _, unlockErr := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", key); err == nil && unlockErr != nil {
+			err = unlockErr
+		}
+	}()
+	return fn()
+}
+
 var migrationFilePattern = regexp.MustCompile(`^\d+_.*\.(sql|go)$`)
 
-// hasMigrationFiles checks if dir exists and contains at least one file
-// matching goose's expected migration filename pattern.
-func hasMigrationFiles(dir string) bool {
+// hasMigrationFiles reports whether an existing directory contains a goose
+// migration. Directory access errors are returned; an empty directory is valid.
+func hasMigrationFiles(dir string) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		return false, err
 	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if migrationFilePattern.MatchString(e.Name()) {
-			return true
+	for _, entry := range entries {
+		if !entry.IsDir() && migrationFilePattern.MatchString(entry.Name()) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }

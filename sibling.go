@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// SiblingHandle invokes tools on a sibling agent via airlock's MCP server
+// siblingHandle invokes tools on a sibling agent via airlock's MCP server
 // endpoint. The wire path is identical to what an external MCP client
 // (Claude Desktop, VS Code) would use — JSON-RPC `tools/call` to
 // /api/agent/{siblingID}/mcp — but auth is this agent's own bearer
@@ -26,19 +26,19 @@ import (
 // dispatch, and FilePath results are copied back into this agent's
 // a2a/<sibling-slug>/ namespace. The handle just speaks JSON-RPC; the
 // translation is invisible.
-type SiblingHandle struct {
+type siblingHandle struct {
 	slug    string
 	agentID uuid.UUID
 	agent   *Agent
 }
 
-// CallTool invokes a named tool on the sibling. callerRunID is the
+// callTool invokes a named tool on the sibling. callerRunID is the
 // current run's ID (X-Run-ID header) — required so airlock can resolve
 // the caller's identity for permissions + key __a2a/{runID}/ blobs.
-func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName string, args any) (any, error) {
+func (h *siblingHandle) callTool(ctx context.Context, callerRunID, toolName string, args any) (any, error) {
 	argsJSON, err := encodeMCPArgs(args)
 	if err != nil {
-		return nil, fmt.Errorf("SiblingHandle.CallTool: encode args: %w", err)
+		return nil, fmt.Errorf("sibling tool: encode args: %w", err)
 	}
 
 	envelope := map[string]any{
@@ -52,14 +52,14 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 	}
 	body, err := json.Marshal(envelope)
 	if err != nil {
-		return nil, fmt.Errorf("SiblingHandle.CallTool: marshal envelope: %w", err)
+		return nil, fmt.Errorf("sibling tool: marshal envelope: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		h.agent.client.baseURL+"/api/agent/"+h.agentID.String()+"/mcp",
 		bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("SiblingHandle.CallTool: new request: %w", err)
+		return nil, fmt.Errorf("sibling tool: new request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+h.agent.client.token)
 	req.Header.Set("Content-Type", "application/json")
@@ -67,13 +67,13 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 
 	resp, err := h.agent.client.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("SiblingHandle.CallTool agent_%s.%s: %w", h.slug, toolName, err)
+		return nil, fmt.Errorf("sibling tool agent_%s.%s: %w", h.slug, toolName, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("SiblingHandle.CallTool agent_%s.%s: status %d: %s", h.slug, toolName, resp.StatusCode, string(body))
+		return nil, fmt.Errorf("sibling tool agent_%s.%s: status %d: %s", h.slug, toolName, resp.StatusCode, string(body))
 	}
 
 	// The `prompt` meta-tool answers with an SSE stream (it relays the
@@ -83,7 +83,7 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 	// Collapse both to the one JSON-RPC response envelope.
 	raw, err := readJSONRPCResponse(resp)
 	if err != nil {
-		return nil, fmt.Errorf("SiblingHandle.CallTool agent_%s.%s: %w", h.slug, toolName, err)
+		return nil, fmt.Errorf("sibling tool agent_%s.%s: %w", h.slug, toolName, err)
 	}
 
 	// JSON-RPC response envelope.
@@ -97,7 +97,7 @@ func (h *SiblingHandle) CallTool(ctx context.Context, callerRunID, toolName stri
 		} `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &rpcResp); err != nil {
-		return nil, fmt.Errorf("SiblingHandle.CallTool agent_%s.%s: decode envelope: %w", h.slug, toolName, err)
+		return nil, fmt.Errorf("sibling tool agent_%s.%s: decode envelope: %w", h.slug, toolName, err)
 	}
 	if rpcResp.Error != nil {
 		return nil, fmt.Errorf("agent_%s.%s: %s (code %d)", h.slug, toolName, rpcResp.Error.Message, rpcResp.Error.Code)

@@ -1,6 +1,6 @@
 package scaffold
 
-// Frontend/build toolchain versions a scaffolded agent is pinned to. This is
+// Build toolchain versions a scaffolded agent is pinned to. This is
 // the single source of truth: the scaffold templates render from these consts
 // (go.mod.tmpl's templ require, Dockerfile.tmpl's tailwind/daisyui ARGs), so a
 // materialized agent can never drift from them. The airlock agent-builder
@@ -21,10 +21,9 @@ const (
 	// DaisyUIVersion pins the DaisyUI plugin (daisyui.mjs / daisyui-theme.mjs)
 	// the standalone Tailwind binary loads by path.
 	DaisyUIVersion = "v5.5.23"
-	// SqlcVersion pins the standalone sqlc generator. sqlc is a build tool,
-	// not an agent runtime dependency, so air projects its release binary
-	// instead of adding its large dependency graph to every agent module.
-	SqlcVersion = "1.30.0"
+	// SQLCVersion pins the standalone sqlc generator used when query files are
+	// present. sqlc is not an agent module dependency.
+	SQLCVersion = "1.30.0"
 	// GoVersion is the toolchain version stamped into a scaffolded agent's
 	// go.mod `go` directive and its Dockerfile `FROM golang:` tag. Three-
 	// component form matches what `go mod tidy` rewrites the directive to on

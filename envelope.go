@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // LLM-facing envelope projections shared by the JS bindings (vm.go,
@@ -15,12 +17,12 @@ import (
 // so the two modes can never silently drift on field names, casing, or
 // "inline vs spilled" key precedence.
 
-// httpResponseToMap projects an HTTPResponse onto the JSON-shaped map the
+// httpResponseToMap projects an httpResponse onto the JSON-shaped map the
 // httpRequest tool returns. JSON-typed inline bodies are pre-parsed into
 // `body`; spilled bodies surface savedTo + bodyPreview + note. The map
 // renders identically whether the caller is the run_js binding (via
 // vm.ToValue) or the direct-mode httpRequest tool (via json.Marshal).
-func httpResponseToMap(resp *HTTPResponse) map[string]any {
+func httpResponseToMap(resp *wire.HTTPResponse) map[string]any {
 	out := map[string]any{
 		"status":      resp.Status,
 		"headers":     resp.Headers,

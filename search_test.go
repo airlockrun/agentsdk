@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/sol/websearch"
 )
 
@@ -18,7 +19,7 @@ func TestProxySearchClient(t *testing.T) {
 			return
 		}
 
-		var req SearchProxyRequest
+		var req wire.SearchProxyRequest
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.Query != "test query" {
 			t.Errorf("expected query 'test query', got %q", req.Query)

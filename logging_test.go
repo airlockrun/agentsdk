@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"go.uber.org/zap"
 )
 
@@ -22,7 +23,7 @@ func TestLoggerCapturesIntoRun(t *testing.T) {
 		t.Fatalf("expected 3 captured entries, got %d: %v", len(run.logs), run.logs)
 	}
 	// Level mapping.
-	if run.logs[0].Level != LogLevelInfo || run.logs[1].Level != LogLevelWarn || run.logs[2].Level != LogLevelError {
+	if run.logs[0].Level != wire.LogLevelInfo || run.logs[1].Level != wire.LogLevelWarn || run.logs[2].Level != wire.LogLevelError {
 		t.Fatalf("level mapping wrong: %v", run.logs)
 	}
 	// Structured fields flatten into the captured message.
@@ -51,7 +52,7 @@ func TestLogAppendCap(t *testing.T) {
 	// One ~1 KiB line; enough of them to blow well past the 64 KiB cap.
 	line := strings.Repeat("x", 1024)
 	for i := 0; i < 200; i++ {
-		run.logAppend(LogLevelInfo, line)
+		run.logAppend(wire.LogLevelInfo, line)
 	}
 
 	if run.logsBytes > maxRunLogBytes {

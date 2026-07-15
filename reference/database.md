@@ -11,8 +11,9 @@ If the agent needs its own database tables:
 
 1. Migration files in `db/migrations/` (e.g. `00001_init.sql`)
 2. Query files in `db/queries/` (e.g. `queries.sql`)
-3. Run `go tool air build` — it regenerates Go code in `internal/db/`
-4. Import `internal/db` in your code; commit the SQL inputs, not generated Go
+3. `go tool air build` — conditionally runs pinned sqlc and produces Go code
+   in `internal/db/`
+4. Import `internal/db` in your code
 
 Migrations run automatically at container startup via **goose**. Each `.sql`
 file has Up and Down sections:
@@ -62,27 +63,20 @@ func init() {
 }
 
 func Up00002(ctx context.Context, db *sql.DB) error {
-    // Build-time validation runs migrations against a test DB without S3,
-    // Airlock API, or connection credentials. Guard side effects so SQL still runs.
-    if agentsdk.IsValidatingMigrations() {
+    return agentsdk.MigrationExternalStep(ctx, func(ctx context.Context, agent *agentsdk.Agent) error {
+        files, err := agent.ListDir(ctx, "old/", agentsdk.ListOpts{Recursive: true})
+        if err != nil {
+            return err
+        }
+        for _, file := range files {
+            src := string(file.Path)
+            dst := "media/" + path.Base(src)
+            if err := agent.MoveFile(ctx, src, dst); err != nil {
+                return err
+            }
+        }
         return nil
-    }
-    agent := agentsdk.AgentFromMigrationContext(ctx)
-    files, err := agent.ListDir(ctx, "old/", agentsdk.ListOpts{Recursive: true})
-    if err != nil {
-        return err
-    }
-    for _, f := range files {
-        src := string(f.Path)
-        dst := "media/" + path.Base(src)
-        if err := agent.CopyFile(ctx, src, dst); err != nil {
-            return err
-        }
-        if err := agent.DeleteFile(ctx, src); err != nil {
-            return err
-        }
-    }
-    return nil
+    })
 }
 
 func Down00002(ctx context.Context, db *sql.DB) error { return nil }
@@ -91,11 +85,20 @@ func Down00002(ctx context.Context, db *sql.DB) error { return nil }
 `main.go` already blank-imports `db/migrations`, so `init()` fires
 automatically.
 
-**Guard external side effects.** Build-time validation runs the full migration
-chain (up → down → up) against a test DB clone with no S3, Airlock API, or
-connection credentials. Go migrations that touch external services must check
-`agentsdk.IsValidatingMigrations()` and return early — but still run any
-DB/schema work later migrations depend on.
+**Wrap external side effects.** `MigrationExternalStep` skips its callback while
+build-time validation runs up, down, and up against a test DB without S3,
+Airlock API, or connection credentials. Keep SQL work outside the callback when
+later migrations depend on it.
+
+A goose `NoTx` migration and an external service cannot commit atomically.
+External steps have at-least-once execution semantics: if a process stops after
+an external call succeeds but before goose records the version, the callback
+can run again on startup. The SDK does not automatically retry or checkpoint
+arbitrary external work. Make callbacks repeat-safe.
+`Agent.MoveFile` implements repeat-safe storage moves: it copies then deletes
+when the source exists, treats source-missing/destination-present as complete,
+and returns `ErrNotFound` when both are absent. `ListDir` returns `[]FileInfo`;
+use `string(file.Path)` as the canonical object key.
 
 **Validate after creating migrations** (Airlock builder; three env vars
 `TEST_DB_URL` for goose, `TEST_DB_PSQL` for psql, `TEST_DB_SCHEMA` — skip if
@@ -109,8 +112,16 @@ goose -dir db/migrations postgres "$TEST_DB_URL" up
 psql "$TEST_DB_PSQL" -c "SET search_path TO $TEST_DB_SCHEMA; SELECT table_name FROM information_schema.tables WHERE table_schema = '$TEST_DB_SCHEMA'"
 ```
 
-The agent gets its own Postgres schema. `agent.DB()` returns an `*AgentDB`
-wrapping `*sql.DB` — pass it straight to the generated `New()`.
+The agent gets its own Postgres schema. `AIRLOCK_DB_URL` is required, and
+`agentsdk.New` opens, checks, and migrates one owned pool before returning.
+`agent.DB()` always returns that `*AgentDB`; pass it straight to generated
+sqlc constructors. `Serve` closes the pool during shutdown.
+
+Each startup migration pass has a bounded context and holds a PostgreSQL
+advisory lock keyed by agent ID from its first goose operation through its last.
+This serializes replicas of one agent, including validation and down modes,
+without blocking unrelated agents. Connection retries happen only during the
+pre-migration ping; the SDK never retries a whole migration pass.
 
 **Using sqlc in Go:**
 
@@ -118,6 +129,16 @@ wrapping `*sql.DB` — pass it straight to the generated `New()`.
 db := agent.DB()
 queries := internaldb.New(db) // import "agent/internal/db" as internaldb
 users, err := queries.ListActiveUsers(ctx)
+```
+
+Use `AgentDB.Transaction` for atomic work. Construct sqlc queries from the
+callback value; the SDK commits only when the callback returns nil:
+
+```go
+err := agent.DB().Transaction(ctx, nil, func(tx agentsdk.DBTX) error {
+    qtx := internaldb.New(tx)
+    return qtx.CompleteTask(ctx, taskID)
+})
 ```
 
 **Always use sqlc.** Never write raw `db.QueryRow`/`db.Exec` strings in Go.

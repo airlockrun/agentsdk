@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"time"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // recordAction appends an action to the run's action log.
 func (r *run) recordAction(actionType string, request any, response any, err error, duration time.Duration) {
-	a := Action{
+	a := wire.Action{
 		Type:       actionType,
 		Timestamp:  time.Now(),
 		DurationMs: duration.Milliseconds(),
@@ -25,8 +27,8 @@ func (r *run) recordAction(actionType string, request any, response any, err err
 
 // complete flushes the run's recorded actions to Airlock. Called only by
 // dispatchers (serve.go webhook/cron, prompt.go, route wrapper, background
-// flusher) — never by builder code. errorKind is one of ErrorKindPlatform /
-// ErrorKindAgent / "" — required when status == "error", ignored otherwise.
+// flusher) — never by builder code. errorKind is one of errorKindPlatform /
+// errorKindAgent / "" — required when status == "error", ignored otherwise.
 func (r *run) complete(ctx context.Context, status, errMsg, errorKind, panicTrace string) error {
 	if status == "success" && r.hasActionErrors() {
 		status = "tool_errors"
@@ -49,16 +51,7 @@ func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, errorK
 	// The run is terminal here (every dispatcher path funnels through this
 	// finalizer); drop the local-disk read cache before flushing.
 	r.cleanupScratch()
-	body := struct {
-		RunID      string          `json:"runId"`
-		Status     string          `json:"status"`
-		Error      string          `json:"error,omitempty"`
-		ErrorKind  string          `json:"errorKind,omitempty"`
-		PanicTrace string          `json:"panicTrace,omitempty"`
-		Actions    []Action        `json:"actions"`
-		Logs       []LogEntry      `json:"logs,omitempty"`
-		Checkpoint json.RawMessage `json:"checkpoint,omitempty"`
-	}{
+	body := wire.RunCompleteRequest{
 		RunID:      r.id,
 		Status:     status,
 		Error:      errMsg,
@@ -69,7 +62,7 @@ func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, errorK
 		Checkpoint: checkpoint,
 	}
 	if body.Actions == nil {
-		body.Actions = []Action{} // always send array, not null
+		body.Actions = []wire.Action{} // always send array, not null
 	}
 	// Detach from the caller's ctx: final bookkeeping MUST land even if the
 	// /prompt request ctx was cancelled (e.g. Airlock closed the response body

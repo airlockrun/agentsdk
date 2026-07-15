@@ -12,6 +12,8 @@ FROM sqlc/sqlc:${SQLC_VERSION} AS sqlc
 # replace directives — resolves normally.
 FROM scratch AS goproxy
 
+FROM sqlc/sqlc:{{.SQLCVersion}} AS sqlc
+
 FROM golang:{{.GoVersion}} AS builder
 
 # Pinned versions for the Tailwind toolchain. ARGs (not literal URLs) so
@@ -46,9 +48,9 @@ RUN chmod +x .airlock/toolchain/bin/tailwindcss
 # `go mod tidy` fills go.sum for the templ tool directive's transitive deps
 # that `go mod download` skips as of Go 1.24.
 #
-# Order: sqlc regenerates database access from committed SQL; templ generate
-# emits *_templ.go; tailwindcss scans the materialised .templ source for class
-# names; go build runs last so every generated input exists.
+# Order: sqlc runs when query inputs exist; templ emits *_templ.go; tailwindcss
+# scans the materialised templates; go build runs after all generated inputs
+# exist.
 RUN --mount=type=bind,from=goproxy,target=/goproxy \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
@@ -56,6 +58,8 @@ RUN --mount=type=bind,from=goproxy,target=/goproxy \
     find internal/db -type f -name '*.go' ! -name 'doc.go' -delete && \
     if find db/queries -type f -name '*.sql' -print -quit | grep -q .; then .airlock/toolchain/bin/sqlc generate; fi && \
     go mod tidy && \
+    if [ -d internal/db ]; then find internal/db -type f ! -name doc.go -delete; fi && \
+    if [ -n "$(find db/queries -type f -name '*.sql' -print -quit)" ]; then .airlock/toolchain/bin/sqlc generate; fi && \
     go tool templ generate && \
     .airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify && \
     go build -o /agent .

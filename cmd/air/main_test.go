@@ -16,6 +16,7 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
+	"github.com/airlockrun/agentsdk/scaffold"
 )
 
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -75,26 +76,74 @@ func TestTailwindAsset(t *testing.T) {
 
 func TestSQLCAsset(t *testing.T) {
 	tests := []struct {
-		goos, goarch string
-		want         string
-		wantErr      bool
+		name    string
+		goos    string
+		goarch  string
+		want    string
+		wantErr bool
 	}{
-		{goos: "linux", goarch: "amd64", want: "sqlc_1.30.0_linux_amd64.tar.gz"},
-		{goos: "darwin", goarch: "arm64", want: "sqlc_1.30.0_darwin_arm64.tar.gz"},
-		{goos: "windows", goarch: "amd64", want: "sqlc_1.30.0_windows_amd64.tar.gz"},
-		{goos: "windows", goarch: "arm64", wantErr: true},
-		{goos: "freebsd", goarch: "amd64", wantErr: true},
+		{name: "linux amd64", goos: "linux", goarch: "amd64", want: "sqlc_1.30.0_linux_amd64.tar.gz"},
+		{name: "darwin arm64", goos: "darwin", goarch: "arm64", want: "sqlc_1.30.0_darwin_arm64.tar.gz"},
+		{name: "windows amd64", goos: "windows", goarch: "amd64", want: "sqlc_1.30.0_windows_amd64.zip"},
+		{name: "windows arm64", goos: "windows", goarch: "arm64", wantErr: true},
+		{name: "unsupported os", goos: "freebsd", goarch: "amd64", wantErr: true},
+		{name: "unsupported arch", goos: "linux", goarch: "386", wantErr: true},
 	}
 	for _, tt := range tests {
-		t.Run(tt.goos+"-"+tt.goarch, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			got, err := sqlcAsset(tt.goos, tt.goarch)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("sqlcAsset() error = %v, wantErr %v", err, tt.wantErr)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("sqlcAsset(%q, %q) = %q, want error", tt.goos, tt.goarch, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("sqlcAsset(%q, %q): %v", tt.goos, tt.goarch, err)
 			}
 			if got != tt.want {
-				t.Fatalf("sqlcAsset() = %q, want %q", got, tt.want)
+				t.Fatalf("sqlcAsset(%q, %q) = %q, want %q", tt.goos, tt.goarch, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestExtractSQLCBinary(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "sqlc.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	content := []byte("sqlc binary")
+	if err := tw.WriteHeader(&tar.Header{Name: sqlcBinaryName(), Mode: 0o755, Size: int64(len(content))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dst := filepath.Join(dir, "bin", sqlcBinaryName())
+	if err := extractSQLCBinary(archivePath, dst); err != nil {
+		t.Fatalf("extractSQLCBinary: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(content) {
+		t.Fatalf("extracted sqlc = %q, want %q", got, content)
 	}
 }
 
@@ -204,11 +253,26 @@ func TestCmdUpdateRequiresGoMod(t *testing.T) {
 		if err := os.Remove(filepath.Join(dir, "Dockerfile")); err != nil {
 			t.Fatal(err)
 		}
+		if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("custom-output/\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		if err := cmdUpdate([]string{dir}); err != nil {
 			t.Fatalf("cmdUpdate: %v", err)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
 			t.Fatalf("Dockerfile not updated: %v", err)
+		}
+		body, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), "custom-output/") {
+			t.Fatal("cmdUpdate removed a user-owned ignore entry")
+		}
+		for _, pattern := range scaffold.GeneratedArtifactIgnorePatterns() {
+			if !strings.Contains(string(body), pattern) {
+				t.Errorf("cmdUpdate did not reconcile generated artifact pattern %q", pattern)
+			}
 		}
 	})
 }
@@ -529,11 +593,14 @@ func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 func TestBuildStepsWritesBinaryOutsideRepository(t *testing.T) {
 	output := filepath.Join(t.TempDir(), "agent")
 	steps := buildSteps(".airlock/toolchain/bin/sqlc", ".airlock/toolchain/bin/tailwindcss", output, true)
-	if len(steps) != 5 {
-		t.Fatalf("len(buildSteps) = %d, want 5", len(steps))
+	if len(steps) != 6 {
+		t.Fatalf("len(buildSteps) = %d, want 6", len(steps))
 	}
-	if got, want := strings.Join(steps[0].cmd, " "), ".airlock/toolchain/bin/sqlc generate"; got != want {
-		t.Fatalf("first build command = %q, want %q", got, want)
+	wantNames := []string{"go mod tidy", "sqlc generate", "go tool templ generate", "tailwindcss", "go test -count=1 ./...", "go build"}
+	for i, want := range wantNames {
+		if steps[i].name != want {
+			t.Errorf("steps[%d].name = %q, want %q", i, steps[i].name, want)
+		}
 	}
 	want := []string{"go", "build", "-buildvcs=false", "-o", output, "."}
 	got := steps[len(steps)-1].cmd
@@ -544,46 +611,36 @@ func TestBuildStepsWritesBinaryOutsideRepository(t *testing.T) {
 
 func TestBuildStepsSkipsSQLCWithoutQueries(t *testing.T) {
 	steps := buildSteps("sqlc", "tailwindcss", filepath.Join(t.TempDir(), "agent"), false)
-	if len(steps) != 4 {
-		t.Fatalf("len(buildSteps) = %d, want 4", len(steps))
-	}
 	for _, step := range steps {
 		if step.name == "sqlc generate" {
-			t.Fatal("build steps include sqlc without query SQL")
+			t.Fatal("buildSteps included sqlc generation without query inputs")
 		}
 	}
 }
 
-func TestHasSQLFiles(t *testing.T) {
+func TestHasSQLQueries(t *testing.T) {
 	dir := t.TempDir()
-	if got, err := hasSQLFiles(dir); err != nil || got {
-		t.Fatalf("empty hasSQLFiles = %v, %v", got, err)
+	if hasSQLQueries(dir) {
+		t.Fatal("hasSQLQueries returned true without query files")
 	}
-	mustWrite(t, filepath.Join(dir, "nested", "queries.sql"), "-- name: List :many\nSELECT 1;\n")
-	if got, err := hasSQLFiles(dir); err != nil || !got {
-		t.Fatalf("populated hasSQLFiles = %v, %v", got, err)
+	mustWrite(t, filepath.Join(dir, "db", "queries", "users.sql"), "-- name: ListUsers :many\nSELECT 1;\n")
+	if !hasSQLQueries(dir) {
+		t.Fatal("hasSQLQueries returned false with a query file")
 	}
 }
 
-func TestCleanSQLCOutput(t *testing.T) {
+func TestCleanGeneratedDBFilesPreservesDocGo(t *testing.T) {
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "db.go"), "// Code generated by sqlc. DO NOT EDIT.\npackage db\n")
-	mustWrite(t, filepath.Join(dir, "todos.sql.go"), "// Code generated by sqlc. DO NOT EDIT.\npackage db\n")
-	mustWrite(t, filepath.Join(dir, "doc.go"), "// Package db is the package anchor.\npackage db\n")
-	mustWrite(t, filepath.Join(dir, "helper.go"), "package db\n")
-
-	if err := cleanSQLCOutput(dir); err != nil {
-		t.Fatalf("cleanSQLCOutput: %v", err)
+	mustWrite(t, filepath.Join(dir, "internal", "db", "doc.go"), "package db\n")
+	mustWrite(t, filepath.Join(dir, "internal", "db", "models.go"), "package db\n")
+	if err := cleanGeneratedDBFiles(dir); err != nil {
+		t.Fatalf("cleanGeneratedDBFiles: %v", err)
 	}
-	for _, name := range []string{"db.go", "todos.sql.go"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
-			t.Errorf("generated file %s still exists: %v", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(dir, "internal", "db", "doc.go")); err != nil {
+		t.Fatalf("doc.go was not preserved: %v", err)
 	}
-	for _, name := range []string{"doc.go", "helper.go"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
-			t.Errorf("source file %s was removed: %v", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(dir, "internal", "db", "models.go")); !os.IsNotExist(err) {
+		t.Fatalf("models.go was not removed: %v", err)
 	}
 }
 

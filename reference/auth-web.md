@@ -58,8 +58,8 @@ func runCLI(ctx context.Context, args ...string) ([]byte, error) {
 agent.RegisterRoute(&agentsdk.Route{
     Method: "GET", Path: "/admin/login", Access: agentsdk.AccessAdmin,
     Description: "Interactive login page for the messaging account",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        templ.Handler(views.PhoneForm()).ServeHTTP(w, r)
+    Handler: func(w http.ResponseWriter, r *http.Request) error {
+		return views.PhoneForm().Render(r.Context(), w)
     },
 })
 
@@ -67,13 +67,13 @@ agent.RegisterRoute(&agentsdk.Route{
 agent.RegisterRoute(&agentsdk.Route{
     Method: "POST", Path: "/admin/login/start", Access: agentsdk.AccessAdmin,
     Description: "Begin login: trigger the one-time code",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+    Handler: func(w http.ResponseWriter, r *http.Request) error {
+		ctx := r.Context()
         phone := r.FormValue("phone")
         if _, err := runCLI(ctx, "login", "start", "--phone", phone); err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
+			return err
         }
-        views.CodeForm(phone).Render(ctx, w) // htmx swaps in the code form
+		return views.CodeForm(phone).Render(ctx, w) // htmx swaps in the code form
     },
 })
 
@@ -81,25 +81,23 @@ agent.RegisterRoute(&agentsdk.Route{
 agent.RegisterRoute(&agentsdk.Route{
     Method: "POST", Path: "/admin/login/verify", Access: agentsdk.AccessAdmin,
     Description: "Finish login and store the sealed session",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+    Handler: func(w http.ResponseWriter, r *http.Request) error {
+		ctx := r.Context()
         out, err := runCLI(ctx, "login", "verify",
             "--phone", r.FormValue("phone"), "--code", r.FormValue("code"))
         if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
+			return err
         }
         session := strings.TrimSpace(string(out)) // the long-lived session string
 
         sealed, err := agent.Seal(ctx, session)
         if err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
+			return err
         }
         if _, err := agent.WriteFile(ctx, sessionPath, strings.NewReader(sealed), "text/plain"); err != nil {
-            http.Error(w, err.Error(), http.StatusInternalServerError)
-            return
+			return err
         }
-        views.LoginDone().Render(ctx, w)
+		return views.LoginDone().Render(ctx, w)
     },
 })
 

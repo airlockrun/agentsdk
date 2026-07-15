@@ -48,12 +48,14 @@ func TestRegisterTool(t *testing.T) {
 		}
 	})
 
-	t.Run("access defaults to AccessUser", func(t *testing.T) {
+	t.Run("access is required", func(t *testing.T) {
 		a, _ := testAgent(t)
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic for empty Access")
+			}
+		}()
 		a.RegisterTool(addTool("noop", "No op."), "")
-		if a.tools["noop"].access != AccessUser {
-			t.Fatalf("default access = %q, want AccessUser", a.tools["noop"].access)
-		}
 	})
 
 	t.Run("panics on duplicate name", func(t *testing.T) {

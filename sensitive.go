@@ -9,7 +9,7 @@ import (
 )
 
 // AddSensitive registers values that should be redacted from LLM
-// messages. Bypasses the IsLikelySecret filter — use only for values
+// messages. Bypasses the isLikelySecret filter — use only for values
 // the framework knows are sensitive (e.g. the agent token); otherwise
 // prefer maybeAddSensitive.
 func (a *Agent) AddSensitive(values ...string) {
@@ -22,12 +22,12 @@ func (a *Agent) AddSensitive(values ...string) {
 	}
 }
 
-// maybeAddSensitive applies the IsLikelySecret heuristic before
+// maybeAddSensitive applies the isLikelySecret heuristic before
 // registering a value. Used by EnvVarHandle.Get for Secret=true vars to
 // guard against an operator pasting a placeholder ("password",
 // "changeme") and the redactor then nuking that word from every chat.
 func (a *Agent) maybeAddSensitive(v string) {
-	if !IsLikelySecret(v) {
+	if !isLikelySecret(v) {
 		return
 	}
 	a.sensitiveM.Lock()
@@ -35,7 +35,7 @@ func (a *Agent) maybeAddSensitive(v string) {
 	a.sensitiveM.Unlock()
 }
 
-// IsLikelySecret reports whether v looks like a real credential rather
+// isLikelySecret reports whether v looks like a real credential rather
 // than a low-entropy placeholder or common phrase. Used to gate
 // auto-redaction so values like "password", "true", or "hello world"
 // don't end up in the redact set and nuke ordinary words from LLM input.
@@ -52,7 +52,7 @@ func (a *Agent) maybeAddSensitive(v string) {
 // This is a heuristic, not a security boundary. Operators who paste a
 // real key are auto-protected; operators who paste a placeholder don't
 // poison their own logs.
-func IsLikelySecret(v string) bool {
+func isLikelySecret(v string) bool {
 	v = strings.TrimSpace(v)
 	if len(v) < 16 {
 		return false

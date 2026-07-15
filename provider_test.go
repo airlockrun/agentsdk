@@ -55,7 +55,7 @@ func TestAgentLLM(t *testing.T) {
 
 func TestAgentLLMTextCapability(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText})
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Summaries"})
 	ctx := withBoundRun(a)
 
 	m := a.LLM(ctx, "summarize")
@@ -105,7 +105,7 @@ func TestAgentLLMPanicsOnEmptySlug(t *testing.T) {
 
 func TestAgentLLMPanicsOnCapabilityMismatch(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage})
+	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage, Description: "Posters"})
 	ctx := withBoundRun(a)
 	defer func() {
 		if recover() == nil {
@@ -164,7 +164,7 @@ func TestAgentWebSearchPanicsOnUnregisteredSlug(t *testing.T) {
 
 func TestAgentWebSearchPanicsOnCapabilityMismatch(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText})
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Summaries"})
 	ctx := withBoundRun(a)
 	defer func() {
 		if recover() == nil {
@@ -196,7 +196,7 @@ func TestAgentImageModel(t *testing.T) {
 
 func TestAgentEmbeddingModel(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterModel(&ModelSlot{Slug: "index", Capability: CapEmbedding})
+	a.RegisterModel(&ModelSlot{Slug: "index", Capability: CapEmbedding, Description: "Search index embeddings"})
 	ctx := withBoundRun(a)
 
 	m := a.EmbeddingModel(ctx, "index")
@@ -233,7 +233,7 @@ func TestAgentSpeechModel(t *testing.T) {
 
 func TestAgentTranscriptionModel(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterModel(&ModelSlot{Slug: "stt", Capability: CapTranscription})
+	a.RegisterModel(&ModelSlot{Slug: "stt", Capability: CapTranscription, Description: "Speech transcription"})
 	ctx := withBoundRun(a)
 
 	m := a.TranscriptionModel(ctx, "stt")

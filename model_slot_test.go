@@ -4,13 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestRegisterModel_Accumulates(t *testing.T) {
 	a, _ := testAgent(t)
 
 	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Short summaries"})
-	a.RegisterModel(&ModelSlot{Slug: "thumbnail", Capability: CapImage})
+	a.RegisterModel(&ModelSlot{Slug: "thumbnail", Capability: CapImage, Description: "Thumbnails"})
 
 	if got := len(a.modelSlots); got != 2 {
 		t.Fatalf("len(modelSlots) = %d, want 2", got)
@@ -40,7 +42,7 @@ func TestRegisterModel_SyncPayload(t *testing.T) {
 	a, mock := testAgent(t)
 
 	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Short summaries"})
-	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage})
+	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage, Description: "Posters"})
 	a.RegisterModel(&ModelSlot{Slug: "research", Capability: CapSearch, Description: "Web search"})
 
 	a.syncWithAirlock(context.Background())
@@ -50,7 +52,7 @@ func TestRegisterModel_SyncPayload(t *testing.T) {
 		t.Fatalf("sync requests = %d, want 1", len(reqs))
 	}
 
-	var body SyncRequest
+	var body wire.SyncRequest
 	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
 		t.Fatalf("decode sync body: %v", err)
 	}

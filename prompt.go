@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	goai "github.com/airlockrun/goai"
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/provider/proxy"
@@ -41,7 +42,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		defer cancel()
 
 		// Parse request body.
-		var input PromptInput
+		var input wire.PromptInput
 		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -69,7 +70,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		// Stash the per-turn access level for vm.go's bind-time gating.
 		// Empty defaults to AccessUser (safest broad default for a /prompt).
 		if input.CallerAccess != "" {
-			run.callerAccess = input.CallerAccess
+			run.callerAccess = Access(input.CallerAccess)
 		} else {
 			run.callerAccess = AccessUser
 		}
@@ -104,7 +105,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 				errMsg := fmt.Sprintf("%v", rec)
 				agentLogger().Error("prompt panic", zap.String("error", errMsg), zap.String("stack", trace))
 				ew.WriteError(fmt.Errorf("%s", errMsg))
-				run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
+				run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, trace)
 				return
 			}
 		}()
@@ -175,7 +176,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 
 		// Use SessionStore when conversation ID is available; fall back to InitialMessages.
 		if input.ConversationID != "" {
-			opts.SessionStore = NewHTTPSessionStore(agent.client, input.ConversationID, runID, input.Source)
+			opts.SessionStore = newHTTPSessionStore(agent.client, input.ConversationID, runID, input.Source)
 		} else {
 			opts.InitialMessages = input.Messages
 		}
@@ -198,7 +199,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			cr, err := runner.Compact(ctx)
 			if err != nil {
 				ew.WriteError(err)
-				run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
+				run.complete(ctx, "error", err.Error(), wire.ErrorKindPlatform, "")
 				return
 			}
 			ew.writeLine(ndjsonLine{
@@ -321,7 +322,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 func handleRunResult(ctx context.Context, run *run, ew *EventWriter, result *sol.RunResult, err error) {
 	if err != nil {
 		ew.WriteError(err)
-		run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
+		run.complete(ctx, "error", err.Error(), wire.ErrorKindPlatform, "")
 		return
 	}
 
@@ -351,7 +352,7 @@ func handleRunResult(ctx context.Context, run *run, ew *EventWriter, result *sol
 		if result.Error != nil {
 			errMsg = result.Error.Error()
 		}
-		run.complete(ctx, "error", errMsg, ErrorKindPlatform, "")
+		run.complete(ctx, "error", errMsg, wire.ErrorKindPlatform, "")
 	default:
 		// Emit finish event so Airlock publishes run.complete to WS subscribers.
 		// Shape matches ai-sdk v3 usage (inputTokens.total / outputTokens.total)
@@ -474,7 +475,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 			failed = true
 			break
 		}
-		h := &SiblingHandle{slug: ch.Slug, agentID: aid, agent: agent}
+		h := &siblingHandle{slug: ch.Slug, agentID: aid, agent: agent}
 		decision := "deny"
 		if approved {
 			decision = "approve"
@@ -483,7 +484,7 @@ func resolveDelegatedSuspension(ctx context.Context, agent *Agent, callerRunID s
 		if !approved && denyMsg != "" {
 			args["message"] = denyMsg
 		}
-		res, cerr := h.CallTool(ctx, callerRunID, "prompt", args)
+		res, cerr := h.callTool(ctx, callerRunID, "prompt", args)
 		switch {
 		case cerr != nil:
 			output = "Error: " + cerr.Error()

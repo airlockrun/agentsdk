@@ -66,6 +66,7 @@ func TestSystemPrompt_TopicIncludesLLMHint(t *testing.T) {
 		Slug:        "build_done",
 		Description: "fires when a CI build completes",
 		LLMHint:     "subscribe only when the user explicitly opts in",
+		Access:      AccessUser,
 	})
 
 	prompt := a.renderSystemPrompt(AccessUser, nil, promptEnv{Date: "2026-06-09"}, false)

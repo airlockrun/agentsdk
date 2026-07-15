@@ -25,6 +25,7 @@ type lazyRun struct {
 	userID          string
 	userEmail       string
 	userDisplayName string
+	callerAccess    Access
 }
 
 func (l *lazyRun) get(ctx context.Context) *run {
@@ -40,6 +41,10 @@ func (l *lazyRun) get(ctx context.Context) *run {
 		l.run.userID = l.userID
 		l.run.userEmail = l.userEmail
 		l.run.userDisplayName = l.userDisplayName
+		l.run.callerAccess = l.callerAccess
+		if l.run.callerAccess == "" {
+			l.run.callerAccess = AccessPublic
+		}
 	}
 	return l.run
 }

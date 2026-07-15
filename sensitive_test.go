@@ -63,9 +63,9 @@ func TestIsLikelySecret(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		got := IsLikelySecret(c.v)
+		got := isLikelySecret(c.v)
 		if got != c.want {
-			t.Errorf("IsLikelySecret(%q) = %v, want %v", c.v, got, c.want)
+			t.Errorf("isLikelySecret(%q) = %v, want %v", c.v, got, c.want)
 		}
 	}
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"go.uber.org/zap"
 )
 
@@ -13,45 +15,46 @@ import (
 // Called by Serve() at startup (via syncOrPanic) and by the /refresh handler.
 // Returns the error so /refresh can propagate it; startup panics via the wrapper.
 func (a *Agent) syncWithAirlock(ctx context.Context) error {
+	a.freeze()
 	// Declare each connection as a need in the sync batch. The agent declares
 	// the shape; operators create + bind the backing resource.
-	connections := make([]ConnectionDef, 0, len(a.auths))
+	connections := make([]wire.ConnectionDef, 0, len(a.auths))
 	for slug, c := range a.auths {
-		connections = append(connections, ConnectionDef{
+		connections = append(connections, wire.ConnectionDef{
 			Slug:              slug,
 			Name:              c.Name,
 			Description:       c.Description,
 			BaseURL:           c.BaseURL,
-			AuthMode:          c.AuthMode,
+			AuthMode:          wire.ConnectionAuth(c.AuthMode),
 			AuthURL:           c.AuthURL,
 			TokenURL:          c.TokenURL,
 			Scopes:            c.Scopes,
 			AuthParams:        c.AuthParams,
 			Headers:           c.Headers,
-			AuthInjection:     c.AuthInjection,
+			AuthInjection:     toWireAuthInjection(c.AuthInjection),
 			SetupInstructions: c.SetupInstructions,
 			LLMHint:           c.LLMHint,
-			Access:            c.Access,
+			Access:            toWireAccess(c.Access),
 		})
 	}
 
 	// Declare each exec endpoint as a need in the sync batch. Operators set
 	// transport, host, user, and credentials on the backing resource via the
 	// admin UI; we only declare the slug+description+access here.
-	execEndpoints := make([]ExecEndpointDef, 0, len(a.execEndpoints))
+	execEndpoints := make([]wire.ExecEndpointDef, 0, len(a.execEndpoints))
 	for slug, e := range a.execEndpoints {
-		execEndpoints = append(execEndpoints, ExecEndpointDef{
+		execEndpoints = append(execEndpoints, wire.ExecEndpointDef{
 			Slug:        slug,
 			Description: e.Description,
 			LLMHint:     e.LLMHint,
-			Access:      e.Access,
+			Access:      toWireAccess(e.Access),
 		})
 	}
 
 	// Register each env var slot. Operators set values separately via the
 	// admin UI; we only declare the slot here.
 	for slug, e := range a.envVars {
-		def := EnvVarDef{
+		def := wire.EnvVarDef{
 			Description: e.Description,
 			Secret:      e.Secret,
 			Default:     e.Default,
@@ -63,13 +66,13 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	}
 
 	// Build sync payload — convert builder structs to wire formats.
-	webhooks := make([]WebhookDef, 0, len(a.webhooks))
+	webhooks := make([]wire.WebhookDef, 0, len(a.webhooks))
 	for _, w := range a.webhooks {
 		timeout := w.Timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
-		webhooks = append(webhooks, WebhookDef{
+		webhooks = append(webhooks, wire.WebhookDef{
 			Path:        w.Path,
 			Verify:      w.Verify,
 			Header:      w.Header,
@@ -77,13 +80,13 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: w.Description,
 		})
 	}
-	scheduleHandlers := make([]ScheduleHandlerDef, 0, len(a.scheduleHandlers))
+	scheduleHandlers := make([]wire.ScheduleHandlerDef, 0, len(a.scheduleHandlers))
 	for _, h := range a.scheduleHandlers {
 		timeout := h.timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
-		scheduleHandlers = append(scheduleHandlers, ScheduleHandlerDef{
+		scheduleHandlers = append(scheduleHandlers, wire.ScheduleHandlerDef{
 			Slug:        h.slug,
 			Kind:        h.kind,
 			Recurrence:  h.recurrence,
@@ -91,91 +94,103 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: h.description,
 		})
 	}
-	routes := make([]RouteDef, 0, len(a.routes))
+	routeCount := len(a.routes)
+	if len(a.staticAssets) > 0 {
+		routeCount++
+	}
+	routes := make([]wire.RouteDef, 0, routeCount)
 	for _, r := range a.routes {
-		routes = append(routes, RouteDef{
+		routes = append(routes, wire.RouteDef{
 			Path:        r.Path,
 			Method:      r.Method,
-			Access:      r.Access,
+			Access:      toWireAccess(r.Access),
 			Description: r.Description,
 		})
 	}
+	if len(a.staticAssets) > 0 {
+		routes = append(routes, wire.RouteDef{
+			Path:        "/static/{name}",
+			Method:      http.MethodGet,
+			Access:      wire.AccessPublic,
+			Description: "Immutable static assets registered by the agent",
+		})
+	}
 
-	topics := make([]TopicDef, 0, len(a.topics))
+	topics := make([]wire.TopicDef, 0, len(a.topics))
 	for _, t := range a.topics {
-		topics = append(topics, TopicDef{
+		topics = append(topics, wire.TopicDef{
 			Slug:        t.Slug,
 			Description: t.Description,
 			LLMHint:     t.LLMHint,
-			Access:      t.Access,
+			Access:      toWireAccess(t.Access),
 			PerUser:     t.PerUser,
 		})
 	}
 
-	tools := make([]ToolDef, 0, len(a.tools))
+	tools := make([]wire.ToolDef, 0, len(a.tools))
 	for _, t := range a.tools {
 		examples := make([]json.RawMessage, len(t.InputExamples))
 		for i, ex := range t.InputExamples {
 			examples[i] = ex.Input
 		}
-		tools = append(tools, ToolDef{
+		tools = append(tools, wire.ToolDef{
 			Name:          t.Name,
 			Description:   t.Description,
 			LLMHint:       t.llmHint,
-			Access:        t.access,
+			Access:        toWireAccess(t.access),
 			InputSchema:   t.InputSchema,
 			OutputSchema:  t.OutputSchema,
 			InputExamples: examples,
 		})
 	}
 
-	mcpServers := make([]MCPDef, 0, len(a.mcps))
+	mcpServers := make([]wire.MCPDef, 0, len(a.mcps))
 	for _, m := range a.mcps {
-		mcpServers = append(mcpServers, MCPDef{
+		mcpServers = append(mcpServers, wire.MCPDef{
 			Slug:          m.Slug,
 			Name:          m.Name,
 			URL:           m.URL,
-			AuthMode:      m.AuthMode,
+			AuthMode:      wire.MCPAuth(m.AuthMode),
 			AuthURL:       m.AuthURL,
 			TokenURL:      m.TokenURL,
 			Scopes:        m.Scopes,
-			AuthInjection: m.AuthInjection,
-			Access:        m.Access,
+			AuthInjection: toWireAuthInjection(m.AuthInjection),
+			Access:        toWireAccess(m.Access),
 		})
 	}
 
-	instructions := make([]InstructionDef, 0, len(a.instructions))
+	instructions := make([]wire.InstructionDef, 0, len(a.instructions))
 	for _, ep := range a.instructions {
-		instructions = append(instructions, InstructionDef{
+		instructions = append(instructions, wire.InstructionDef{
 			Text:   ep.Text,
-			Access: ep.Access,
+			Access: toWireAccesses(ep.Access),
 		})
 	}
 
-	directories := make([]DirectoryDef, 0, len(a.directories))
+	directories := make([]wire.DirectoryDef, 0, len(a.directories))
 	for _, d := range a.directories {
-		directories = append(directories, DirectoryDef{
+		directories = append(directories, wire.DirectoryDef{
 			Path:           d.Path,
-			Read:           d.Read,
-			Write:          d.Write,
-			List:           d.List,
+			Read:           toWireAccess(d.Read),
+			Write:          toWireAccess(d.Write),
+			List:           toWireAccess(d.List),
 			Description:    d.Description,
 			LLMHint:        d.LLMHint,
 			RetentionHours: d.RetentionHours,
-			Scope:          d.Scope,
+			Scope:          wire.DirectoryScope(d.Scope),
 		})
 	}
 
-	modelSlots := make([]ModelSlotDef, 0, len(a.modelSlots))
+	modelSlots := make([]wire.ModelSlotDef, 0, len(a.modelSlots))
 	for _, s := range a.modelSlots {
-		modelSlots = append(modelSlots, ModelSlotDef{
+		modelSlots = append(modelSlots, wire.ModelSlotDef{
 			Slug:        s.Slug,
 			Capability:  string(s.Capability),
 			Description: s.Description,
 		})
 	}
 
-	syncBody := SyncRequest{
+	syncBody := wire.SyncRequest{
 		Version:          Version,
 		Description:      a.description,
 		Emoji:            a.emoji,
@@ -192,7 +207,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		ModelSlots:       modelSlots,
 	}
 
-	var syncResp SyncResponse
+	var syncResp wire.SyncResponse
 	if err := a.client.doJSON(ctx, "PUT", "/api/agent/sync", syncBody, &syncResp); err != nil {
 		// 409 Conflict from Airlock means agentsdk-version incompatibility —
 		// surface a pointer to the remediation so the operator sees it in

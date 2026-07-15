@@ -104,7 +104,7 @@ func TestResolveDisplayPart(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := tt.input
-			ResolveDisplayPart(&p)
+			resolveDisplayPart(&p)
 			if p.Type != tt.wantType {
 				t.Errorf("Type = %q, want %q", p.Type, tt.wantType)
 			}

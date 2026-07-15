@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/tsrender"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/websearch"
@@ -371,9 +372,6 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	if accessSatisfies(run.callerAccess, AccessAdmin) {
 		vm.Set("queryDB", func(call goja.FunctionCall) goja.Value {
 			db := agent.DB()
-			if db == nil {
-				panic(vm.NewGoError(fmt.Errorf("agent database not configured (AIRLOCK_DB_URL not set)")))
-			}
 			query := call.Argument(0).String()
 			params := make([]any, len(call.Arguments)-1)
 			for i := 1; i < len(call.Arguments); i++ {
@@ -881,7 +879,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 		vm.Set("topic_"+slug, topicObj)
 	}
 
-	makeLogFn := func(level LogLevel) func(goja.FunctionCall) goja.Value {
+	makeLogFn := func(level wire.LogLevel) func(goja.FunctionCall) goja.Value {
 		return func(call goja.FunctionCall) goja.Value {
 			// Match browser console.log: format every argument, join with
 			// spaces. Single-arg calls (the common case) behave the same
@@ -894,21 +892,21 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			msg := strings.Join(parts, " ")
 			run.logAppend(level, msg)
 			run.mu.Lock()
-			run.pendingLogs = append(run.pendingLogs, LogEntry{Level: level, Message: msg})
+			run.pendingLogs = append(run.pendingLogs, wire.LogEntry{Level: level, Message: msg})
 			run.mu.Unlock()
 			return goja.Undefined()
 		}
 	}
-	logFn := makeLogFn(LogLevelInfo)
+	logFn := makeLogFn(wire.LogLevelInfo)
 	vm.Set("log", logFn)
 
 	// Alias console.log/warn/error so LLMs that generate console.log() just
-	// work. console.warn/error map to the matching LogLevel so severity is
+	// work. console.warn/error map to the matching logLevel so severity is
 	// preserved in the run timeline.
 	console := vm.NewObject()
 	console.Set("log", logFn)
-	console.Set("warn", makeLogFn(LogLevelWarn))
-	console.Set("error", makeLogFn(LogLevelError))
+	console.Set("warn", makeLogFn(wire.LogLevelWarn))
+	console.Set("error", makeLogFn(wire.LogLevelError))
 	vm.Set("console", console)
 
 	// Authenticated-caller-only bindings: HTTP egress, web search, AI
@@ -928,7 +926,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 				panic(vm.NewGoError(fmt.Errorf("httpRequest: url is required")))
 			}
 
-			req := HTTPRequest{URL: url, Method: "GET"}
+			req := wire.HTTPRequest{URL: url, Method: "GET"}
 
 			// Parse optional opts object.
 			if len(call.Arguments) > 1 && !goja.IsUndefined(call.Arguments[1]) && !goja.IsNull(call.Arguments[1]) {
@@ -1270,7 +1268,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 	}
 
 	// Register mcp_{slug} objects for each registered MCP server.
-	// Schemas come from Airlock via SyncResponse and live in agent.mcpSchemas;
+	// Schemas come from Airlock via syncResponse and live in agent.mcpSchemas;
 	// we snapshot once per VM build so /refresh writes during a run can't
 	// mutate the map mid-iteration. The LLM sees one typed method per
 	// discovered tool — schemas already appear as declarations in the
@@ -1323,7 +1321,7 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 			if _, ok := visible[s.ID]; !ok {
 				continue
 			}
-			handle := &SiblingHandle{slug: s.Slug, agentID: s.ID, agent: run.agent}
+			handle := &siblingHandle{slug: s.Slug, agentID: s.ID, agent: run.agent}
 			obj := vm.NewObject()
 			siblingSlug := s.Slug
 			names := make([]string, len(s.Tools))
@@ -1351,14 +1349,14 @@ func newVM(run *run, agent *Agent) *goja.Runtime {
 }
 
 // invokeSiblingTool runs an A2A tool call from a JS binding and
-// translates the result back to a JS value. Wraps SiblingHandle.CallTool
+// translates the result back to a JS value. Wraps siblingHandle.callTool
 // with goja error / panic semantics so JS code can try/catch normally.
-func invokeSiblingTool(vm *goja.Runtime, ctx context.Context, handle *SiblingHandle, callerRunID, siblingSlug, toolName string, argsArg goja.Value) goja.Value {
+func invokeSiblingTool(vm *goja.Runtime, ctx context.Context, handle *siblingHandle, callerRunID, siblingSlug, toolName string, argsArg goja.Value) goja.Value {
 	var args any
 	if argsArg != nil && !goja.IsUndefined(argsArg) && !goja.IsNull(argsArg) {
 		args = argsArg.Export()
 	}
-	result, err := handle.CallTool(ctx, callerRunID, toolName, args)
+	result, err := handle.callTool(ctx, callerRunID, toolName, args)
 	if err != nil {
 		panic(vm.NewGoError(fmt.Errorf("agent_%s.%s: %w", siblingSlug, toolName, err)))
 	}

@@ -25,6 +25,9 @@ func TestMaterialize(t *testing.T) {
 	expectedFiles := []string{
 		"main.go",
 		"main_test.go",
+		"deps/deps.go",
+		"handlers/home_test.go",
+		"NOTES.md",
 		"go.mod",
 		"sqlc.yaml",
 		"internal/db/doc.go",
@@ -70,6 +73,41 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(string(mainGo), "newAgent().Serve()") {
 		t.Error("main.go missing newAgent().Serve()")
 	}
+	if !strings.Contains(string(mainGo), "appDeps := deps.New()") || !strings.Contains(string(mainGo), "pages := handlers.New(appDeps)") {
+		t.Error("main.go missing typed dependency composition")
+	}
+	if !strings.Contains(string(mainGo), "Handler:     pages.Home") {
+		t.Error("main.go missing bound home handler registration")
+	}
+	if !strings.Contains(string(mainGo), "agent.RegisterStaticAsset(&agentsdk.StaticAsset{") {
+		t.Error("main.go missing SDK static asset registration")
+	}
+
+	depsGo, err := os.ReadFile(filepath.Join(dir, "deps", "deps.go"))
+	if err != nil {
+		t.Fatalf("read deps/deps.go: %v", err)
+	}
+	if !strings.Contains(string(depsGo), "type Deps struct") || !strings.Contains(string(depsGo), "func New() *Deps") {
+		t.Error("deps/deps.go missing typed dependency graph constructor")
+	}
+
+	homeGo, err := os.ReadFile(filepath.Join(dir, "handlers", "home.go"))
+	if err != nil {
+		t.Fatalf("read handlers/home.go: %v", err)
+	}
+	if !strings.Contains(string(homeGo), "func New(d *deps.Deps) *Handler") || !strings.Contains(string(homeGo), "func (h *Handler) Home") {
+		t.Error("handlers/home.go missing dependency-injected receiver handler")
+	}
+
+	notes, err := os.ReadFile(filepath.Join(dir, "NOTES.md"))
+	if err != nil {
+		t.Fatalf("read NOTES.md: %v", err)
+	}
+	for _, heading := range []string{"## Product", "## Architecture", "## Integrations", "## UI"} {
+		if !strings.Contains(string(notes), heading) {
+			t.Errorf("NOTES.md missing %q heading", heading)
+		}
+	}
 
 	// Committed go.mod has no /libs/... replace block — those live only
 	// in the build-time go.work that airlock injects into codegen and
@@ -106,7 +144,7 @@ func TestMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	for _, want := range []string{"go.work", "go.work.sum", "*_templ.go", "views/static/app.css", "internal/db/db.go", "internal/db/models.go", "internal/db/*.sql.go", ".airlock/local/", ".airlock/toolchain/"} {
+	for _, want := range append([]string{"go.work", "go.work.sum", ".airlock/local/", ".airlock/toolchain/"}, GeneratedArtifactIgnorePatterns()...) {
 		if !strings.Contains(string(gitignore), want) {
 			t.Errorf(".gitignore missing %q entry", want)
 		}
@@ -137,6 +175,9 @@ func TestMaterialize(t *testing.T) {
 	}
 	if !strings.Contains(dockerfileStr, "GOPROXY=") {
 		t.Error("Dockerfile missing GOPROXY in the build RUN")
+	}
+	if !strings.Contains(dockerfileStr, "FROM sqlc/sqlc:1.30.0 AS sqlc") || !strings.Contains(dockerfileStr, ".airlock/toolchain/bin/sqlc generate") {
+		t.Error("Dockerfile missing pinned conditional sqlc generation")
 	}
 	if strings.Contains(dockerfileStr, "--from=libs") {
 		t.Error("Dockerfile must not reference the old libs-owned/libs-ext contexts")

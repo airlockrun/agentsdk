@@ -24,8 +24,7 @@ const htmxAssetName = "htmx-" + HTMXVersion + ".min.js"
 // agent.
 //
 // Styling is NOT bundled — each agent compiles its own Tailwind output
-// at build time and serves it from /static/app.{hash}.css (the
-// scaffold's `views/assets.go` + `main.go` register that route). Sharing
+// at build time and registers it at /static/app.{hash}.css. Sharing
 // one stylesheet across agents would lock every agent into the same
 // theme; per-agent compilation lets each one brand itself.
 
@@ -44,10 +43,8 @@ const HTMXVersion = "2.0.10"
 //
 //	<script src={ agentsdk.Assets.HTMX }></script>
 //
-// /__air/assets/* is framework-reserved. For your own static files
-// (icons, images, page-specific CSS, fonts), embed them and serve via
-// a RegisterRoute under a different prefix like /static/{name} (which
-// is how the scaffold serves the compiled Tailwind stylesheet).
+// /__air/assets/* is framework-reserved. Register your own embedded files
+// (icons, images, page-specific CSS, fonts) with RegisterStaticAsset.
 var Assets = struct {
 	HTMX string // versioned path to the bundled htmx (e.g. /__air/assets/htmx-2.0.10.min.js)
 }{

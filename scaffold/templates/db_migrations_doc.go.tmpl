@@ -20,7 +20,6 @@
 //		"context"
 //		"database/sql"
 //		"path"
-//		"strings"
 //
 //		"github.com/airlockrun/agentsdk"
 //		"github.com/pressly/goose/v3"
@@ -30,52 +29,27 @@
 //		goose.AddMigrationNoTxContext(Up00003, Down00003)
 //	}
 //
-//	// Up00003 renames all files under "old/" to "media/" in agent storage.
-//	// Uses NoTx variant because S3 operations can't participate in a DB tx.
-//	// Retrieve the agent from the migration context to call storage methods.
+//	// Up00003 moves all files under "old/" to "media/" in agent storage.
+//	// External steps have at-least-once execution semantics: goose may run them
+//	// again after an interrupted NoTx migration, so each operation is repeat-safe.
 //	func Up00003(ctx context.Context, db *sql.DB) error {
-//		// Skip external side effects during build-time validation —
-//		// S3 and Airlock API aren't available. SQL/DB work SHOULD still
-//		// run so subsequent migrations can depend on it.
-//		if agentsdk.IsValidatingMigrations() {
+//		return agentsdk.MigrationExternalStep(ctx, func(ctx context.Context, agent *agentsdk.Agent) error {
+//			files, err := agent.ListDir(ctx, "old/", agentsdk.ListOpts{Recursive: true})
+//			if err != nil {
+//				return err
+//			}
+//			for _, file := range files {
+//				src := string(file.Path)
+//				dst := "media/" + path.Base(src)
+//				if err := agent.MoveFile(ctx, src, dst); err != nil {
+//					return err
+//				}
+//			}
 //			return nil
-//		}
-//
-//		agent := agentsdk.AgentFromMigrationContext(ctx)
-//		files, err := agent.ListFiles(ctx, "old/")
-//		if err != nil {
-//			return err
-//		}
-//		for _, f := range files {
-//			dst := "media/" + path.Base(f.Key)
-//			if err := agent.CopyFile(ctx, f.Key, dst); err != nil {
-//				return err
-//			}
-//			if err := agent.DeleteFile(ctx, f.Key); err != nil {
-//				return err
-//			}
-//		}
-//		return nil
+//		})
 //	}
 //
 //	func Down00003(ctx context.Context, db *sql.DB) error {
-//		if agentsdk.IsValidatingMigrations() {
-//			return nil
-//		}
-//		agent := agentsdk.AgentFromMigrationContext(ctx)
-//		files, err := agent.ListFiles(ctx, "media/")
-//		if err != nil {
-//			return err
-//		}
-//		for _, f := range files {
-//			src := "old/" + strings.TrimPrefix(f.Key, "media/")
-//			if err := agent.CopyFile(ctx, f.Key, src); err != nil {
-//				return err
-//			}
-//			if err := agent.DeleteFile(ctx, f.Key); err != nil {
-//				return err
-//			}
-//		}
-//		return nil
+//		return nil // implement a repeat-safe reverse move when rollback requires it
 //	}
 package migrations

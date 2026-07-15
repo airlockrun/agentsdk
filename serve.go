@@ -3,6 +3,7 @@ package agentsdk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"go.uber.org/zap"
 )
@@ -21,6 +23,12 @@ import (
 // Listens on AIRLOCK_ADDR env var or :8080.
 // Before starting, syncs connections/webhooks/crons with Airlock.
 func (a *Agent) Serve() {
+	defer func() {
+		if err := a.Close(); err != nil {
+			agentLogger().Warn("close database", zap.Error(err))
+		}
+	}()
+
 	addr := os.Getenv("AIRLOCK_ADDR")
 	if addr == "" {
 		addr = ":8080"
@@ -63,11 +71,12 @@ func (a *Agent) Serve() {
 // route registered via RegisterRoute, each wrapped with the lazy-run + logging
 // middleware. Serve installs it after syncing with Airlock.
 //
-// Handler does not sync with Airlock and does not listen — it just returns the
-// mux. Tests use it to exercise routes through the real dispatch (including
+// Handler validates and freezes registrations, but does not sync with Airlock
+// or listen. Tests use it to exercise routes through the real dispatch (including
 // {param} extraction) with httptest. A test that needs the synced prompt data
 // or MCP schemas a handler reads must call syncWithAirlock first.
 func (a *Agent) Handler() http.Handler {
+	a.freeze()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /prompt", handlePrompt(a))
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
@@ -77,16 +86,16 @@ func (a *Agent) Handler() http.Handler {
 	// A2A: airlock's MCP server forwards user-registered tool calls
 	// here so sibling agents can invoke them directly (no LLM loop).
 	mux.HandleFunc("POST /__air/tool/{name}", a.handleDirectTool)
-	// Bundled frontend assets (htmx, pico.css) — same-origin so the
-	// scaffold layout doesn't depend on a CDN.
+	// Bundled frontend assets are same-origin so layouts do not depend on a CDN.
 	mux.HandleFunc("GET /__air/assets/{name}", a.handleAsset)
+	mux.HandleFunc("GET /static/{name}", a.handleStaticAsset)
 
 	// Mount custom routes registered via RegisterRoute.
 	// Each route gets a lazy-run installed in ctx — a run is only created
-	// if the handler actually makes a model call. Wrap with logging
-	// middleware so panics surface in docker logs.
+	// if the handler actually makes a model call. The wrapper also logs
+	// returned errors, panics, and 5xx responses.
 	for key, route := range a.routes {
-		mux.HandleFunc(key, routeLogging(a.wrapRoute(key, route.Handler)))
+		mux.HandleFunc(key, a.wrapRoute(key, route.Handler))
 	}
 
 	return mux
@@ -123,7 +132,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			trace := string(debug.Stack())
 			errMsg := fmt.Sprintf("%v", rec)
 			ew.WriteError(fmt.Errorf("%s", errMsg))
-			run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
+			run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, trace)
 			return
 		}
 	}()
@@ -131,7 +140,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
 		ew.WriteError(err)
-		run.complete(ctx, "error", err.Error(), ErrorKindPlatform, "")
+		run.complete(ctx, "error", err.Error(), wire.ErrorKindPlatform, "")
 		return
 	}
 
@@ -141,7 +150,7 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 			status = "timeout"
 		}
 		ew.WriteError(err)
-		run.complete(ctx, status, err.Error(), ErrorKindAgent, "")
+		run.complete(ctx, status, err.Error(), wire.ErrorKindAgent, "")
 		return
 	}
 	run.complete(ctx, "success", "", "", "")
@@ -183,7 +192,7 @@ func (a *Agent) handleFire(w http.ResponseWriter, r *http.Request) {
 			trace := string(debug.Stack())
 			errMsg := fmt.Sprintf("%v", rec)
 			ew.WriteError(fmt.Errorf("%s", errMsg))
-			run.complete(ctx, "error", errMsg, ErrorKindAgent, trace)
+			run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, trace)
 			return
 		}
 	}()
@@ -194,7 +203,7 @@ func (a *Agent) handleFire(w http.ResponseWriter, r *http.Request) {
 			status = "timeout"
 		}
 		ew.WriteError(err)
-		run.complete(ctx, status, err.Error(), ErrorKindAgent, "")
+		run.complete(ctx, status, err.Error(), wire.ErrorKindAgent, "")
 		return
 	}
 	run.complete(ctx, "success", "", "", "")
@@ -219,11 +228,8 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	caller := Access(r.Header.Get("X-Caller-Access"))
-	if caller == "" {
-		caller = AccessUser
-	}
-	if !accessSatisfies(caller, rt.access) {
+	caller := callerFromRequest(r)
+	if !accessSatisfies(caller.Access, rt.access) {
 		http.Error(w, `{"error":"tool requires higher access"}`, http.StatusForbidden)
 		return
 	}
@@ -235,7 +241,7 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Bind a lazyRun into ctx so anything the tool reaches for —
-	// GetDeps[T], conn_X.Request, agent.Storage, agent.LLM — can
+	// conn_X.Request, agent.Storage, agent.LLM — can
 	// resolve the Agent (and materialize a real run if it actually
 	// performs an LLM call / log / action). Without this, the tool
 	// gets a bare http.Request ctx and any AgentFromContext lookup
@@ -246,82 +252,123 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	// A2A and external MCP tool calls; CheckFileAccess consults them
 	// when gating reads on scoped directories.
 	lazy := &lazyRun{
-		agent:       a,
-		triggerRef:  "mcp-tool:" + name,
-		parentRunID: r.Header.Get("X-Parent-Run-ID"),
-		userID:      r.Header.Get("X-User-ID"),
+		agent:        a,
+		triggerRef:   "mcp-tool:" + name,
+		parentRunID:  r.Header.Get("X-Parent-Run-ID"),
+		userID:       r.Header.Get("X-User-ID"),
+		callerAccess: caller.Access,
 	}
 
 	timeout := defaultTimeout
 	baseCtx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	ctx := contextWithLazyRun(baseCtx, lazy)
+	ctx := withCaller(contextWithLazyRun(baseCtx, lazy), caller)
+	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+	var dispatchErr error
+	var panicTrace string
 
 	defer func() {
 		if rec := recover(); rec != nil {
-			agentLogger().Error("tool panic", zap.String("tool", name), zap.Any("recover", rec), zap.ByteString("stack", debug.Stack()))
-			http.Error(w, `{"error":"tool panicked"}`, http.StatusInternalServerError)
+			panicTrace = string(debug.Stack())
+			dispatchErr = fmt.Errorf("%v", rec)
+			agentLogger().Error("tool panic", zap.String("tool", name), zap.Any("recover", rec), zap.String("stack", panicTrace))
+			if !sw.wroteHeader {
+				http.Error(sw, `{"error":"tool panicked"}`, http.StatusInternalServerError)
+			}
 		}
-		// If the tool materialized a real run (made an LLM call,
-		// wrote actions, etc.) flush its terminal state so airlock
-		// records the run as success and the action timeline is
-		// persisted. Best-effort — failures here don't change the
-		// already-written response.
-		if run := lazy.materialized(); run != nil {
-			_ = run.complete(ctx, "success", "", "", "")
-		}
+		completeLazyRun(ctx, lazy, sw.status, dispatchErr, panicTrace)
 	}()
 
 	res, err := rt.Execute(ctx, raw, tool.CallOptions{})
 	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		dispatchErr = err
+		http.Error(sw, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(res.Output))
+	sw.Header().Set("Content-Type", "application/json")
+	_, _ = sw.Write([]byte(res.Output))
 }
 
 // wrapRoute converts a RouteHandlerFunc into http.HandlerFunc, installing
-// a lazy run into ctx and flushing the run on return if it was materialized.
+// a lazy run and caller on r.Context and completing a materialized run from
+// the handler's error, panic, and response status.
 func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Carry the authenticated user (airlock forwards X-User-ID /
 		// X-User-Email on authed proxied requests) so UserFromContext works
 		// in route handlers — without materializing a run.
+		caller := callerFromRequest(r)
 		lazy := &lazyRun{
 			agent:           a,
 			triggerRef:      "route:" + key,
 			userID:          r.Header.Get("X-User-ID"),
 			userEmail:       r.Header.Get("X-User-Email"),
 			userDisplayName: r.Header.Get("X-User-Name"),
+			callerAccess:    caller.Access,
 		}
-		ctx := contextWithLazyRun(r.Context(), lazy)
+		ctx := withCaller(contextWithLazyRun(r.Context(), lazy), caller)
+		r = r.WithContext(ctx)
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		var dispatchErr error
+		var panicTrace string
+
 		defer func() {
-			if run := lazy.materialized(); run != nil {
-				_ = run.complete(ctx, "success", "", "", "")
+			if rec := recover(); rec != nil {
+				panicTrace = string(debug.Stack())
+				dispatchErr = fmt.Errorf("%v", rec)
+				agentLogger().Error("route panic", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Any("recover", rec), zap.String("stack", panicTrace))
+				if !sw.wroteHeader {
+					http.Error(sw, "internal server error", http.StatusInternalServerError)
+				}
 			}
+			if dispatchErr != nil && panicTrace == "" {
+				agentLogger().Error("route error", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Error(dispatchErr))
+				if !sw.wroteHeader {
+					var httpErr *HTTPError
+					if errors.As(dispatchErr, &httpErr) {
+						http.Error(sw, httpErr.Message, httpErr.Status)
+					} else {
+						http.Error(sw, "internal server error", http.StatusInternalServerError)
+					}
+				}
+			}
+			if sw.status >= http.StatusInternalServerError {
+				agentLogger().Warn("route error response", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", sw.status))
+			}
+			completeLazyRun(ctx, lazy, sw.status, dispatchErr, panicTrace)
 		}()
-		handler(ctx, w, r)
+
+		dispatchErr = handler(sw, r)
 	}
 }
 
-// routeLogging wraps a route handler with panic recovery and error logging.
-func routeLogging(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				agentLogger().Error("route panic", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Any("recover", rec), zap.ByteString("stack", debug.Stack()))
-				http.Error(w, "internal server error", http.StatusInternalServerError)
-			}
-		}()
-
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(sw, r)
-
-		if sw.status >= 500 {
-			agentLogger().Warn("route error", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", sw.status))
-		}
+func callerFromRequest(r *http.Request) caller {
+	access := Access(r.Header.Get("X-Caller-Access"))
+	if access == "" {
+		access = AccessPublic
 	}
+	return caller{
+		Access: access,
+		UserID: r.Header.Get("X-User-ID"),
+		RunID:  r.Header.Get("X-Parent-Run-ID"),
+	}
+}
+
+func completeLazyRun(ctx context.Context, lazy *lazyRun, status int, dispatchErr error, panicTrace string) {
+	run := lazy.materialized()
+	if run == nil {
+		return
+	}
+	if dispatchErr != nil {
+		_ = run.complete(ctx, "error", dispatchErr.Error(), wire.ErrorKindAgent, panicTrace)
+		return
+	}
+	if status >= http.StatusInternalServerError {
+		errMsg := fmt.Sprintf("HTTP status %d", status)
+		_ = run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, "")
+		return
+	}
+	_ = run.complete(ctx, "success", "", "", "")
 }
 
 // statusWriter wraps http.ResponseWriter to capture the status code.
@@ -332,10 +379,11 @@ type statusWriter struct {
 }
 
 func (sw *statusWriter) WriteHeader(code int) {
-	if !sw.wroteHeader {
-		sw.status = code
-		sw.wroteHeader = true
+	if sw.wroteHeader {
+		return
 	}
+	sw.status = code
+	sw.wroteHeader = true
 	sw.ResponseWriter.WriteHeader(code)
 }
 
@@ -391,25 +439,13 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// are reconciled (the builder re-asserts the role on upgrade).
 	status := "ok"
 	code := http.StatusOK
-	if db := a.DB(); db != nil {
-		// Retry transient failures (e.g. a 28P01 while Airlock is reconciling
-		// the role's scram verifier mid-handshake) so a brief blip doesn't
-		// report the agent unhealthy and pull it out of rotation.
-		var pingErr error
-		for attempt := 1; attempt <= 3; attempt++ {
-			pingCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
-			pingErr = db.PingContext(pingCtx)
-			cancel()
-			if pingErr == nil || !isTransientConnError(pingErr) {
-				break
-			}
-			time.Sleep(150 * time.Millisecond)
-		}
-		if pingErr != nil {
-			status = "db_unavailable"
-			code = http.StatusServiceUnavailable
-			agentLogger().Warn("health: db ping failed", zap.Error(pingErr))
-		}
+	pingCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	pingErr := a.DB().PingContext(pingCtx)
+	cancel()
+	if pingErr != nil {
+		status = "db_unavailable"
+		code = http.StatusServiceUnavailable
+		agentLogger().Warn("health: db ping failed", zap.Error(pingErr))
 	}
 
 	resp := struct {

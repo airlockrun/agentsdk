@@ -10,7 +10,7 @@ import (
 func newSolAgent(a *Agent, run *run) *agent.Agent {
 	// Stash the model's input modalities on the Run so the lazy-created VM can
 	// read them when attachToContext() validates a key's MIME against what the
-	// model supports. Sourced from the synced PromptData, which airlock keeps
+	// model supports. Sourced from the synced promptData, which airlock keeps
 	// current across model changes (immediate /refresh on update + a
 	// dispatch-time hash check that self-heals a stale cache before the run).
 	a.syncMu.RLock()
@@ -29,7 +29,7 @@ func newSolAgent(a *Agent, run *run) *agent.Agent {
 		Model:        "", // caller sets model or passes Model override
 		Tools:        buildSolTools(a, run),
 		MaxSteps:     maxToolSteps,
-		SystemPrompt: a.renderSystemPrompt(run.callerAccess, run.visibleSiblings, env, run.directTools), // rendered per-run from live registrations + synced PromptData; the <env> block carries per-turn date/platform/user/conversation
+		SystemPrompt: a.renderSystemPrompt(run.callerAccess, run.visibleSiblings, env, run.directTools), // rendered per-run from live registrations + synced promptData; the <env> block carries per-turn date/platform/user/conversation
 		// Redactor closes over a's live sensitive set so values
 		// registered after Run start (via secret.Get inside a tool) are
 		// stripped from the next-step LLM input.

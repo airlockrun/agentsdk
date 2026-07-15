@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/tool"
 	sol "github.com/airlockrun/sol"
@@ -35,7 +36,7 @@ func TestPromptHandler(t *testing.T) {
 			return greetOut{Greeting: "Hello, " + in.Name + "!"}, nil
 		}), AccessUser)
 
-	input := PromptInput{
+	input := wire.PromptInput{
 		Messages: []message.Message{
 			message.NewUserMessage("say hello to World"),
 		},

@@ -1,11 +1,9 @@
 package agentsdk
 
 import (
-	"fmt"
 	"regexp"
 
 	"github.com/airlockrun/goai/tool"
-	"go.uber.org/zap"
 )
 
 // RegisterOption layers agentsdk-only concerns onto a registered tool that
@@ -20,7 +18,7 @@ func WithLLMHint(hint string) RegisterOption {
 }
 
 // RegisterTool registers a goai tool.Tool the LLM can invoke, at the given
-// access level (empty defaults to AccessUser). Build the tool once with
+// access level. Build the tool once with
 // tool.Typed[In,Out] (or tool.New) and pass the same value here and to the
 // agent's GenerateText/StreamText sub-calls.
 //
@@ -30,22 +28,16 @@ func WithLLMHint(hint string) RegisterOption {
 //	    Build()
 //	agent.RegisterTool(calc, agentsdk.AccessUser)
 func (a *Agent) RegisterTool(t tool.Tool, access Access, opts ...RegisterOption) {
-	if t.Name == "" {
-		panic("agentsdk: RegisterTool: tool Name is required")
-	}
-	if t.Description == "" {
-		panic(fmt.Sprintf("agentsdk: RegisterTool(%q): tool Description is required", t.Name))
-	}
-	if t.Execute == nil && !t.IsProviderTool() {
-		panic(fmt.Sprintf("agentsdk: RegisterTool(%q): tool Execute is required", t.Name))
-	}
-	if access == "" {
-		access = AccessUser
-	}
-	rt := &registeredTool{Tool: t, access: access}
+	done := a.beginRegistration("RegisterTool")
+	defer done()
+	rt := &registeredTool{Tool: cloneTool(t), access: access}
 	for _, o := range opts {
+		if o == nil {
+			panic("agentsdk: RegisterTool: nil RegisterOption")
+		}
 		o(rt)
 	}
+	validateRegisteredTool(rt)
 	if _, exists := a.tools[rt.Name]; exists {
 		panic("agentsdk: duplicate RegisterTool: " + rt.Name)
 	}
@@ -56,72 +48,57 @@ func (a *Agent) RegisterTool(t tool.Tool, access Access, opts ...RegisterOption)
 // Airlock on Serve() so external callers can reach it via the agent's
 // webhook ingress endpoint.
 func (a *Agent) RegisterWebhook(w *Webhook) {
+	done := a.beginRegistration("RegisterWebhook")
+	defer done()
 	if w == nil {
 		panic("agentsdk: RegisterWebhook: nil *Webhook")
 	}
-	if w.Path == "" {
-		panic("agentsdk: RegisterWebhook: Path is required")
+	copy := *w
+	validateWebhook(&copy)
+	if _, exists := a.webhooks[copy.Path]; exists {
+		panic("agentsdk: duplicate RegisterWebhook: " + copy.Path)
 	}
-	if w.Handler == nil {
-		panic(fmt.Sprintf("agentsdk: RegisterWebhook(%q): Handler is required", w.Path))
-	}
-	if _, exists := a.webhooks[w.Path]; exists {
-		panic("agentsdk: duplicate RegisterWebhook: " + w.Path)
-	}
-	if w.Verify == "" {
-		w.Verify = "none"
-	}
-	if w.Access == "" {
-		w.Access = AccessUser
-	}
-	a.webhooks[w.Path] = w
+	a.webhooks[copy.Path] = &copy
 }
 
 // RegisterCron installs a recurring cron. Schedule is a standard cron
 // expression (e.g. "0 9 * * *"). Synced to Airlock on Serve() so the scheduler
 // fires it. The slug shares one namespace with RegisterSchedule.
 func (a *Agent) RegisterCron(c *Cron) {
+	done := a.beginRegistration("RegisterCron")
+	defer done()
 	if c == nil {
 		panic("agentsdk: RegisterCron: nil *Cron")
 	}
-	if c.Slug == "" {
-		panic("agentsdk: RegisterCron: Slug is required")
-	}
-	if c.Schedule == "" {
-		panic(fmt.Sprintf("agentsdk: RegisterCron(%q): Schedule is required", c.Slug))
-	}
-	if c.Handler == nil {
-		panic(fmt.Sprintf("agentsdk: RegisterCron(%q): Handler is required", c.Slug))
-	}
-	a.addScheduleHandler(&scheduleHandler{
+	h := &scheduleHandler{
 		slug:        c.Slug,
 		kind:        "cron",
 		recurrence:  c.Schedule,
 		handler:     c.Handler,
 		timeout:     c.Timeout,
 		description: c.Description,
-	})
+	}
+	validateScheduleHandler(h)
+	a.addScheduleHandler(h)
 }
 
 // RegisterSchedule installs a handler for runtime-armed one-shot fires (see
 // agent.ScheduleAt). The slug shares one namespace with RegisterCron.
 func (a *Agent) RegisterSchedule(s *Schedule) {
+	done := a.beginRegistration("RegisterSchedule")
+	defer done()
 	if s == nil {
 		panic("agentsdk: RegisterSchedule: nil *Schedule")
 	}
-	if s.Slug == "" {
-		panic("agentsdk: RegisterSchedule: Slug is required")
-	}
-	if s.Handler == nil {
-		panic(fmt.Sprintf("agentsdk: RegisterSchedule(%q): Handler is required", s.Slug))
-	}
-	a.addScheduleHandler(&scheduleHandler{
+	h := &scheduleHandler{
 		slug:        s.Slug,
 		kind:        "schedule",
 		handler:     s.Handler,
 		timeout:     s.Timeout,
 		description: s.Description,
-	})
+	}
+	validateScheduleHandler(h)
+	a.addScheduleHandler(h)
 }
 
 // addScheduleHandler stores a handler, enforcing slug uniqueness across both
@@ -136,26 +113,19 @@ func (a *Agent) addScheduleHandler(h *scheduleHandler) {
 // RegisterRoute installs a custom HTTP route served by this agent and
 // proxied via Airlock's subdomain routing.
 func (a *Agent) RegisterRoute(r *Route) {
+	done := a.beginRegistration("RegisterRoute")
+	defer done()
 	if r == nil {
 		panic("agentsdk: RegisterRoute: nil *Route")
 	}
-	if r.Method == "" {
-		panic("agentsdk: RegisterRoute: Method is required")
-	}
-	if r.Path == "" {
-		panic("agentsdk: RegisterRoute: Path is required")
-	}
-	if r.Handler == nil {
-		panic(fmt.Sprintf("agentsdk: RegisterRoute(%s %s): Handler is required", r.Method, r.Path))
-	}
-	if r.Access == "" {
-		panic(fmt.Sprintf("agentsdk: RegisterRoute(%s %s): Access is required", r.Method, r.Path))
-	}
-	key := r.Method + " " + r.Path
+	copy := *r
+	validateRoute(&copy)
+	key := copy.Method + " " + copy.Path
 	if _, exists := a.routes[key]; exists {
 		panic("agentsdk: duplicate RegisterRoute: " + key)
 	}
-	a.routes[key] = r
+	validateRoutePatterns(a.routes, &copy)
+	a.routes[key] = &copy
 }
 
 // RegisterTopic declares a topic the agent can publish notifications to.
@@ -165,20 +135,18 @@ func (a *Agent) RegisterRoute(r *Route) {
 //	alerts := agent.RegisterTopic(&agentsdk.Topic{Slug: "alerts", Description: "System alerts"})
 //	alerts.Publish(ctx, []DisplayPart{{Type: "text", Text: "Server restarted"}})
 func (a *Agent) RegisterTopic(t *Topic) *TopicHandle {
+	done := a.beginRegistration("RegisterTopic")
+	defer done()
 	if t == nil {
 		panic("agentsdk: RegisterTopic: nil *Topic")
 	}
-	if t.Slug == "" {
-		panic("agentsdk: RegisterTopic: Slug is required")
+	copy := *t
+	validateTopic(&copy)
+	if _, exists := a.topics[copy.Slug]; exists {
+		panic("agentsdk: duplicate RegisterTopic: " + copy.Slug)
 	}
-	if _, exists := a.topics[t.Slug]; exists {
-		panic("agentsdk: duplicate RegisterTopic: " + t.Slug)
-	}
-	if t.Access == "" {
-		t.Access = AccessUser
-	}
-	a.topics[t.Slug] = t
-	return &TopicHandle{slug: t.Slug, perUser: t.PerUser, agent: a}
+	a.topics[copy.Slug] = &copy
+	return &TopicHandle{slug: copy.Slug, perUser: copy.PerUser, agent: a}
 }
 
 // RegisterConnection registers an outgoing service connection and returns a
@@ -190,20 +158,21 @@ func (a *Agent) RegisterTopic(t *Topic) *TopicHandle {
 //	})
 //	body, err := gmail.Request(ctx, agentsdk.RequestOpts{Path: "/messages"})
 func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
+	done := a.beginRegistration("RegisterConnection")
+	defer done()
 	if c == nil {
 		panic("agentsdk: RegisterConnection: nil *Connection")
 	}
-	if c.Slug == "" {
-		panic("agentsdk: RegisterConnection: Slug is required")
+	copy := *c
+	copy.Scopes = append([]string(nil), c.Scopes...)
+	copy.AuthParams = cloneStringMap(c.AuthParams)
+	copy.Headers = cloneStringMap(c.Headers)
+	validateConnection(&copy)
+	if _, exists := a.auths[copy.Slug]; exists {
+		panic("agentsdk: duplicate RegisterConnection: " + copy.Slug)
 	}
-	if _, exists := a.auths[c.Slug]; exists {
-		panic("agentsdk: duplicate RegisterConnection: " + c.Slug)
-	}
-	if c.Access == "" {
-		c.Access = AccessUser
-	}
-	a.auths[c.Slug] = c
-	return &ConnectionHandle{slug: c.Slug, agent: a}
+	a.auths[copy.Slug] = &copy
+	return &ConnectionHandle{slug: copy.Slug, agent: a}
 }
 
 // RegisterEnvVar declares an operator-configured environment variable
@@ -222,31 +191,23 @@ func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
 //	// later, inside a tool:
 //	key, err := bbKey.Get(ctx)
 func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
+	done := a.beginRegistration("RegisterEnvVar")
+	defer done()
 	if e == nil {
 		panic("agentsdk: RegisterEnvVar: nil *EnvVar")
 	}
-	if e.Slug == "" {
-		panic("agentsdk: RegisterEnvVar: Slug is required")
-	}
-	if _, exists := a.envVars[e.Slug]; exists {
-		panic("agentsdk: duplicate RegisterEnvVar: " + e.Slug)
-	}
-	if e.Secret && e.Default != "" {
-		panic("agentsdk: RegisterEnvVar(" + e.Slug + "): Default is not allowed for Secret=true — secrets must come from the operator, not source code")
+	copy := *e
+	validateEnvVar(&copy)
+	if _, exists := a.envVars[copy.Slug]; exists {
+		panic("agentsdk: duplicate RegisterEnvVar: " + copy.Slug)
 	}
 	var compiled *regexp.Regexp
-	if e.Pattern != "" {
-		re, err := regexp.Compile(e.Pattern)
-		if err != nil {
-			panic("agentsdk: RegisterEnvVar(" + e.Slug + "): invalid Pattern: " + err.Error())
-		}
-		if e.Default != "" && !re.MatchString(e.Default) {
-			panic("agentsdk: RegisterEnvVar(" + e.Slug + "): Default does not match Pattern")
-		}
+	if copy.Pattern != "" {
+		re, _ := regexp.Compile(copy.Pattern)
 		compiled = re
 	}
-	a.envVars[e.Slug] = e
-	return &EnvVarHandle{slug: e.Slug, secret: e.Secret, defaultValue: e.Default, pattern: compiled, agent: a}
+	a.envVars[copy.Slug] = &copy
+	return &EnvVarHandle{slug: copy.Slug, secret: copy.Secret, defaultValue: copy.Default, pattern: compiled, agent: a}
 }
 
 // RegisterDirectory declares an S3-backed directory at the given path,
@@ -279,18 +240,11 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 //	})
 //	err := agent.WriteFile(ctx, "uploads/doc.pdf", reader, "application/pdf")
 func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
+	done := a.beginRegistration("RegisterDirectory")
+	defer done()
 	canon, err := normalizePath(path)
 	if err != nil {
 		panic("agentsdk: RegisterDirectory: " + err.Error())
-	}
-	if opts.Read == "" {
-		opts.Read = AccessUser
-	}
-	if opts.Write == "" {
-		opts.Write = AccessUser
-	}
-	if opts.List == "" {
-		opts.List = AccessUser
 	}
 	for _, d := range a.directories {
 		if d.Path == canon {
@@ -307,7 +261,7 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 			panic("agentsdk: duplicate RegisterDirectory: " + canon)
 		}
 	}
-	a.directories = append(a.directories, &Directory{
+	d := &Directory{
 		Path:           canon,
 		Read:           opts.Read,
 		Write:          opts.Write,
@@ -316,7 +270,9 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 		LLMHint:        opts.LLMHint,
 		RetentionHours: opts.RetentionHours,
 		Scope:          opts.Scope,
-	})
+	}
+	validateDirectory(d)
+	a.directories = append(a.directories, d)
 }
 
 // RegisterExecEndpoint declares a remote command target the agent can
@@ -331,35 +287,21 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 //	})
 //	res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build"})
 //
-// Default access is AccessAdmin (exec hands arbitrary commands to a real
-// machine — admin-only by default). AccessPublic is silently demoted to
-// AccessUser with a startup warning: exec endpoints are never reachable
-// by unauthenticated callers, period. The demotion is friendly because
-// copy-pasting from RegisterRoute (where Public is meaningful) is a
-// believable mistake.
+// Access must be explicit. AccessPublic is rejected because exec endpoints are
+// never reachable by unauthenticated callers.
 func (a *Agent) RegisterExecEndpoint(e *ExecEndpoint) *ExecHandle {
+	done := a.beginRegistration("RegisterExecEndpoint")
+	defer done()
 	if e == nil {
 		panic("agentsdk: RegisterExecEndpoint: nil *ExecEndpoint")
 	}
-	if e.Slug == "" {
-		panic("agentsdk: RegisterExecEndpoint: Slug is required")
+	copy := *e
+	validateExecEndpoint(&copy)
+	if _, exists := a.execEndpoints[copy.Slug]; exists {
+		panic("agentsdk: duplicate RegisterExecEndpoint: " + copy.Slug)
 	}
-	if e.Description == "" {
-		panic("agentsdk: RegisterExecEndpoint(" + e.Slug + "): Description is required")
-	}
-	if e.Access == "" {
-		e.Access = AccessAdmin
-	}
-	if e.Access == AccessPublic {
-		agentLogger().Warn("RegisterExecEndpoint: AccessPublic is not allowed for exec endpoints — demoting to AccessUser",
-			zap.String("slug", e.Slug))
-		e.Access = AccessUser
-	}
-	if _, exists := a.execEndpoints[e.Slug]; exists {
-		panic("agentsdk: duplicate RegisterExecEndpoint: " + e.Slug)
-	}
-	a.execEndpoints[e.Slug] = e
-	return &ExecHandle{slug: e.Slug, agent: a}
+	a.execEndpoints[copy.Slug] = &copy
+	return &ExecHandle{slug: copy.Slug, agent: a}
 }
 
 // RegisterMCP registers a remote MCP server dependency and returns a handle
@@ -369,21 +311,17 @@ func (a *Agent) RegisterExecEndpoint(e *ExecEndpoint) *ExecHandle {
 //	github := agent.RegisterMCP(&agentsdk.MCP{Slug: "github", URL: "https://api.github.com/mcp"})
 //	result, err := github.CallTool(ctx, "search_repos", args)
 func (a *Agent) RegisterMCP(m *MCP) *MCPHandle {
+	done := a.beginRegistration("RegisterMCP")
+	defer done()
 	if m == nil {
 		panic("agentsdk: RegisterMCP: nil *MCP")
 	}
-	if m.Slug == "" {
-		panic("agentsdk: RegisterMCP: Slug is required")
+	copy := *m
+	copy.Scopes = append([]string(nil), m.Scopes...)
+	validateMCP(&copy)
+	if _, exists := a.mcps[copy.Slug]; exists {
+		panic("agentsdk: duplicate RegisterMCP: " + copy.Slug)
 	}
-	if m.URL == "" {
-		panic("agentsdk: RegisterMCP(" + m.Slug + "): URL is required")
-	}
-	if _, exists := a.mcps[m.Slug]; exists {
-		panic("agentsdk: duplicate RegisterMCP: " + m.Slug)
-	}
-	if m.Access == "" {
-		m.Access = AccessUser
-	}
-	a.mcps[m.Slug] = m
-	return &MCPHandle{slug: m.Slug, agent: a}
+	a.mcps[copy.Slug] = &copy
+	return &MCPHandle{slug: copy.Slug, agent: a}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/tsrender"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
 )
@@ -240,7 +241,7 @@ func addMCPTools(ts tool.Set, agent *Agent, run *run) {
 	}
 }
 
-func buildMCPTool(toolName string, schema MCPToolSchema, handle *MCPHandle, mcpToolName string, run *run) tool.Tool {
+func buildMCPTool(toolName string, schema wire.MCPToolSchema, handle *MCPHandle, mcpToolName string, run *run) tool.Tool {
 	desc := schema.Description
 	if desc == "" {
 		desc = mcpToolName
@@ -284,7 +285,7 @@ func addSiblingTools(ts tool.Set, agent *Agent, run *run) {
 		if _, ok := visible[s.ID]; !ok {
 			continue
 		}
-		handle := &SiblingHandle{slug: s.Slug, agentID: s.ID, agent: agent}
+		handle := &siblingHandle{slug: s.Slug, agentID: s.ID, agent: agent}
 		names := make([]string, len(s.Tools))
 		for i, t := range s.Tools {
 			names[i] = t.Name
@@ -299,7 +300,7 @@ func addSiblingTools(ts tool.Set, agent *Agent, run *run) {
 	}
 }
 
-func buildSiblingTool(toolName string, schema MCPToolSchema, handle *SiblingHandle, siblingSlug, remoteToolName string, run *run) tool.Tool {
+func buildSiblingTool(toolName string, schema wire.MCPToolSchema, handle *siblingHandle, siblingSlug, remoteToolName string, run *run) tool.Tool {
 	desc := schema.Description
 	if desc == "" {
 		desc = fmt.Sprintf("Call %s.%s on the %s agent.", siblingSlug, remoteToolName, siblingSlug)
@@ -317,7 +318,7 @@ func buildSiblingTool(toolName string, schema MCPToolSchema, handle *SiblingHand
 				return tool.Result{}, err
 			}
 		}
-		result, err := handle.CallTool(run.ctx, run.id, remoteToolName, args)
+		result, err := handle.callTool(run.ctx, run.id, remoteToolName, args)
 		if err != nil {
 			return tool.Result{}, fmt.Errorf("agent_%s.%s: %w", siblingSlug, remoteToolName, err)
 		}

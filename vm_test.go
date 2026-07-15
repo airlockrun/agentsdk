@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"github.com/dop251/goja"
 )
@@ -77,7 +78,7 @@ func TestVM(t *testing.T) {
 	// of the AccessPublic zero-value (which would deny every write).
 	t.Run("user tool gets caller in ctx", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterDirectory("downloads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("downloads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Downloads"})
 		var checkErr error
 		a.RegisterTool(tool.Typed[runIDIn, runIDOut]("probe_write").
 			Description("Probes write access on downloads/.").
@@ -103,14 +104,14 @@ func TestVM(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(run.logs) != 1 || run.logs[0].Message != "hello from JS" || run.logs[0].Level != LogLevelInfo {
+		if len(run.logs) != 1 || run.logs[0].Message != "hello from JS" || run.logs[0].Level != wire.LogLevelInfo {
 			t.Fatalf("expected info log entry, got %v", run.logs)
 		}
 	})
 
 	t.Run("fileDelete calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
 		_, err := executeJS(run.vmRuntime(), `fileDelete("uploads/a.txt")`)
 		if err != nil {
@@ -127,7 +128,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("fileList returns array", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), `JSON.stringify(fileList("uploads/"))`)
 		if err != nil {
@@ -140,7 +141,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("fileWrite calls backend with absolute path", func(t *testing.T) {
 		a, mock := testAgent(t)
-		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
 		_, err := executeJS(run.vmRuntime(), `fileWrite("uploads/test.txt", "hello", "text/plain")`)
 		if err != nil {
@@ -154,7 +155,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("fileRead calls backend with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), `fileRead("uploads/test.txt")`)
 		if err != nil {
@@ -173,7 +174,7 @@ func TestVM(t *testing.T) {
 		// a plain function), or you get
 		// "TypeError: Constructor TypedArray requires 'new'".
 		a, _ := testAgent(t)
-		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
 		// Mock backend returns the literal string "mock-file-content"
 		// (17 bytes). Verify .length is correct, indexed access works,
@@ -269,7 +270,7 @@ func TestVM(t *testing.T) {
 
 	t.Run("fileStat returns FileInfo with absolute path", func(t *testing.T) {
 		a, _ := testAgent(t)
-		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
 		result, err := executeJS(run.vmRuntime(), `var fi = fileStat("uploads/test.txt"); fi.path + ":" + fi.size`)
 		if err != nil {

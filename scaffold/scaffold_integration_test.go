@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -11,6 +12,9 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // TestScaffoldBuildsAndStarts verifies that the scaffold output compiles
@@ -141,15 +145,44 @@ tool github.com/a-h/templ/cmd/templ
 	}))
 	defer mock.Close()
 
+	dsn := os.Getenv("TEST_DB_URL")
+	if dsn == "" {
+		testcontainers.SkipIfProviderIsNotHealthy(t)
+		ctr, err := postgres.Run(context.Background(), "pgvector/pgvector:pg17",
+			postgres.WithDatabase("agent_test"),
+			postgres.WithUsername("agent"),
+			postgres.WithPassword("agent"),
+			postgres.BasicWaitStrategies(),
+		)
+		if err != nil {
+			t.Fatalf("start PostgreSQL container: %v", err)
+		}
+		defer ctr.Terminate(context.Background())
+		dsn, err = ctr.ConnectionString(context.Background(), "sslmode=disable")
+		if err != nil {
+			t.Fatalf("PostgreSQL connection string: %v", err)
+		}
+	}
+
+	generatedTests := exec.Command("go", "test", "-count=1", "./...")
+	generatedTests.Dir = dir
+	generatedTests.Env = append(env, "TEST_DB_URL="+dsn)
+	if out, err := generatedTests.CombinedOutput(); err != nil {
+		t.Fatalf("generated agent tests failed:\n%s", out)
+	}
+
 	port := freePort(t)
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
 	cmd := exec.Command(binPath)
+	cmd.Dir = dir
 	cmd.Env = []string{
 		"AIRLOCK_AGENT_ID=test-agent",
 		"AIRLOCK_API_URL=" + mock.URL,
 		"AIRLOCK_AGENT_TOKEN=test-token",
+		"AIRLOCK_DB_URL=" + dsn,
 		"AIRLOCK_ADDR=" + addr,
+		"AGENTSDK_TEST_MIGRATIONS=1",
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start agent: %v", err)

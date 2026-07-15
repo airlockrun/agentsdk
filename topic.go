@@ -1,6 +1,10 @@
 package agentsdk
 
-import "context"
+import (
+	"context"
+
+	"github.com/airlockrun/agentsdk/wire"
+)
 
 // TopicHandle is a compile-time binding to a registered topic.
 // Returned by Agent.RegisterTopic; used for type-safe publishing.
@@ -31,8 +35,8 @@ func (h *TopicHandle) PublishToUser(ctx context.Context, userID string, parts []
 
 func (h *TopicHandle) publish(ctx context.Context, userID string, parts []DisplayPart) error {
 	for i := range parts {
-		ResolveDisplayPart(&parts[i])
+		resolveDisplayPart(&parts[i])
 	}
-	req := PrintRequest{Parts: parts, Topic: h.slug, UserID: userID}
+	req := wire.PrintRequest{Parts: toWireDisplayParts(parts), Topic: h.slug, UserID: userID}
 	return h.agent.client.doJSON(ctx, "POST", "/api/agent/print", req, nil)
 }

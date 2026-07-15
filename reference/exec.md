@@ -13,7 +13,7 @@ ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
     Slug:        "ci-runner",
     Description: "Self-hosted GitHub Actions runner",
     LLMHint:     "use `kick-build --branch <name>` to start a build",
-    Access:      agentsdk.AccessAdmin, // default; opt down explicitly
+    Access:      agentsdk.AccessAdmin,
 })
 
 type KickIn struct {
@@ -49,13 +49,10 @@ airlock and are encrypted at rest. The public key carries a dated
 comment (`airlock-{agentSlug}-{endpointSlug}-YYYY-MM-DD`) so on rotation
 the operator can `grep` `authorized_keys` and remove old lines.
 
-**Default access is `AccessAdmin`.** Exec hands arbitrary commands to a
-real machine; admin-only is the right default. **`AccessPublic` is
-silently demoted to `AccessUser`** at registration time with a startup
-warning — exec endpoints are never reachable by unauthenticated callers,
-period. (The demotion is a friendly recovery, not an error, because
-copy-pasting from `RegisterRoute` where Public is meaningful is a
-believable mistake.)
+**Access is required.** Exec hands arbitrary commands to a real machine;
+`AccessAdmin` is normally the right choice, and `AccessUser` is available when
+members should run commands. `AccessPublic` panics at registration because exec
+endpoints are never reachable by unauthenticated callers.
 
 **`ExecHandle.Run` is bound into the JS VM as `exec_{slug}.run(command, args?, opts?)`** —
 gated at bind time on `Access`. Wrap in typed tools when you want a
