@@ -3,21 +3,9 @@ package agentsdk
 import (
 	"context"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/sol/websearch"
 )
-
-// SearchProxyRequest is the body for POST /api/agent/search, shared with
-// airlock (which decodes it). Slug names the registered CapSearch model slot
-// whose bound provider Airlock should use; empty slug resolves to the agent's
-// configured search provider (then the system default), exactly like an unbound
-// model slot. The websearch.Request fields are embedded (promoted in JSON) so
-// sol/websearch.Request stays provider-facing — the slug lives only on this
-// envelope.
-type SearchProxyRequest struct {
-	Slug              string `json:"slug,omitempty"`
-	Capability        string `json:"capability,omitempty"`
-	websearch.Request        // embedded: fields promoted to the top-level JSON object
-}
 
 // proxySearchClient implements websearch.Client by calling
 // Airlock's POST /api/agent/search endpoint. No API keys
@@ -27,7 +15,7 @@ type proxySearchClient struct {
 }
 
 func (c *proxySearchClient) Search(ctx context.Context, slug string, req websearch.Request) (*websearch.Response, error) {
-	body := SearchProxyRequest{Slug: slug, Request: req}
+	body := wire.SearchProxyRequest{Slug: slug, Request: req}
 	if slug != "" {
 		body.Capability = string(CapSearch)
 	}
@@ -43,8 +31,8 @@ type proxyHTTPClient struct {
 	client *airlockClient
 }
 
-func (c *proxyHTTPClient) Do(ctx context.Context, req HTTPRequest) (*HTTPResponse, error) {
-	var resp HTTPResponse
+func (c *proxyHTTPClient) Do(ctx context.Context, req wire.HTTPRequest) (*wire.HTTPResponse, error) {
+	var resp wire.HTTPResponse
 	if err := c.client.doJSON(ctx, "POST", "/api/agent/http", req, &resp); err != nil {
 		return nil, err
 	}

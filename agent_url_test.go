@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestAgentURL(t *testing.T) {
@@ -13,7 +15,7 @@ func TestAgentURL(t *testing.T) {
 		t.Fatalf("AgentURL before sync = %q, %v; want ErrAgentURLUnavailable", got, err)
 	}
 
-	a.applySyncResponse(SyncResponse{PromptData: PromptData{AgentRouteURL: "https://todo.example.com"}})
+	a.applySyncResponse(wire.SyncResponse{PromptData: wire.PromptData{AgentRouteURL: "https://todo.example.com"}})
 
 	got, err := a.AgentURL()
 	if err != nil {
@@ -30,7 +32,7 @@ func TestAgentURLFromContext(t *testing.T) {
 	}
 
 	a, _ := testAgent(t)
-	a.applySyncResponse(SyncResponse{PromptData: PromptData{AgentRouteURL: "https://todo.example.com"}})
+	a.applySyncResponse(wire.SyncResponse{PromptData: wire.PromptData{AgentRouteURL: "https://todo.example.com"}})
 	r := newRun(a, "run-1", "", "", context.Background())
 
 	got, err := AgentURLFromContext(contextWithRun(context.Background(), r))

@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/airlockrun/agentsdk/prompt"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq" // register "postgres" driver for agent.DB()
 	"go.uber.org/zap"
@@ -38,11 +41,12 @@ type Agent struct {
 	httpClient  *http.Client
 	client      *airlockClient
 
-	db     *AgentDB
-	dbOnce sync.Once
+	db *AgentDB
 
-	sensitiveSet map[string]struct{}
-	sensitiveM   sync.RWMutex
+	sensitiveSet  map[string]struct{}
+	sensitiveM    sync.RWMutex
+	registrationM sync.Mutex
+	frozen        bool
 
 	tools            map[string]*registeredTool
 	webhooks         map[string]*Webhook
@@ -53,25 +57,21 @@ type Agent struct {
 	envVars          map[string]*EnvVar
 	topics           map[string]*Topic
 	execEndpoints    map[string]*ExecEndpoint
+	staticAssets     map[string]*StaticAsset
 	directories      []*Directory // registration order; longest-prefix wins at lookup
 
 	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
 
 	// Airlock-owned state: discovered server-side at sync time and pushed
-	// back via SyncResponse. /refresh re-runs sync to pick up changes
+	// back via syncResponse. /refresh re-runs sync to pick up changes
 	// (e.g. MCP OAuth completion) without restarting the container.
 	syncMu            sync.RWMutex
-	promptData        PromptData                 // platform-supplied prompt inputs (siblings, URLs); filled by applySyncResponse
-	mcpAuthStatus     []MCPAuthStatus            // per-server auth status (for prompt status lines)
-	mcpSchemas        map[string][]MCPToolSchema // server slug → discovered tools
-	publicStorageBase string                     // base URL for AccessPublic zone reads (subdomain or host-level fallback)
-	syncStateHash     string                     // airlock's config fingerprint at last sync; drift vs a dispatch's ExpectedSyncHash triggers a self-heal resync
-
-	// Deps holds application-level dependencies (connection handles, MCP handles, etc.).
-	// The builder defines their own typed struct and assigns it here.
-	// Access from handlers via GetDeps[T](run).
-	Deps any
+	promptData        wire.PromptData                 // platform-supplied prompt inputs (siblings, URLs); filled by applySyncResponse
+	mcpAuthStatus     []wire.MCPAuthStatus            // per-server auth status (for prompt status lines)
+	mcpSchemas        map[string][]wire.MCPToolSchema // server slug → discovered tools
+	publicStorageBase string                          // base URL for AccessPublic zone reads (subdomain or host-level fallback)
+	syncStateHash     string                          // airlock's config fingerprint at last sync; drift vs a dispatch's ExpectedSyncHash triggers a self-heal resync
 
 	// bg holds the rolling "background" run used for model calls made with
 	// no dispatcher-bound ctx. See background.go.
@@ -104,24 +104,6 @@ func AgentURLFromContext(ctx context.Context) (string, error) {
 		return "", ErrAgentURLUnavailable
 	}
 	return a.AgentURL()
-}
-
-// GetDeps retrieves the typed Deps struct from the Agent bound to ctx.
-// Panics if no agent is bound (must be called from inside a handler), if
-// Deps is nil, or if the type doesn't match. Used by handlers that need
-// the builder's pre-registered application state (connection/MCP handles,
-// config, etc.) — particularly VM functions defined in separate packages
-// where the `agent` variable isn't in scope.
-func GetDeps[T any](ctx context.Context) T {
-	a := AgentFromContext(ctx)
-	if a == nil {
-		panic("agentsdk: GetDeps: no agent bound to ctx — call from inside a handler or tool Execute")
-	}
-	v, ok := a.Deps.(T)
-	if !ok {
-		panic("agentsdk: GetDeps type mismatch — check that agent.Deps is set to the correct type")
-	}
-	return v
 }
 
 // AgentFromContext returns the *Agent associated with a handler's ctx.
@@ -161,16 +143,28 @@ func UserFromContext(ctx context.Context) (User, bool) {
 }
 
 // New creates an Agent by reading required environment variables.
-// Panics if AIRLOCK_AGENT_ID, AIRLOCK_API_URL, or AIRLOCK_AGENT_TOKEN is missing.
+// Panics if AIRLOCK_AGENT_ID, AIRLOCK_API_URL, AIRLOCK_AGENT_TOKEN, or
+// AIRLOCK_DB_URL is missing. The database connection is opened, checked, and
+// migrated before New returns.
 // Panics if Config.Description is empty.
 func New(cfg Config) *Agent {
-	if cfg.Description == "" {
+	if strings.TrimSpace(cfg.Description) == "" {
 		panic("agentsdk: Config.Description is required")
 	}
 
 	agentID := requireEnv("AIRLOCK_AGENT_ID")
 	apiURL := requireEnv("AIRLOCK_API_URL")
 	token := requireEnv("AIRLOCK_AGENT_TOKEN")
+	dsn := requireEnv("AIRLOCK_DB_URL")
+
+	sqlDB, err := sql.Open("postgres", dsn)
+	if err != nil {
+		panic("agentsdk: failed to open database: " + err.Error())
+	}
+	if err := pingDatabase(sqlDB); err != nil {
+		_ = sqlDB.Close()
+		panic("agentsdk: failed to connect to database: " + err.Error())
+	}
 
 	a := &Agent{
 		agentID:          agentID,
@@ -179,6 +173,7 @@ func New(cfg Config) *Agent {
 		description:      cfg.Description,
 		emoji:            cfg.Emoji,
 		httpClient:       &http.Client{},
+		db:               &AgentDB{db: sqlDB},
 		sensitiveSet:     make(map[string]struct{}),
 		tools:            make(map[string]*registeredTool),
 		webhooks:         make(map[string]*Webhook),
@@ -189,10 +184,20 @@ func New(cfg Config) *Agent {
 		envVars:          make(map[string]*EnvVar),
 		topics:           make(map[string]*Topic),
 		execEndpoints:    make(map[string]*ExecEndpoint),
+		staticAssets:     make(map[string]*StaticAsset),
 	}
+	a.db.agent = a
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
-	a.autoMigrate()
+	func() {
+		defer func() {
+			if v := recover(); v != nil {
+				_ = sqlDB.Close()
+				panic(v)
+			}
+		}()
+		a.autoMigrate()
+	}()
 	// Framework-owned scratch directory — used by run_js output truncation
 	// and generated media. Builders may RegisterDirectory("tmp", ...); the
 	// register helper preserves the framework's caps (the description may
@@ -268,33 +273,43 @@ func (a *Agent) Logger(ctx context.Context) *zap.Logger {
 	return agentLogger()
 }
 
-// DB returns a lazily-initialized *AgentDB from AIRLOCK_DB_URL. Returns
-// nil if the env var is not set (DB is optional).
-//
+// DB returns the Agent's owned database pool.
 // AgentDB implements the same DBTX interface that sqlc-generated New()
 // takes, so `mygen.New(agent.DB())` works unchanged. The wrapper is the
 // extension point through which the framework can later record query
 // activity onto the run carried by ctx.
 func (a *Agent) DB() *AgentDB {
-	a.dbOnce.Do(func() {
-		dsn := os.Getenv("AIRLOCK_DB_URL")
-		if dsn == "" {
-			return
-		}
-		db, err := sql.Open("postgres", dsn)
-		if err != nil {
-			panic("agentsdk: failed to open database: " + err.Error())
-		}
-		a.db = &AgentDB{db: db, agent: a}
-	})
 	return a.db
 }
 
+// Close releases the database pool owned by the Agent. Serve calls Close when
+// it stops; tests that construct an Agent with New should also close it.
+func (a *Agent) Close() error {
+	if a.db == nil {
+		return nil
+	}
+	return a.db.db.Close()
+}
+
+func pingDatabase(db *sql.DB) error {
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		err = db.PingContext(ctx)
+		cancel()
+		if err == nil || !isTransientConnError(err) {
+			return err
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
+		}
+	}
+	return err
+}
+
 // renderSystemPrompt builds the per-run system prompt from the agent's
-// live registrations + the platform-supplied PromptData. Replaces the
-// old systemPromptSnapshot lookup table (3 pre-rendered variants from
-// airlock) with on-demand rendering, which is what makes per-user
-// sibling visibility expressible at all.
+// live registrations and platform-supplied promptData. On-demand rendering
+// expresses per-user sibling visibility.
 //
 // caller is the resolved access level for the run; visibleSiblings is
 // the set of sibling IDs this run's user can A2A-call (uuid.Nil
@@ -345,32 +360,29 @@ func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, e
 // snapshotMCPSchemas returns a value-copy of the MCP schema map. Callers
 // (e.g. vm.go) work against the snapshot for the duration of a run so a
 // concurrent /refresh can't mutate the map mid-iteration.
-func (a *Agent) snapshotMCPSchemas() map[string][]MCPToolSchema {
+func (a *Agent) snapshotMCPSchemas() map[string][]wire.MCPToolSchema {
 	a.syncMu.RLock()
 	defer a.syncMu.RUnlock()
 	if a.mcpSchemas == nil {
 		return nil
 	}
-	out := make(map[string][]MCPToolSchema, len(a.mcpSchemas))
+	out := make(map[string][]wire.MCPToolSchema, len(a.mcpSchemas))
 	for k, v := range a.mcpSchemas {
 		out[k] = v
 	}
 	return out
 }
 
-// applySyncResponse atomically stores the platform-supplied PromptData
+// applySyncResponse atomically stores the platform-supplied promptData
 // + MCP discovery results + public storage base URL returned by an
 // Airlock sync round-trip. Called both at startup (from
 // syncWithAirlock in sync.go) and on /refresh.
 //
-// PromptData zero-value (no AgentRouteURL — required field) means
-// either an older Airlock that doesn't speak the new wire shape, or a
-// genuine handler bug. Either way panic loud so the operator sees
-// "your airlock is older than your agentsdk" rather than a silently
-// broken (empty) system prompt.
-func (a *Agent) applySyncResponse(resp SyncResponse) {
+// A zero-value promptData is an incompatible wire response. Panic so the
+// operator sees the sync failure instead of a broken empty system prompt.
+func (a *Agent) applySyncResponse(resp wire.SyncResponse) {
 	if resp.PromptData.AgentRouteURL == "" {
-		panic("agentsdk: applySyncResponse: empty PromptData.AgentRouteURL — Airlock is older than the prompt-rendering migration; upgrade Airlock to at least the version that ships PromptData")
+		panic("agentsdk: applySyncResponse: empty promptData.agentRouteUrl; Airlock and agentsdk versions are incompatible")
 	}
 	a.syncMu.Lock()
 	a.promptData = resp.PromptData
@@ -383,7 +395,7 @@ func (a *Agent) applySyncResponse(resp SyncResponse) {
 
 // syncedStateHash returns airlock's config fingerprint as of the last
 // applied sync. A dispatch whose ExpectedSyncHash differs means the agent's
-// cached PromptData is stale; the /prompt path resyncs to catch up.
+// cached promptData is stale; the /prompt path resyncs to catch up.
 func (a *Agent) syncedStateHash() string {
 	a.syncMu.RLock()
 	defer a.syncMu.RUnlock()
@@ -391,18 +403,18 @@ func (a *Agent) syncedStateHash() string {
 }
 
 // buildPromptData assembles prompt.AgentData from the agent's
-// in-memory registrations + the platform's PromptData. Caller holds
+// in-memory registrations and the platform's promptData. The caller holds
 // no locks; we grab syncMu.RLock internally.
 //
 // caller filtering happens inside prompt.Render — we just hand it
 // every tool/conn/etc. registered with the agent. Sibling visibility
-// is per-user (not per-tier) so we intersect PromptData.Siblings
+// is per-user (not per-tier) so we intersect promptData.Siblings
 // with visibleSiblings here.
 func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prompt.AgentData {
 	a.syncMu.RLock()
 	pd := a.promptData
-	auth := append([]MCPAuthStatus(nil), a.mcpAuthStatus...)
-	schemas := make(map[string][]MCPToolSchema, len(a.mcpSchemas))
+	auth := append([]wire.MCPAuthStatus(nil), a.mcpAuthStatus...)
+	schemas := make(map[string][]wire.MCPToolSchema, len(a.mcpSchemas))
 	for k, v := range a.mcpSchemas {
 		schemas[k] = v
 	}
@@ -484,7 +496,7 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prom
 	}
 
 	mcpServers := make([]prompt.MCPServerStatus, 0, len(a.mcps))
-	authBySlug := make(map[string]MCPAuthStatus, len(auth))
+	authBySlug := make(map[string]wire.MCPAuthStatus, len(auth))
 	for _, s := range auth {
 		authBySlug[s.Slug] = s
 	}

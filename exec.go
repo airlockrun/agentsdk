@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // ExecHandle is the compile-time-bound handle returned by RegisterExecEndpoint.
@@ -93,7 +95,7 @@ func (h *ExecHandle) RunStream(ctx context.Context, cmd ExecCommand) (*ExecStrea
 		return nil, &ExecError{Kind: "config", Message: "Command is required"}
 	}
 
-	reqBody := ExecRequest{
+	reqBody := wire.ExecRequest{
 		Command:   cmd.Command,
 		Args:      cmd.Args,
 		TimeoutMs: cmd.Timeout.Milliseconds(),

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // ConnectionHandle is a compile-time binding to a registered connection.
@@ -73,7 +75,7 @@ func (h *ConnectionHandle) RequestStream(ctx context.Context, opts RequestOpts) 
 		return nil, fmt.Errorf("agentsdk: encode proxy body: %w", err)
 	}
 
-	reqBody := ProxyRequest{Method: method, Path: opts.Path, Body: string(bodyBytes), Headers: opts.Headers}
+	reqBody := wire.ProxyRequest{Method: method, Path: opts.Path, Body: string(bodyBytes), Headers: opts.Headers}
 	b, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, err

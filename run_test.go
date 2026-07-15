@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestConnectionHandleProxy(t *testing.T) {
@@ -30,7 +32,7 @@ func TestConnectionHandleProxy(t *testing.T) {
 
 func TestDirectoryWriteAndRead(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser})
+	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 
 	if _, err := a.WriteFile(context.Background(), "uploads/test.txt", strings.NewReader("hello"), "text/plain"); err != nil {
 		t.Fatal(err)
@@ -51,8 +53,8 @@ func TestDirectoryWriteAndRead(t *testing.T) {
 // `agent.LLM` calls made with a ctx that has no dispatcher-bound run.
 func TestBackgroundRun(t *testing.T) {
 	a, mock := testAgent(t)
-	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText})
-	a.RegisterModel(&ModelSlot{Slug: "analyze", Capability: CapText})
+	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Summaries"})
+	a.RegisterModel(&ModelSlot{Slug: "analyze", Capability: CapText, Description: "Analysis"})
 
 	// agent.LLM with plain ctx triggers background run creation.
 	m := a.LLM(context.Background(), "summarize")
@@ -67,7 +69,7 @@ func TestBackgroundRun(t *testing.T) {
 	if len(createReqs) != 1 {
 		t.Fatalf("expected 1 run/create request, got %d", len(createReqs))
 	}
-	var createBody CreateRunRequest
+	var createBody wire.CreateRunRequest
 	if err := json.Unmarshal(createReqs[0].Body, &createBody); err != nil {
 		t.Fatal(err)
 	}

@@ -10,13 +10,13 @@ func noopFire(context.Context, *EventWriter) error { return nil }
 
 func TestRegisterScheduleSlug_UniqueAcrossKinds(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterCron(&Cron{Slug: "x", Schedule: "0 9 * * *", Handler: noopFire})
+	a.RegisterCron(&Cron{Slug: "x", Schedule: "0 9 * * *", Handler: noopFire, Description: "Daily task"})
 	defer func() {
 		if recover() == nil {
 			t.Fatal("registering a schedule with a taken cron slug should panic")
 		}
 	}()
-	a.RegisterSchedule(&Schedule{Slug: "x", Handler: noopFire})
+	a.RegisterSchedule(&Schedule{Slug: "x", Handler: noopFire, Description: "One-shot task"})
 }
 
 func TestScheduleAt_UnknownSlug(t *testing.T) {

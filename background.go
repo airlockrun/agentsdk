@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // Rolling "background" run used for model calls made outside any dispatcher-
@@ -113,8 +115,8 @@ func (a *Agent) runForCall(ctx context.Context) *run {
 // Used by both lazyRun (trigger_type="code") and backgroundRunFor
 // (trigger_type="background").
 func (a *Agent) newRunFromAirlock(ctx context.Context, triggerType, triggerRef string) *run {
-	var resp CreateRunResponse
-	req := CreateRunRequest{TriggerType: triggerType, TriggerRef: triggerRef}
+	var resp wire.CreateRunResponse
+	req := wire.CreateRunRequest{TriggerType: triggerType, TriggerRef: triggerRef}
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/run/create", req, &resp); err != nil {
 		// Fail loud: background/lazy runs are observability; if we can't
 		// create one, returning a disconnected run would silently lose

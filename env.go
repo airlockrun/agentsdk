@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // EnvVar declares an operator-configured environment variable the agent
@@ -106,7 +108,7 @@ func (h *EnvVarHandle) Get(ctx context.Context) (string, error) {
 	}
 	h.mu.Unlock()
 
-	var resp EnvVarValueResponse
+	var resp wire.EnvVarValueResponse
 	if err := h.agent.client.doJSON(ctx, "GET", "/api/agent/env-vars/"+h.slug, nil, &resp); err != nil {
 		if h.defaultValue == "" || !isMissingEnvVarValue(err) {
 			return "", fmt.Errorf("agentsdk: get env var %q: %w", h.slug, err)

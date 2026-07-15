@@ -3,12 +3,16 @@ package agentsdk
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // reservedTmpPath is the framework-owned scratch directory used by run_js
@@ -47,13 +51,13 @@ var ErrInvalidPath = errors.New("agentsdk: invalid path")
 
 // --- Caller plumbing ---
 
-// Caller carries the access level of whoever triggered the current
+// caller carries the access level of whoever triggered the current
 // dispatch. Framework dispatch sites (tool Execute, VM bindings, cron,
-// webhook, route, subdomain proxy) inject one onto ctx via WithCaller.
+// webhook, route, subdomain proxy) inject one onto ctx via withCaller.
 // Builder Go code that constructs paths itself does NOT need to set a
 // caller — it calls the trusted file API directly (OpenFile/ReadFile/
 // WriteFile/StatFile/ListDir/DeleteFile) which bypasses CheckFileAccess.
-type Caller struct {
+type caller struct {
 	Access Access
 	UserID string // optional, for audit
 	RunID  string // optional, for audit
@@ -61,23 +65,23 @@ type Caller struct {
 
 type callerCtxKey struct{}
 
-// WithCaller attaches a Caller to ctx. Used by the framework when
+// withCaller attaches a caller to ctx. Used by the framework when
 // dispatching into untrusted territory (LLM-driven VM, public HTTP).
-func WithCaller(ctx context.Context, c Caller) context.Context {
+func withCaller(ctx context.Context, c caller) context.Context {
 	return context.WithValue(ctx, callerCtxKey{}, c)
 }
 
-// CallerFrom returns the Caller attached to ctx, defaulting to
+// callerFromContext returns the caller attached to ctx, defaulting to
 // AccessPublic when none is set. This is the fail-closed default:
 // forgetting to tag ctx denies access to anything user-or-above.
-func CallerFrom(ctx context.Context) Caller {
-	if v, ok := ctx.Value(callerCtxKey{}).(Caller); ok {
+func callerFromContext(ctx context.Context) caller {
+	if v, ok := ctx.Value(callerCtxKey{}).(caller); ok {
 		if v.Access == "" {
 			v.Access = AccessPublic
 		}
 		return v
 	}
-	return Caller{Access: AccessPublic}
+	return caller{Access: AccessPublic}
 }
 
 // --- Path normalization ---
@@ -200,7 +204,7 @@ func (a *Agent) CheckFileAccess(ctx context.Context, path string, op FileOp) err
 		return ErrNotFound
 	}
 	cap := dirCap(d, op)
-	caller := CallerFrom(ctx)
+	caller := callerFromContext(ctx)
 	if accessSatisfies(caller.Access, cap) {
 		return nil
 	}
@@ -477,15 +481,15 @@ func (a *Agent) ShareFileURL(ctx context.Context, path string, ttl time.Duration
 	if err != nil {
 		return nil, err
 	}
-	body := ShareFileRequest{
+	body := wire.ShareFileRequest{
 		Path:           canon,
 		ExpiresSeconds: int64(ttl.Seconds()),
 	}
-	var resp ShareFileResponse
+	var resp wire.ShareFileResponse
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/storage/share", body, &resp); err != nil {
 		return nil, err
 	}
-	return &resp, nil
+	return &ShareFileResponse{URL: resp.URL, ExpiresAtMs: resp.ExpiresAtMs}, nil
 }
 
 // --- Internal helpers ---
@@ -579,14 +583,30 @@ func (a *Agent) statFileRaw(ctx context.Context, path string) (FileInfo, error) 
 	body := struct {
 		Path string `json:"path"`
 	}{path}
-	var info FileInfo
-	if err := a.client.doJSON(ctx, "POST", "/api/agent/storage/info", body, &info); err != nil {
+	data, err := json.Marshal(body)
+	if err != nil {
 		return FileInfo{}, err
 	}
-	if info.Path == "" {
-		info.Path = FilePath(path)
+	resp, err := a.client.do(ctx, "POST", "/api/agent/storage/info", bytes.NewReader(data))
+	if err != nil {
+		return FileInfo{}, err
 	}
-	return info, nil
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return FileInfo{}, ErrNotFound
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		responseBody, _ := io.ReadAll(resp.Body)
+		return FileInfo{}, fmt.Errorf("agentsdk: statFile %s: status %d: %s", path, resp.StatusCode, string(responseBody))
+	}
+	var info wire.FileInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return FileInfo{}, fmt.Errorf("agentsdk: statFile %s: decode response: %w", path, err)
+	}
+	if info.Path == "" {
+		info.Path = path
+	}
+	return fileInfoFromWire(info), nil
 }
 
 func (a *Agent) copyFileRaw(ctx context.Context, src, dst string) error {
@@ -603,9 +623,13 @@ func (a *Agent) listDirRaw(ctx context.Context, path string, recursive bool) ([]
 	if recursive {
 		q.Set("recursive", "true")
 	}
-	var files []FileInfo
+	var files []wire.FileInfo
 	if err := a.client.doJSON(ctx, "GET", "/api/agent/storage?"+q.Encode(), nil, &files); err != nil {
 		return nil, err
 	}
-	return files, nil
+	out := make([]FileInfo, len(files))
+	for i, info := range files {
+		out[i] = fileInfoFromWire(info)
+	}
+	return out, nil
 }

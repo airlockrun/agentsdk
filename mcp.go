@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // MCPHandle is a compile-time binding to a registered MCP server.
@@ -26,15 +28,16 @@ func (h *MCPHandle) CallTool(ctx context.Context, toolName string, args any) (*M
 	if err != nil {
 		return nil, fmt.Errorf("MCPHandle.CallTool: encode args: %w", err)
 	}
-	req := MCPToolCallRequest{
+	req := wire.MCPToolCallRequest{
 		Tool:      toolName,
 		Arguments: argsJSON,
 	}
-	var resp MCPToolCallResponse
+	var resp wire.MCPToolCallResponse
 	if err := h.agent.client.doJSON(ctx, "POST", "/api/agent/mcp/"+h.slug+"/tools/call", req, &resp); err != nil {
 		return nil, fmt.Errorf("MCPHandle.CallTool %s/%s: %w", h.slug, toolName, err)
 	}
-	return &resp, nil
+	result := mcpToolCallResponseFromWire(resp)
+	return &result, nil
 }
 
 func encodeMCPArgs(args any) (json.RawMessage, error) {

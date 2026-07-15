@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -51,20 +52,20 @@ func agentLogger() *zap.Logger {
 	return baseLogger
 }
 
-// zapLevelToLogLevel collapses a zap level onto the three-value LogLevel
+// zapLevelToLogLevel collapses a zap level onto the four-value logLevel
 // the wire format carries. Levels above error (DPanic/Panic/Fatal) fold
 // into error — the run buffer is a diagnostic snapshot, not a faithful
 // level ladder.
-func zapLevelToLogLevel(l zapcore.Level) LogLevel {
+func zapLevelToLogLevel(l zapcore.Level) wire.LogLevel {
 	switch {
 	case l >= zapcore.ErrorLevel:
-		return LogLevelError
+		return wire.LogLevelError
 	case l == zapcore.WarnLevel:
-		return LogLevelWarn
+		return wire.LogLevelWarn
 	case l <= zapcore.DebugLevel:
-		return LogLevelDebug
+		return wire.LogLevelDebug
 	default:
-		return LogLevelInfo
+		return wire.LogLevelInfo
 	}
 }
 

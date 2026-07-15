@@ -29,7 +29,6 @@ For the complete SDK surface and runtime contracts, read the
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 
@@ -44,8 +43,9 @@ func main() {
 	agent.RegisterRoute(&agentsdk.Route{
 		Method: http.MethodGet,
 		Path:   "/",
-		Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintln(w, "hello from a cyborg agent")
+		Handler: func(w http.ResponseWriter, r *http.Request) error {
+			_, err := fmt.Fprintln(w, "hello from a cyborg agent")
+			return err
 		},
 		Access:      agentsdk.AccessPublic,
 		Description: "Greet anyone who visits the home route.",
@@ -62,6 +62,10 @@ In a real agent you'd also call `RegisterTool`, `RegisterWebhook`, `RegisterCron
 agentsdk's public API is treated as a **stability commitment**: changes to exported types, functions, or runtime behavior are kept backwards-compatible across minor versions. Older built agents must continue to work against newer agentsdk releases.
 
 Internal/unexported code can change freely. Non-trivial API changes go through a Discussion before any PR — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+The root package contains only APIs used by agent code. Airlock HTTP payloads
+and runtime bookkeeping are package-private. Test code uses
+`github.com/airlockrun/agentsdk/agenttest` for its mock Airlock and environment.
 
 ## Companion projects
 

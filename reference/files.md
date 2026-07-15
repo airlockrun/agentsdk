@@ -44,8 +44,9 @@ agent.RegisterDirectory("generated-images", agentsdk.DirectoryOpts{
 
 `Read` / `Write` / `List` are independent caps. `delete` folds into `Write`
 (write on the parent governs unlink). Each can be `AccessAdmin`, `AccessUser`,
-or `AccessPublic`. To hide a directory from the LLM while keeping it reachable
-from your Go code, set the caps to `AccessAdmin` and add an `LLMHint` like
+or `AccessPublic`; all three and `Description` are required. To hide a directory
+from the LLM while keeping it reachable from your Go code, set the caps to
+`AccessAdmin` and add an `LLMHint` like
 `"internal cache; do not read, write, or list"` — the hint is purely
 model-facing guidance surfaced in the system prompt, while the trusted Go file
 API (`agent.OpenFile`/`ReadFile`/...) bypasses `CheckFileAccess` entirely so

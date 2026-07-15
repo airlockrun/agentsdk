@@ -23,8 +23,11 @@ file is the canonical SDK reference.
 
 An agent is a normal Go program. In `main()` you construct an agent, *register*
 capabilities on it (tools, connections, MCP servers, webhooks, crons, routes,
-topics, storage directories), then call `agent.Serve()`, which starts an HTTP
-server and blocks.
+static assets, topics, storage directories), then call `agent.Serve()`, which
+starts an HTTP server and blocks.
+
+The first `Serve`, `Handler`, or sync validates and freezes registrations.
+Later registration panics; the SDK snapshots caller-owned declarations.
 
 At runtime the LLM does **not** see your Go functions directly. It sees one
 tool, `run_js`, a JavaScript VM. Everything you register with `RegisterTool`
@@ -63,13 +66,21 @@ After writing code, run the SDK-owned build chain:
 go tool air build
 ```
 
-This regenerates sqlc and templ output, reconciles module sums, compiles
-Tailwind and DaisyUI, and verifies the Go binary without leaving it in the
-source tree.
+This reconciles module sums, conditionally generates sqlc output when
+`db/queries/*.sql` exists, generates templ output, compiles Tailwind and
+DaisyUI, runs `go test -count=1 ./...`, and verifies the Go binary without
+leaving it in the source tree.
 
-The Docker and local build chains regenerate sqlc, templ, and Tailwind output.
-Commit migrations, query SQL, and `internal/db/doc.go`; do not commit generated
-`internal/db/*.go`, `*_templ.go`, or `views/static/app.css` files.
+Generated `*_templ.go`, `views/static/app.css`, `internal/db/*` (except the
+tracked `internal/db/doc.go`), and root `agent` binaries are disposable and
+gitignored. Commit their source inputs; local and Docker builds regenerate the
+outputs.
+
+Agent integration tests use `agenttest.New(t, factory)`, which configures the
+Airlock API mock and test database before constructing the agent. The returned
+`Env.Airlock` records platform calls for assertions. Tests that only need the
+HTTP mock can use `agenttest.NewMockAirlock`; transport payload types remain an
+SDK runtime detail rather than part of the root author API.
 
 ## Design principle: always register granular tools
 
@@ -87,10 +98,9 @@ assistant in this domain?" and register those tools.
 
 ## Worked example
 
-A connection + dependency injection + granular tools. Routes, crons, webhooks
-and the rest follow the same `Register*` shape — register the capability in
-`main()`, keep the logic in a domain package, retrieve handles via
-`GetDeps`.
+A connection + typed dependency injection + granular tools. Routes, crons,
+webhooks and the rest follow the same `Register*` shape: `newAgent` constructs
+the dependency graph once, then registers bound methods from domain packages.
 
 ```go
 // main.go
@@ -100,9 +110,14 @@ import (
     "agent/deps"
     "agent/spotify"
     "github.com/airlockrun/agentsdk"
+    "github.com/airlockrun/goai/tool"
 )
 
 func main() {
+    newAgent().Serve()
+}
+
+func newAgent() *agentsdk.Agent {
     agent := agentsdk.New(agentsdk.Config{
         Description: "Spotify agent — playback control and search",
     })
@@ -121,18 +136,15 @@ func main() {
         Access:        agentsdk.AccessUser,
     })
 
-    agent.Deps = &deps.Deps{Spotify: spotifyConn}
+    appDeps := deps.New(spotifyConn)
+    tools := spotify.NewTools(appDeps)
 
     agent.RegisterTool(tool.Typed[spotify.SearchIn, spotify.SearchOut]("search_tracks").
         Description("Search Spotify tracks.").
-        Execute(spotify.SearchTracks).
-        Build(), agentsdk.AccessUser)
-    agent.RegisterTool(tool.Typed[spotify.PlayIn, spotify.PlayOut]("play").
-        Description("Start or resume playback.").
-        Execute(spotify.Play).
+        Execute(tools.SearchTracks).
         Build(), agentsdk.AccessUser)
 
-    agent.Serve()
+    return agent
 }
 ```
 
@@ -145,6 +157,13 @@ import "github.com/airlockrun/agentsdk"
 type Deps struct {
     Spotify *agentsdk.ConnectionHandle
 }
+
+func New(spotify *agentsdk.ConnectionHandle) *Deps {
+    if spotify == nil {
+        panic("deps: Spotify is required")
+    }
+    return &Deps{Spotify: spotify}
+}
 ```
 
 ```go
@@ -154,66 +173,47 @@ package spotify
 import (
     "context"
     "encoding/json"
-    "fmt"
     "net/url"
 
     "agent/deps"
     "github.com/airlockrun/agentsdk"
 )
 
-type Track struct{ Name, URI, Artist string }
-
 type SearchIn struct {
     Query string `json:"query" jsonschema:"description=Search query"`
-    Limit int    `json:"limit,omitempty" jsonschema:"minimum=1,maximum=50"`
 }
 type SearchOut struct {
-    Tracks []Track `json:"tracks"`
+    Response json.RawMessage `json:"response"`
 }
 
-func SearchTracks(ctx context.Context, in SearchIn) (SearchOut, error) {
-    d := agentsdk.GetDeps[*deps.Deps](ctx)
-    if in.Limit <= 0 {
-        in.Limit = 10
+type Tools struct {
+    deps *deps.Deps
+}
+
+func NewTools(d *deps.Deps) *Tools {
+    if d == nil {
+        panic("spotify: deps are required")
     }
-    body, err := d.Spotify.Request(ctx, agentsdk.RequestOpts{
-        Path: fmt.Sprintf("/v1/search?type=track&limit=%d&q=%s", in.Limit, url.QueryEscape(in.Query)),
+    return &Tools{deps: d}
+}
+
+func (t *Tools) SearchTracks(ctx context.Context, in SearchIn) (SearchOut, error) {
+    body, err := t.deps.Spotify.Request(ctx, agentsdk.RequestOpts{
+        Path: "/v1/search?type=track&q=" + url.QueryEscape(in.Query),
     })
     if err != nil {
         return SearchOut{}, err
     }
-    var raw struct {
-        Tracks struct {
-            Items []Track `json:"items"`
-        } `json:"tracks"`
-    }
-    if err := json.Unmarshal(body, &raw); err != nil {
-        return SearchOut{}, err
-    }
-    return SearchOut{Tracks: raw.Tracks.Items}, nil
-}
-
-type PlayIn struct{ TrackURI string `json:"trackURI,omitempty"` }
-type PlayOut struct{ OK bool `json:"ok"` }
-
-func Play(ctx context.Context, in PlayIn) (PlayOut, error) {
-    d := agentsdk.GetDeps[*deps.Deps](ctx)
-    var body any
-    if in.TrackURI != "" {
-        body = map[string]any{"uris": []string{in.TrackURI}}
-    }
-    if _, err := d.Spotify.Request(ctx, agentsdk.RequestOpts{
-        Method: "PUT", Path: "/v1/me/player/play", Body: body,
-    }); err != nil {
-        return PlayOut{}, err
-    }
-    return PlayOut{OK: true}, nil
+    return SearchOut{Response: json.RawMessage(body)}, nil
 }
 ```
 
 **Key patterns:**
 - `RegisterConnection` returns `*ConnectionHandle`; use it for all API calls.
-- `agent.Deps` stores handles; tool funcs retrieve via `agentsdk.GetDeps[*deps.Deps](ctx)`.
+- `deps.New` takes every required handle and service; changing its signature
+  exposes missing composition as a compile error.
+- Handlers and tools are methods on constructed receiver types. `newAgent`
+  registers bound methods such as `tools.SearchTracks`.
 - `handle.Request(ctx, agentsdk.RequestOpts{Path: ...})` returns raw bytes.
   `RequestOpts.Method` defaults to `"GET"`; `Body` auto-encodes (struct → JSON,
   `[]byte`/`string` as-is, `nil` → no body); `Headers` is an optional
@@ -242,36 +242,17 @@ noise when every entry in the list is a bot. A Spotify agent is 🎧, a
 weather agent 🌦️, an invoicing agent 🧾, a calendar agent 📅. Think
 "what is this agent *about*?", not "what is this agent?".
 
-## Agent.Deps — dependency injection
+## Typed dependency composition
 
-`Deps` lives in its own `deps` package so `main.go` and every domain
-package can import the same type (see Project layout).
+`Deps` lives in its own `deps` package so `main.go`, handlers, and domain
+packages can import the same type. Its constructor is the single place that
+assembles required handles and services. Keep `newAgent` as a thin composition
+root: register SDK handles, call `deps.New` once, construct receiver-based
+handlers/tools/services, and register their bound methods.
 
-```go
-// deps/deps.go
-package deps
-
-type Deps struct {
-    Gmail   *agentsdk.ConnectionHandle
-    GitHub  *agentsdk.MCPHandle
-    Reports *agentsdk.TopicHandle
-}
-```
-
-```go
-// main.go
-agent.Deps = &deps.Deps{
-    Gmail:   agent.RegisterConnection(&agentsdk.Connection{Slug: "gmail", /* ... */}),
-    GitHub:  agent.RegisterMCP(&agentsdk.MCP{Slug: "github", /* ... */}),
-    Reports: agent.RegisterTopic(&agentsdk.Topic{Slug: "reports", Description: "Weekly reports"}),
-}
-
-// In any handler (any domain package):
-func DoSomething(ctx context.Context, in SomeIn) (SomeOut, error) {
-    d := agentsdk.GetDeps[*deps.Deps](ctx) // panics if type mismatch
-    // use d.Gmail, d.GitHub, d.Reports
-}
-```
+The worked example above shows the complete shape. Add required constructor
+parameters and fields together, reject nil required values in constructors,
+and use the same receiver pattern for handlers and services.
 
 ## RegisterTool
 
@@ -353,7 +334,8 @@ the LLM tells platform primitives from agent-declared tools.
 **Error handling:** return `error` from `Execute` — converted to a JS `throw`
 inside `run_js`. Don't panic.
 
-**Access:** `AccessUser` (default), `AccessAdmin`, `AccessPublic`.
+**Access:** required and explicit: `AccessUser`, `AccessAdmin`, or
+`AccessPublic`.
 
 **Optional:** `InputExamples: []In{...}` renders `@example` JSDoc lines
 alongside the signature.
@@ -396,10 +378,9 @@ agent.RegisterWebhook(&agentsdk.Webhook{
     Handler: func(ctx context.Context, data []byte, ew *agentsdk.EventWriter) error {
         return nil
     },
-    Verify:      "hmac",                // "none" | "hmac" | "token" | "bearer" | "ed25519" (default "none")
-    Header:      "X-Hub-Signature-256", // signature/token header (hmac/ed25519)
+    Verify:      "hmac",                // required: "none" | "hmac" | "token" | "bearer" | "ed25519"
+    Header:      "X-Hub-Signature-256", // signature header (required for hmac, optional for ed25519)
     Description: "GitHub push events",
-    Access:      agentsdk.AccessUser,
 })
 ```
 
@@ -407,6 +388,8 @@ Airlock verifies the request before the handler runs (the per-webhook secret it
 manages): `hmac` (HMAC-SHA256 of the body, GitHub `sha256=` prefix tolerated),
 `token` (`?token=`), `bearer` (`Authorization: Bearer`), `ed25519` (Discord-style
 asymmetric over `timestamp‖body`, ±5-min skew). So the handler is trusted.
+Use `Verify: "none"` explicitly for an unverified webhook. `Description` is
+required; zero `Timeout` means two minutes and negative values are rejected.
 
 ## RegisterCron / RegisterSchedule — timed handlers
 
@@ -460,8 +443,8 @@ the agent's subdomain.
 agent.RegisterRoute(&agentsdk.Route{
     Method: "GET",
     Path:   "/api/data",
-    Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-        json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+    Handler: func(w http.ResponseWriter, r *http.Request) error {
+        return json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
     },
     Access:      agentsdk.AccessUser,
     Description: "Get data",
@@ -469,6 +452,10 @@ agent.RegisterRoute(&agentsdk.Route{
 ```
 
 **Always provide a Description.**
+
+Return `agentsdk.NewHTTPError(status, publicMessage, cause)` for an intentional
+4xx/5xx. The SDK sends only the public message and records the internal cause.
+Other returned errors become a generic 500.
 
 **Access:**
 - `AccessUser` — **default choice.** Any agent member.
@@ -485,32 +472,39 @@ agentsdk bundles htmx and exposes:
 - `agentsdk.HTMXVersion` — the bundled version string, if you need it
   programmatically.
 
-**`/__air/assets/*` is framework-reserved.** agentsdk owns this prefix
-for its bundled assets. For YOUR own static files (icons, fonts,
-page-specific assets), embed them under your agent and serve them from
-a route you register — the scaffold uses `/static/{name}` for the
-compiled Tailwind stylesheet; extend that handler for additional
-files.
+**`/__air/assets/*` is framework-reserved.** agentsdk owns this prefix for its
+bundled assets. Register your embedded static files with
+`RegisterStaticAsset`; the SDK serves them publicly from `/static/{name}` with
+`Cache-Control: public, max-age=31536000, immutable` and
+`X-Content-Type-Options: nosniff`. Names are one URL-safe path segment and
+should contain a content hash whenever bytes can change. Unknown names return
+404. Declarations are copied and frozen with all other registrations.
 
-> Templ + htmx + Tailwind + DaisyUI build chain, the MVC split,
-> view-model conventions, and design taste guidance all live in the
-> agent's own **`AGENTS.md`** at the repo root — that's the
-> scaffold-level "how to wire this together" doc. This file documents
-> only the SDK-side surface.
+```go
+agent.RegisterStaticAsset(&agentsdk.StaticAsset{
+    Name:        views.AppCSSName, // e.g. app.01234567.css
+    ContentType: "text/css; charset=utf-8",
+    Data:        views.AppCSS,
+})
+```
+
+> UI build, MVC, and design conventions live in the agent's `AGENTS.md`.
 
 ```go
 // Registering a templ page (illustrative — the scaffold already
-// wires up `/` to handlers.Home).
+// wires up `/` to a bound handler method).
 import (
     "github.com/a-h/templ"
     "agent/handlers"
 )
 
+pages := handlers.New(appDeps)
 agent.RegisterRoute(&agentsdk.Route{
     Method:  "GET",
     Path:    "/",
-    Handler: handlers.Home,
+    Handler: pages.Home,
     Access:  agentsdk.AccessUser,
+    Description: "Home page",
 })
 ```
 
@@ -626,8 +620,8 @@ Declare a slug for running commands on a server the container can't reach as a
 built-in tool (a VPS over SSH, a CI runner, a homelab box). Airlock owns the
 SSH transport and credentials; the operator configures host/user in the UI; you
 wrap calls in typed tools. The handle's `Run(ctx, ExecCommand{...})` returns a
-structured small result; `RunStream(...)` streams a data download. Default
-`Access` is `AccessAdmin` (`AccessPublic` is silently demoted to `AccessUser`).
+structured small result; `RunStream(...)` streams a data download. `Access` is
+required and must be `AccessAdmin` or `AccessUser`; `AccessPublic` is rejected.
 
 ```go
 ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
@@ -739,6 +733,7 @@ Registration is required: every slug you pass to a model getter must be declared
 with `RegisterModel` first. Calling a getter with an unregistered (or empty)
 slug panics — a missing declaration is a programmer error, not a silent
 fall-through to some default model.
+Slugs must be valid and unique; capability constants and `Description` are required.
 
 ```go
 agent.RegisterModel(&agentsdk.ModelSlot{
@@ -782,6 +777,7 @@ alerts.Publish(ctx, []agentsdk.DisplayPart{
 
 The runtime LLM subscribes the current conversation via
 `topic_{slug}.subscribe()`.
+`Description` and `Access` are required.
 
 ## RegisterDirectory — file storage
 
@@ -789,7 +785,8 @@ The agent has its own **S3-like object storage** — there is no container
 filesystem you expose to tools or the LLM. Every path is a slashless S3 key
 (`uploads/x.csv`, `reports/q1.pdf`, `tmp/foo.png`); leading slashes are
 rejected. Register a directory to declare per-capability access (`Read` /
-`Write` / `List`) and an optional `LLMHint`:
+`Write` / `List`) and an optional `LLMHint`. All three access values and the
+model-facing `Description` are required:
 
 ```go
 agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
@@ -809,9 +806,10 @@ shelling out to a CLI over storage, and presigned URLs:
 
 ## Agent methods (ctx-first)
 
-Every handler — Tool, Webhook, Cron, Route — receives `context.Context` first.
-Pass it through. Model calls and logging are tracked in the Runs UI for the
-invoking handler; you never construct a Run yourself.
+Tool, webhook, and timed handlers receive `context.Context` directly. Route
+handlers use `r.Context()`. Pass that context through. Model calls and logging
+are tracked in the Runs UI for the invoking handler; you never construct a Run
+yourself.
 
 ```go
 // Models — all ctx-first; slug must be declared with RegisterModel
@@ -833,7 +831,7 @@ log.Info("imported rows", zap.Int("count", 42))
 // Storage — trusted; no CheckFileAccess. See /libs/agentsdk/reference/files.md.
 agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir / DeleteFile / CopyFile
 agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead) // gate paths from untrusted sources
-agent.DB() // *AgentDB — pass to sqlc-generated New() (nil if AIRLOCK_DB_URL unset)
+agent.DB() // required *AgentDB pool — pass to sqlc-generated New()
 ```
 
 `AuthRequiredError` from `ConnectionHandle.Request` means the user must
@@ -1196,10 +1194,10 @@ you call `Serve`, not synchronously in `main()` before it.
 A full Postgres schema (usually with pgvector — pair vector columns with
 `agent.EmbeddingModel(ctx, slug)`). Tables via goose migrations in
 `db/migrations/`; queries via sqlc (`db/queries/` → generated `internal/db/`).
-`agent.DB()` returns `*AgentDB` (wraps `*sql.DB`, `nil` if `AIRLOCK_DB_URL`
-unset) — pass it straight to the generated `New()`. Migrations run automatically
-at container startup. **Always use sqlc** — never raw `db.QueryRow` / `db.Exec`
-strings in Go.
+`AIRLOCK_DB_URL` is required. `agentsdk.New` opens and bounded-pings one owned
+pool, then runs migrations before returning. `agent.DB()` always returns its
+`*AgentDB`; pass it straight to the generated `New()`. **Always use sqlc** —
+never raw `db.QueryRow` / `db.Exec` strings in Go.
 
 ```go
 db := agent.DB()
@@ -1207,6 +1205,6 @@ queries := internaldb.New(db) // import "agent/internal/db" as internaldb
 users, err := queries.ListActiveUsers(ctx)
 ```
 
-→ Migration file format, numbering, Go migrations (Tx vs NoTx), guarding
-external side effects with `IsValidatingMigrations()`, and build-time
-validation: **`/libs/agentsdk/reference/database.md`**.
+→ Migration file format, numbering, Go migrations (Tx vs NoTx), repeat-safe
+external steps, and build-time validation:
+**`/libs/agentsdk/reference/database.md`**.

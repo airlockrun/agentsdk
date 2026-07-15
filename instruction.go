@@ -10,11 +10,13 @@ package agentsdk
 // Only /prompt-triggered runs (web + bridge) receive instructions — webhook and
 // cron handlers run arbitrary Go code and build their own prompts.
 func (a *Agent) AddInstruction(p *Instruction) {
+	done := a.beginRegistration("AddInstruction")
+	defer done()
 	if p == nil {
 		panic("agentsdk: AddInstruction: nil *Instruction")
 	}
-	if p.Text == "" {
-		panic("agentsdk: AddInstruction: Text is required")
-	}
-	a.instructions = append(a.instructions, p)
+	copy := *p
+	copy.Access = append([]Access(nil), p.Access...)
+	validateInstruction(&copy)
+	a.instructions = append(a.instructions, &copy)
 }

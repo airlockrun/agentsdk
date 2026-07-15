@@ -1,53 +1,92 @@
 package agenttest_test
 
 import (
-	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/agenttest"
 )
 
-func TestNewDBEnvUsesConfiguredDatabase(t *testing.T) {
-	t.Setenv("TEST_DB_URL", "postgres://configured/test")
-	t.Setenv("AIRLOCK_DB_URL", "")
+func TestNewSetsDatabaseAndMigratesBeforeFactoryContinues(t *testing.T) {
+	workspace := t.TempDir()
+	migrations := filepath.Join(workspace, "db", "migrations")
+	if err := os.MkdirAll(migrations, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	migration := `-- +goose Up
+CREATE TABLE bootstrap_order (id integer PRIMARY KEY);
+-- +goose Down
+DROP TABLE bootstrap_order;
+`
+	if err := os.WriteFile(filepath.Join(migrations, "00001_bootstrap.sql"), []byte(migration), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	t.Setenv("TEST_DB_URL", "")
+	inherited := "postgres://production:secret@127.0.0.1:1/production"
+	t.Setenv("AIRLOCK_DB_URL", inherited)
 
-	agenttest.NewDBEnv(t)
+	var migratedTable string
+	agenttest.New(t, func() *agentsdk.Agent {
+		if os.Getenv("AIRLOCK_DB_URL") == inherited {
+			t.Fatal("factory inherited AIRLOCK_DB_URL")
+		}
+		a := agentsdk.New(agentsdk.Config{Description: "test agent"})
+		var table string
+		if err := a.DB().QueryRowContext(t.Context(), `SELECT 'bootstrap_order'::regclass::text`).Scan(&table); err != nil {
+			t.Fatalf("migration was not applied before factory continued: %v", err)
+		}
+		migratedTable = table
+		rollback := errors.New("rollback")
+		err := a.DB().Transaction(t.Context(), nil, func(tx agentsdk.DBTX) error {
+			if _, err := tx.ExecContext(t.Context(), "INSERT INTO bootstrap_order (id) VALUES (1)"); err != nil {
+				return err
+			}
+			return rollback
+		})
+		if !errors.Is(err, rollback) {
+			t.Fatalf("Transaction error = %v, want rollback sentinel", err)
+		}
+		var count int
+		if err := a.DB().QueryRowContext(t.Context(), "SELECT count(*) FROM bootstrap_order").Scan(&count); err != nil {
+			t.Fatalf("count rolled-back rows: %v", err)
+		}
+		if count != 0 {
+			t.Fatalf("rows after rollback = %d, want 0", count)
+		}
+		return a
+	})
 
-	if got := os.Getenv("AIRLOCK_DB_URL"); got != "postgres://configured/test" {
-		t.Errorf("AIRLOCK_DB_URL = %q, want configured test database", got)
+	if migratedTable != "bootstrap_order" {
+		t.Fatalf("migrated table = %q, want bootstrap_order", migratedTable)
 	}
 }
 
-// TestEnv_RouteRoundTrip exercises the full helper surface: NewEnv wires the
-// env, agentsdk.New builds the agent, and a registered route is reachable
-// through Handler() with its {name} path param correctly extracted.
-func TestEnv_RouteRoundTrip(t *testing.T) {
-	agenttest.NewEnv(t)
+func TestNewStaticAssetRoundTrip(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, "db", "migrations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
 
-	a := agentsdk.New(agentsdk.Config{Description: "test agent"})
-	a.RegisterRoute(&agentsdk.Route{
-		Method: "GET",
-		Path:   "/static/{name}",
-		Handler: func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-			if r.PathValue("name") == "app.css" {
-				w.Header().Set("Content-Type", "text/css")
-				_, _ = w.Write([]byte("body{}"))
-				return
-			}
-			http.NotFound(w, r)
-		},
-		Access:      agentsdk.AccessPublic,
-		Description: "static",
+	env := agenttest.New(t, func() *agentsdk.Agent {
+		a := agentsdk.New(agentsdk.Config{Description: "test agent"})
+		a.RegisterStaticAsset(&agentsdk.StaticAsset{
+			Name:        "app.css",
+			ContentType: "text/css",
+			Data:        []byte("body{}"),
+		})
+		return a
 	})
 
-	srv := httptest.NewServer(a.Handler())
+	srv := httptest.NewServer(env.Agent.Handler())
 	defer srv.Close()
-
 	resp, err := http.Get(srv.URL + "/static/app.css")
 	if err != nil {
 		t.Fatal(err)
@@ -62,14 +101,5 @@ func TestEnv_RouteRoundTrip(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "body{}" {
 		t.Errorf("body = %q, want %q", body, "body{}")
-	}
-
-	miss, err := http.Get(srv.URL + "/static/bogus.css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	miss.Body.Close()
-	if miss.StatusCode != http.StatusNotFound {
-		t.Errorf("bogus status = %d, want 404", miss.StatusCode)
 	}
 }

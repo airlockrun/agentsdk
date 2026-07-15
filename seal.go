@@ -3,6 +3,8 @@ package agentsdk
 import (
 	"context"
 	"fmt"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // Seal encrypts plaintext via Airlock and returns an opaque sealed string the
@@ -18,9 +20,9 @@ import (
 // stripped from LLM input.
 func (a *Agent) Seal(ctx context.Context, plaintext string) (string, error) {
 	a.maybeAddSensitive(plaintext)
-	var resp SealResponse
+	var resp wire.SealResponse
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/seal",
-		SealRequest{Plaintext: plaintext}, &resp); err != nil {
+		wire.SealRequest{Plaintext: plaintext}, &resp); err != nil {
 		return "", fmt.Errorf("agentsdk: seal: %w", err)
 	}
 	return resp.Sealed, nil
@@ -30,9 +32,9 @@ func (a *Agent) Seal(ctx context.Context, plaintext string) (string, error) {
 // sealed value was produced for a different agent or is corrupt. The recovered
 // plaintext is registered for redaction.
 func (a *Agent) Unseal(ctx context.Context, sealed string) (string, error) {
-	var resp UnsealResponse
+	var resp wire.UnsealResponse
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/unseal",
-		UnsealRequest{Sealed: sealed}, &resp); err != nil {
+		wire.UnsealRequest{Sealed: sealed}, &resp); err != nil {
 		return "", fmt.Errorf("agentsdk: unseal: %w", err)
 	}
 	a.maybeAddSensitive(resp.Plaintext)

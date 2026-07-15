@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestAddInstruction_Accumulates(t *testing.T) {
@@ -46,7 +48,7 @@ func TestAddInstruction_SyncPayload(t *testing.T) {
 		t.Fatalf("sync requests = %d, want 1", len(reqs))
 	}
 
-	var body SyncRequest
+	var body wire.SyncRequest
 	if err := json.Unmarshal(reqs[0].Body, &body); err != nil {
 		t.Fatalf("decode sync body: %v", err)
 	}
@@ -59,7 +61,7 @@ func TestAddInstruction_SyncPayload(t *testing.T) {
 	}
 	if body.Instructions[1].Text != "hello admin" ||
 		len(body.Instructions[1].Access) != 1 ||
-		body.Instructions[1].Access[0] != AccessAdmin {
+		body.Instructions[1].Access[0] != wire.AccessAdmin {
 		t.Errorf("second extra wrong: %+v", body.Instructions[1])
 	}
 }

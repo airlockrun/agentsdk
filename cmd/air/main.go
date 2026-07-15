@@ -21,6 +21,7 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"crypto/rand"
 	"errors"
@@ -31,6 +32,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
@@ -109,7 +111,7 @@ Init flags:
 Update flags (dir defaults to "."):
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
 
-  Updates the airlock-managed files (Dockerfile, AGENTS.md, %s)
+  Updates the airlock-managed files (Dockerfile, AGENTS.md, .gitignore, %s)
   in place - the external equivalent of airlock's build housekeeping. Run it
   after bumping the agentsdk pin. Requires an existing go.mod in dir.
 
@@ -156,7 +158,7 @@ Clone flags:
 		agentsdk.Version,
 		agentsdk.Version,
 		scaffold.NoticesFilename,
-		scaffold.TemplVersion, scaffold.SqlcVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion,
+		scaffold.TemplVersion, scaffold.SQLCVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion,
 	)
 }
 
@@ -289,6 +291,7 @@ func cmdUpdate(args []string) error {
 	fmt.Printf("Updated airlock-managed files in %s:\n", dir)
 	fmt.Println("  Dockerfile")
 	fmt.Println("  AGENTS.md")
+	fmt.Println("  .gitignore")
 	fmt.Printf("  %s\n", scaffold.NoticesFilename)
 	return nil
 }
@@ -303,7 +306,37 @@ func runUpdate(dir string, data scaffold.ScaffoldData) error {
 	if err := scaffold.GenerateNotices(dir); err != nil {
 		return fmt.Errorf("update notices: %w", err)
 	}
+	if err := reconcileGeneratedArtifactIgnores(dir); err != nil {
+		return fmt.Errorf("update .gitignore: %w", err)
+	}
 	return nil
+}
+
+func reconcileGeneratedArtifactIgnores(dir string) error {
+	ignorePath := filepath.Join(dir, ".gitignore")
+	body, err := os.ReadFile(ignorePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	present := make(map[string]bool)
+	for _, line := range strings.Split(string(body), "\n") {
+		present[strings.TrimSpace(line)] = true
+	}
+	var missing []string
+	for _, pattern := range scaffold.GeneratedArtifactIgnorePatterns() {
+		if !present[pattern] {
+			missing = append(missing, pattern)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	out := string(body)
+	if out != "" && !strings.HasSuffix(out, "\n") {
+		out += "\n"
+	}
+	out += strings.Join(missing, "\n") + "\n"
+	return os.WriteFile(ignorePath, []byte(out), 0o644)
 }
 
 func tidyModule(dir string) error {
@@ -336,16 +369,8 @@ func runBuild(dir string) error {
 	if err := ensureToolchain(filepath.Join(dir, localToolchainPrefix)); err != nil {
 		return err
 	}
-	fmt.Println("==> clean sqlc output")
-	if err := cleanSQLCOutput(filepath.Join(dir, "internal", "db")); err != nil {
-		return fmt.Errorf("clean sqlc output: %w", err)
-	}
-	hasQueries, err := hasSQLFiles(filepath.Join(dir, "db", "queries"))
-	if err != nil {
-		return fmt.Errorf("inspect sqlc queries: %w", err)
-	}
-	if !hasQueries {
-		fmt.Println("==> sqlc generate (skipped: no query SQL)")
+	if err := cleanGeneratedDBFiles(dir); err != nil {
+		return fmt.Errorf("clean generated sqlc output: %w", err)
 	}
 	outputDir, err := os.MkdirTemp("", "air-agent-build-*")
 	if err != nil {
@@ -358,7 +383,8 @@ func runBuild(dir string) error {
 	}
 
 	tailwindCmd := tailwindBinaryPath(localToolchainPrefix)
-	steps := buildSteps(sqlcBinaryPath(localToolchainPrefix), tailwindCmd, filepath.Join(outputDir, outputName), hasQueries)
+	sqlcCmd := sqlcBinaryPath(localToolchainPrefix)
+	steps := buildSteps(sqlcCmd, tailwindCmd, filepath.Join(outputDir, outputName), hasSQLQueries(dir))
 	for _, step := range steps {
 		fmt.Printf("==> %s\n", step.name)
 		cmd := exec.Command(step.cmd[0], step.cmd[1:]...)
@@ -378,58 +404,37 @@ type buildStep struct {
 }
 
 func buildSteps(sqlcCmd, tailwindCmd, outputPath string, generateSQLC bool) []buildStep {
-	steps := []buildStep{
-		{"go mod tidy", []string{"go", "mod", "tidy"}},
-		{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
-		{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
-		{"go build", []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
-	}
+	steps := []buildStep{{"go mod tidy", []string{"go", "mod", "tidy"}}}
 	if generateSQLC {
-		steps = append([]buildStep{{"sqlc generate", []string{sqlcCmd, "generate"}}}, steps...)
+		steps = append(steps, buildStep{"sqlc generate", []string{sqlcCmd, "generate"}})
 	}
-	return steps
+	return append(steps,
+		buildStep{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
+		buildStep{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
+		buildStep{"go test -count=1 ./...", []string{"go", "test", "-count=1", "./..."}},
+		buildStep{"go build", []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
+	)
 }
 
-func hasSQLFiles(dir string) (bool, error) {
-	found := false
-	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) && path == dir {
-				return filepath.SkipDir
-			}
-			return err
-		}
-		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".sql" {
-			found = true
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	return found, err
+func hasSQLQueries(dir string) bool {
+	matches, err := filepath.Glob(filepath.Join(dir, "db", "queries", "*.sql"))
+	return err == nil && len(matches) > 0
 }
 
-func cleanSQLCOutput(dir string) error {
-	entries, err := os.ReadDir(dir)
+func cleanGeneratedDBFiles(dir string) error {
+	dbDir := filepath.Join(dir, "internal", "db")
+	entries, err := os.ReadDir(dbDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	const generatedHeader = "// Code generated by sqlc. DO NOT EDIT.\n"
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+		if entry.IsDir() || !scaffold.IsGeneratedArtifact(filepath.ToSlash(filepath.Join("internal", "db", entry.Name()))) {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if len(body) < len(generatedHeader) || string(body[:len(generatedHeader)]) != generatedHeader {
-			continue
-		}
-		if err := os.Remove(path); err != nil {
+		if err := os.Remove(filepath.Join(dbDir, entry.Name())); err != nil {
 			return err
 		}
 	}
@@ -491,7 +496,7 @@ func cmdInstallToolchain(args []string) error {
 
 	fmt.Println("\nBuild toolchain ready:")
 	fmt.Printf("  templ       %s -> go tool templ\n", scaffold.TemplVersion)
-	fmt.Printf("  sqlc        %s -> %s\n", scaffold.SqlcVersion, sqlcBinaryPath(prefix))
+	fmt.Printf("  sqlc        %s -> %s\n", scaffold.SQLCVersion, sqlcBinaryPath(prefix))
 	fmt.Printf("  tailwindcss %s -> %s\n", scaffold.TailwindVersion, tailwindBinaryPath(prefix))
 	fmt.Printf("  daisyui     %s -> %s\n", scaffold.DaisyUIVersion, filepath.Join(prefix, "lib", "tailwind"))
 	fmt.Printf("  skills      %s -> %s\n", scaffold.SkillsDigest(), filepath.Join(prefix, "skills"))
@@ -617,7 +622,7 @@ func writeToolchainMarker(prefix string) error {
 }
 
 func toolchainMarker() string {
-	return fmt.Sprintf("templ=%s\nsqlc=%s\ntailwindcss=%s\ndaisyui=%s\nskills=%s\n", scaffold.TemplVersion, scaffold.SqlcVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion, scaffold.SkillsDigest())
+	return fmt.Sprintf("templ=%s\nsqlc=%s\ntailwindcss=%s\ndaisyui=%s\nskills=%s\n", scaffold.TemplVersion, scaffold.SQLCVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion, scaffold.SkillsDigest())
 }
 
 func installSQLC(cacheDir string) error {
@@ -625,10 +630,14 @@ func installSQLC(cacheDir string) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("https://github.com/sqlc-dev/sqlc/releases/download/v%s/%s", scaffold.SqlcVersion, asset)
-	dst := sqlcCachePath(cacheDir)
-	fmt.Printf("Installing sqlc %s (%s) -> %s\n", scaffold.SqlcVersion, asset, dst)
-	if err := downloadTarGzFile(url, sqlcBinaryName(), dst, 0o755); err != nil {
+	archivePath := filepath.Join(cacheDir, "sqlc", scaffold.SQLCVersion, runtime.GOOS+"-"+runtime.GOARCH, asset)
+	url := fmt.Sprintf("https://github.com/sqlc-dev/sqlc/releases/download/v%s/%s", scaffold.SQLCVersion, asset)
+	fmt.Printf("Installing sqlc %s (%s) -> %s\n", scaffold.SQLCVersion, asset, sqlcCachePath(cacheDir))
+	if err := downloadFile(url, archivePath, 0o644); err != nil {
+		return fmt.Errorf("install sqlc: %w", err)
+	}
+	defer os.Remove(archivePath)
+	if err := extractSQLCBinary(archivePath, sqlcCachePath(cacheDir)); err != nil {
 		return fmt.Errorf("install sqlc: %w", err)
 	}
 	return nil
@@ -672,7 +681,7 @@ func sqlcBinaryPath(prefix string) string {
 }
 
 func sqlcCachePath(cacheDir string) string {
-	return filepath.Join(cacheDir, "sqlc", scaffold.SqlcVersion, runtime.GOOS+"-"+runtime.GOARCH, sqlcBinaryName())
+	return filepath.Join(cacheDir, "sqlc", scaffold.SQLCVersion, runtime.GOOS+"-"+runtime.GOARCH, sqlcBinaryName())
 }
 
 func tailwindCachePath(cacheDir string) string {
@@ -745,6 +754,106 @@ func copyFile(src, dst string, perm os.FileMode) error {
 		return err
 	}
 	ok = true
+	return nil
+}
+
+func sqlcAsset(goos, goarch string) (string, error) {
+	switch goos {
+	case "linux", "darwin", "windows":
+	default:
+		return "", fmt.Errorf("unsupported OS %q for sqlc (supported: linux, darwin, windows)", goos)
+	}
+	if goarch != "amd64" && goarch != "arm64" {
+		return "", fmt.Errorf("unsupported architecture %q for sqlc (supported: amd64, arm64)", goarch)
+	}
+	if goos == "windows" && goarch == "arm64" {
+		return "", errors.New("unsupported architecture \"arm64\" for sqlc on windows (supported: amd64)")
+	}
+	ext := ".tar.gz"
+	if goos == "windows" {
+		ext = ".zip"
+	}
+	return fmt.Sprintf("sqlc_%s_%s_%s%s", scaffold.SQLCVersion, goos, goarch, ext), nil
+}
+
+func extractSQLCBinary(archivePath, dst string) error {
+	if strings.HasSuffix(archivePath, ".zip") {
+		zr, err := zip.OpenReader(archivePath)
+		if err != nil {
+			return err
+		}
+		defer zr.Close()
+		for _, file := range zr.File {
+			if pathBase(file.Name) != sqlcBinaryName() {
+				continue
+			}
+			r, err := file.Open()
+			if err != nil {
+				return err
+			}
+			err = writeExtractedBinary(dst, r)
+			r.Close()
+			return err
+		}
+		return errors.New("sqlc archive does not contain the sqlc binary")
+	}
+
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return errors.New("sqlc archive does not contain the sqlc binary")
+		}
+		if err != nil {
+			return err
+		}
+		if pathBase(header.Name) == sqlcBinaryName() {
+			return writeExtractedBinary(dst, tr)
+		}
+	}
+}
+
+func pathBase(name string) string {
+	name = strings.ReplaceAll(name, "\\", "/")
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		return name[i+1:]
+	}
+	return name
+}
+
+func writeExtractedBinary(dst string, src io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return writeHint(err, dst)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".sqlc-*")
+	if err != nil {
+		return writeHint(err, dst)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := io.Copy(tmp, src); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, dst); err != nil {
+		return writeHint(err, dst)
+	}
 	return nil
 }
 

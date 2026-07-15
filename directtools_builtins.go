@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/websearch"
@@ -652,7 +653,7 @@ func wrapHTTPRequest(agent *Agent, run *run) tool.Tool {
 			if in.URL == "" {
 				return tool.Result{}, errors.New("url is required")
 			}
-			req := HTTPRequest{
+			req := wire.HTTPRequest{
 				URL:        in.URL,
 				Method:     defaultStr(in.Method, "GET"),
 				Headers:    in.Headers,
@@ -938,9 +939,6 @@ func wrapQueryDB(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			db := agent.DB()
-			if db == nil {
-				return tool.Result{}, errors.New("agent database not configured (AIRLOCK_DB_URL not set)")
-			}
 			res, err := queryReadOnly(run.ctx, db, in.SQL, in.Params...)
 			if err != nil {
 				return tool.Result{}, err

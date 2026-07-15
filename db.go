@@ -13,11 +13,18 @@ import (
 // framework can later intercept queries at this layer (record an action on
 // the run carried by ctx, surface query timings in the Runs UI, redact
 // sensitive arguments) without breaking builders or sqlc-generated code.
-// Builders that need the underlying driver-level handle for advanced cases
-// (Stats, Driver, custom drivers) can reach it via Underlying().
 type AgentDB struct {
 	db    *sql.DB
 	agent *Agent
+}
+
+// DBTX is the database surface accepted by sqlc-generated constructors. Both
+// the agent pool and transaction callback values implement it.
+type DBTX interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	PrepareContext(context.Context, string) (*sql.Stmt, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 // ExecContext satisfies sqlc's DBTX. Forwards to the underlying *sql.DB.
@@ -45,20 +52,23 @@ func (a *AgentDB) PingContext(ctx context.Context) error {
 	return a.db.PingContext(ctx)
 }
 
-// BeginTx starts a transaction. The returned *AgentTx implements the same
-// DBTX interface, so `mygen.New(tx)` and `q.WithTx(tx)` both work.
-func (a *AgentDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*AgentTx, error) {
+// Transaction runs fn in a transaction. The callback receives the DBTX shape
+// accepted by sqlc-generated New functions. A nil callback panics; returning an
+// error rolls back, and returning nil commits.
+func (a *AgentDB) Transaction(ctx context.Context, opts *sql.TxOptions, fn func(DBTX) error) error {
+	if fn == nil {
+		panic("agentsdk: AgentDB.Transaction requires a callback")
+	}
 	tx, err := a.db.BeginTx(ctx, opts)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &AgentTx{tx: tx, agent: a.agent}, nil
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
-
-// Underlying returns the wrapped *sql.DB. Use this only when you need
-// driver-level access that DBTX doesn't expose; otherwise stick to the
-// AgentDB methods so future framework instrumentation applies to your code.
-func (a *AgentDB) Underlying() *sql.DB { return a.db }
 
 // queryReadOnly runs query inside a read-only transaction that is always
 // rolled back, then materializes the rows. This is the single enforcement
@@ -68,7 +78,7 @@ func (a *AgentDB) Underlying() *sql.DB { return a.db }
 // rollback guarantees nothing the query touched survives even if a future
 // driver stopped honoring the flag. No commit path exists here by design.
 func queryReadOnly(ctx context.Context, db *AgentDB, query string, params ...any) ([]map[string]any, error) {
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := db.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
@@ -80,39 +90,3 @@ func queryReadOnly(ctx context.Context, db *AgentDB, query string, params ...any
 	defer rows.Close()
 	return rowsToMaps(rows)
 }
-
-// AgentTx wraps a *sql.Tx with the same shape as AgentDB so sqlc's
-// q.WithTx(tx) accepts it transparently.
-type AgentTx struct {
-	tx    *sql.Tx
-	agent *Agent
-}
-
-// ExecContext satisfies sqlc's DBTX.
-func (a *AgentTx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return a.tx.ExecContext(ctx, query, args...)
-}
-
-// PrepareContext satisfies sqlc's DBTX.
-func (a *AgentTx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
-	return a.tx.PrepareContext(ctx, query)
-}
-
-// QueryContext satisfies sqlc's DBTX.
-func (a *AgentTx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return a.tx.QueryContext(ctx, query, args...)
-}
-
-// QueryRowContext satisfies sqlc's DBTX.
-func (a *AgentTx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
-	return a.tx.QueryRowContext(ctx, query, args...)
-}
-
-// Commit commits the transaction.
-func (a *AgentTx) Commit() error { return a.tx.Commit() }
-
-// Rollback aborts the transaction. Idempotent — safe to defer.
-func (a *AgentTx) Rollback() error { return a.tx.Rollback() }
-
-// Underlying returns the wrapped *sql.Tx.
-func (a *AgentTx) Underlying() *sql.Tx { return a.tx }

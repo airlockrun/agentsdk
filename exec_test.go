@@ -13,20 +13,20 @@ import (
 	"testing"
 )
 
-// AccessPublic on a registered exec endpoint is silently demoted to
-// AccessUser. Exec is sensitive — unauthenticated callers must never
-// reach it, but copy-pasting from RegisterRoute (where Public is
-// meaningful) is a believable mistake worth recovering from quietly.
-func TestRegisterExecEndpoint_DemotesPublicToUser(t *testing.T) {
+// AccessPublic is rejected because unauthenticated callers must never reach
+// remote command execution.
+func TestRegisterExecEndpoint_RejectsPublic(t *testing.T) {
 	a, _ := testAgent(t)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for AccessPublic")
+		}
+	}()
 	a.RegisterExecEndpoint(&ExecEndpoint{
 		Slug:        "ci",
 		Description: "Self-hosted CI runner",
 		Access:      AccessPublic,
 	})
-	if got := a.execEndpoints["ci"].Access; got != AccessUser {
-		t.Fatalf("expected demotion to AccessUser, got %q", got)
-	}
 }
 
 // Missing Description is a programmer error — we panic loud at startup

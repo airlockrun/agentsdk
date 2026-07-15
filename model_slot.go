@@ -1,7 +1,5 @@
 package agentsdk
 
-import "fmt"
-
 // RegisterModel declares a named model slot the agent uses at runtime via
 // agent.LLM(ctx, slug) / agent.ImageModel(ctx, slug) / etc. The slot's
 // Capability is the single source of truth for the model type — the getters
@@ -15,14 +13,17 @@ import "fmt"
 // panics — a missing declaration is a programmer error, not a silent
 // fall-through to a default model.
 func (a *Agent) RegisterModel(slot *ModelSlot) {
+	done := a.beginRegistration("RegisterModel")
+	defer done()
 	if slot == nil {
 		panic("agentsdk: RegisterModel: nil *ModelSlot")
 	}
-	if slot.Slug == "" {
-		panic("agentsdk: RegisterModel: Slug is required")
+	copy := *slot
+	validateModelSlot(&copy)
+	for _, existing := range a.modelSlots {
+		if existing.Slug == copy.Slug {
+			panic("agentsdk: duplicate RegisterModel: " + copy.Slug)
+		}
 	}
-	if slot.Capability == "" {
-		panic(fmt.Sprintf("agentsdk: RegisterModel(%q): Capability is required", slot.Slug))
-	}
-	a.modelSlots = append(a.modelSlots, slot)
+	a.modelSlots = append(a.modelSlots, &copy)
 }

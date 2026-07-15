@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/bus"
 	"github.com/google/uuid"
@@ -239,7 +240,7 @@ func buildPromptAgentTool(agent *Agent, run *run) (tool.Tool, bool) {
 				return tool.Result{}, fmt.Errorf("unknown or unavailable agent: %s", in.Agent)
 			}
 
-			handle := &SiblingHandle{slug: target.slug, agentID: target.id, agent: agent}
+			handle := &siblingHandle{slug: target.slug, agentID: target.id, agent: agent}
 			childArgs := map[string]any{"message": in.Message}
 			if in.ContextID != "" {
 				childArgs["contextId"] = in.ContextID
@@ -259,7 +260,7 @@ func buildPromptAgentTool(agent *Agent, run *run) (tool.Tool, bool) {
 				childArgs["files"] = files
 			}
 
-			res, err := handle.CallTool(ctx, run.id, "prompt", childArgs)
+			res, err := handle.callTool(ctx, run.id, "prompt", childArgs)
 			if err != nil {
 				// failed / canceled surface as a normal tool error the
 				// LLM can react to (matches the A2A error-channel design).
@@ -400,16 +401,16 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 // to how a browser console shows logged output then the expression result.
 // Levels above info are prefixed so the LLM can distinguish a console.warn
 // from a plain log; info lines come through verbatim.
-func combineJSOutput(logs []LogEntry, result string) string {
+func combineJSOutput(logs []wire.LogEntry, result string) string {
 	if len(logs) == 0 {
 		return result
 	}
 	parts := make([]string, len(logs))
 	for i, l := range logs {
 		switch l.Level {
-		case LogLevelWarn:
+		case wire.LogLevelWarn:
 			parts[i] = "[warn] " + l.Message
-		case LogLevelError:
+		case wire.LogLevelError:
 			parts[i] = "[error] " + l.Message
 		default:
 			parts[i] = l.Message

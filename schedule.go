@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/url"
 	"time"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // scheduleHandler is a registered cron or schedule handler. The slug is unique
@@ -32,7 +34,8 @@ func (a *Agent) ScheduleAt(ctx context.Context, req ScheduleAtRequest) (string, 
 	var resp struct {
 		ID string `json:"id"`
 	}
-	if err := a.client.doJSON(ctx, "POST", "/api/agent/schedules", req, &resp); err != nil {
+	body := wire.ScheduleAtRequest{Slug: req.Slug, FireAt: req.FireAt}
+	if err := a.client.doJSON(ctx, "POST", "/api/agent/schedules", body, &resp); err != nil {
 		return "", err
 	}
 	return resp.ID, nil
@@ -57,12 +60,19 @@ func (a *Agent) ListSchedules(ctx context.Context, f ListSchedulesFilter) ([]Sch
 		path += "?slug=" + url.QueryEscape(f.Slug)
 	}
 	var resp struct {
-		Fires []ScheduledFire `json:"fires"`
+		Fires []wire.ScheduledFire `json:"fires"`
 	}
 	if err := a.client.doJSON(ctx, "GET", path, nil, &resp); err != nil {
 		return nil, err
 	}
-	return resp.Fires, nil
+	fires := make([]ScheduledFire, len(resp.Fires))
+	for i, fire := range resp.Fires {
+		fires[i] = ScheduledFire{
+			ID: fire.ID, Slug: fire.Slug, Kind: fire.Kind, FireAt: fire.FireAt,
+			Status: fire.Status, Recurrence: fire.Recurrence,
+		}
+	}
+	return fires, nil
 }
 
 // ScheduleFromContext returns the fire that triggered the current handler run.

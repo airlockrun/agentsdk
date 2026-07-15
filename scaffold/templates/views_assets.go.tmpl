@@ -15,18 +15,16 @@ import (
 var AppCSS []byte
 
 // AppCSSHash is an 8-char content hash of AppCSS. A rebuilt agent gets
-// a fresh hash, so the /static/{name} route in main.go can serve
-// AppCSS with an immutable Cache-Control and browsers never resurface
+// a fresh hash, so RegisterStaticAsset can serve AppCSS with an
+// immutable Cache-Control and browsers never resurface
 // stale styles. Same hash flows into AppCSSPath for use in layouts.
 func AppCSSHash() string {
 	h := sha256.Sum256(AppCSS)
 	return hex.EncodeToString(h[:4])
 }
 
-// AppCSSName is the embedded stylesheet's content-hashed filename. It is the
-// {name} the /static/{name} route matches against — match handlers compare
-// r.PathValue("name") to this, NOT to AppCSSPath (which carries the /static/
-// prefix and would never equal the bare path value).
+// AppCSSName is the embedded stylesheet's content-hashed filename passed to
+// agentsdk.RegisterStaticAsset.
 var AppCSSName = "app." + AppCSSHash() + ".css"
 
 // AppCSSPath is the public URL the scaffold's Layout references:

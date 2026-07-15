@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"github.com/dop251/goja"
 	"github.com/google/uuid"
@@ -25,11 +26,11 @@ type run struct {
 	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
 	autoConfirm         bool        // run_js skips the request_confirmation gate (set for non-interactive runs, e.g. public one-shot bridge sessions)
 	directTools         bool        // expose each capability as its own typed LLM tool instead of a single run_js binding; airlock sets this for public-tier runs today
-	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with PromptData.Siblings at render time
+	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with promptData.Siblings at render time
 	ctx                 context.Context
 	gw                  *goWall // go-call time accumulator (L3 CPU guard)
-	actions             []Action
-	logs                []LogEntry
+	actions             []wire.Action
+	logs                []wire.LogEntry
 	logsBytes           int // running size of logs[].Message; drives the cap in logAppend
 	logger              *zap.Logger
 	loggerOnce          sync.Once
@@ -37,7 +38,7 @@ type run struct {
 	vmOnce              sync.Once
 	mu                  sync.Mutex          // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
 	attachedKeys        map[string]struct{} // keys attached this run for idempotency
-	pendingLogs         []LogEntry          // logs from current executeJS call, drained after each execution
+	pendingLogs         []wire.LogEntry     // logs from current executeJS call, drained after each execution
 	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result
 	fileCache           *fileCache          // per-run local-disk read cache (large-file reads spill here)
 	cleanupOnce         sync.Once           // guards cleanupScratch so run.complete can call it on every path
@@ -61,9 +62,9 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 		ctx:            withGoWall(ctx, gw),
 		gw:             gw,
 		fileCache:      newFileCache(),
-		// Default to admin — webhook/cron/route handlers and tests are
-		// trusted contexts. /prompt overrides this with the per-turn
-		// CallerAccess from PromptInput.
+		// Default to admin for trusted eager dispatchers (webhook and timed
+		// fire). Prompt and lazy HTTP dispatchers replace this with their
+		// resolved caller access before exposing the run to agent code.
 		callerAccess: AccessAdmin,
 	}
 }
@@ -77,7 +78,7 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 // the trusted file API directly (agent.OpenFile/ReadFile/...) does not
 // need this — those methods skip the access check.
 func (r *run) checkedCtx() context.Context {
-	return WithCaller(contextWithRun(r.ctx, r), Caller{
+	return withCaller(contextWithRun(r.ctx, r), caller{
 		Access: r.callerAccess,
 		RunID:  r.id,
 	})
@@ -103,10 +104,10 @@ const maxRunLogBytes = 64 * 1024
 // logAppend records a run-scoped log line into the bounded buffer.
 // Flushed to Airlock on Complete as the run's log record. Reached from
 // Agent.Logger's capture core and from the JS log()/console bindings.
-func (r *run) logAppend(level LogLevel, msg string) {
+func (r *run) logAppend(level wire.LogLevel, msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.logs = append(r.logs, LogEntry{Level: level, Message: msg})
+	r.logs = append(r.logs, wire.LogEntry{Level: level, Message: msg})
 	r.logsBytes += len(msg)
 	for r.logsBytes > maxRunLogBytes && len(r.logs) > 1 {
 		r.logsBytes -= len(r.logs[0].Message)
@@ -139,10 +140,10 @@ func (r *run) runLogger() *zap.Logger {
 // JS binding (media-only) and TopicHandle.Publish (Go, may include text).
 func (r *run) output(ctx context.Context, parts []DisplayPart, topic string) error {
 	for i := range parts {
-		ResolveDisplayPart(&parts[i])
+		resolveDisplayPart(&parts[i])
 	}
-	req := PrintRequest{
-		Parts:          parts,
+	req := wire.PrintRequest{
+		Parts:          toWireDisplayParts(parts),
 		Topic:          topic,
 		ConversationID: r.conversationID,
 		RunID:          r.id,

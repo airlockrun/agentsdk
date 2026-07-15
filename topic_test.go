@@ -7,7 +7,7 @@ import (
 
 func TestPublish_PanicsOnPerUserTopic(t *testing.T) {
 	a, _ := testAgent(t)
-	h := a.RegisterTopic(&Topic{Slug: "reminders", PerUser: true})
+	h := a.RegisterTopic(&Topic{Slug: "reminders", Description: "User reminders", Access: AccessUser, PerUser: true})
 	defer func() {
 		if recover() == nil {
 			t.Fatal("Publish (broadcast) on a PerUser topic should panic")
@@ -18,7 +18,7 @@ func TestPublish_PanicsOnPerUserTopic(t *testing.T) {
 
 func TestPublishToUser_RequiresUserID(t *testing.T) {
 	a, _ := testAgent(t)
-	h := a.RegisterTopic(&Topic{Slug: "alerts", PerUser: true})
+	h := a.RegisterTopic(&Topic{Slug: "alerts", Description: "User alerts", Access: AccessUser, PerUser: true})
 	defer func() {
 		if recover() == nil {
 			t.Fatal("PublishToUser with empty userID should panic")
