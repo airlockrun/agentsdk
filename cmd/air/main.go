@@ -5,7 +5,7 @@
 //	air [init] <dir>             scaffold a new agent into <dir>
 //	air update [dir]             regenerate the airlock-managed files in place
 //	go tool air toolchain install
-//	                             install the pinned frontend toolchain
+//	                             install the pinned build toolchain
 //	go tool air build            run the local build chain
 //	air login <airlock-url>      store CLI credentials outside the repo
 //	air logout <airlock-url>     revoke and remove CLI credentials
@@ -14,12 +14,14 @@
 //	air clone <agent> <dir>      clone Airlock source without Git
 //
 // init and update render the same airlock-managed files airlock's builder
-// produces; toolchain install ensures the pinned templ/tailwind/daisyui versions
+// produces; toolchain install ensures the pinned templ/sqlc/tailwind/daisyui versions
 // and their coding skills are available so local harnesses and builds match
 // airlock codegen.
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -92,7 +94,7 @@ Usage:
   air version                     print the selected CLI version
   air [init] <dir> [flags]        scaffold a new agent into <dir>
   air update [dir] [flags]        regenerate the airlock-managed files in place
-  air toolchain install           ensure the pinned frontend toolchain and skills
+  air toolchain install           ensure the pinned build toolchain and skills
   air build [dir]                 run the local build chain
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
@@ -112,8 +114,9 @@ Update flags (dir defaults to "."):
   after bumping the agentsdk pin. Requires an existing go.mod in dir.
 
 Toolchain install:
-  Ensures the frontend toolchain pinned by the scaffold:
+  Ensures the build toolchain pinned by the scaffold:
     templ       %s (via go tool templ)
+    sqlc        %s (standalone binary -> .airlock/toolchain/bin)
     tailwindcss %s (standalone binary -> .airlock/toolchain/bin)
     daisyui     %s (plugin mjs files -> .airlock/toolchain/lib/tailwind)
     skills         (version-matched references -> .airlock/toolchain/skills)
@@ -153,7 +156,7 @@ Clone flags:
 		agentsdk.Version,
 		agentsdk.Version,
 		scaffold.NoticesFilename,
-		scaffold.TemplVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion,
+		scaffold.TemplVersion, scaffold.SqlcVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion,
 	)
 }
 
@@ -252,7 +255,7 @@ func runInit(args []string, tidy func(string) error) error {
 	fmt.Printf("  agentsdk: %s\n", f.agentSDKVersion)
 	fmt.Println("\nNext steps:")
 	fmt.Printf("  cd %s\n", dir)
-	fmt.Println("  go tool air toolchain install   # install frontend tools + coding skills")
+	fmt.Println("  go tool air toolchain install   # install build tools + coding skills")
 	fmt.Println("  go tool air build")
 	return nil
 }
@@ -333,6 +336,17 @@ func runBuild(dir string) error {
 	if err := ensureToolchain(filepath.Join(dir, localToolchainPrefix)); err != nil {
 		return err
 	}
+	fmt.Println("==> clean sqlc output")
+	if err := cleanSQLCOutput(filepath.Join(dir, "internal", "db")); err != nil {
+		return fmt.Errorf("clean sqlc output: %w", err)
+	}
+	hasQueries, err := hasSQLFiles(filepath.Join(dir, "db", "queries"))
+	if err != nil {
+		return fmt.Errorf("inspect sqlc queries: %w", err)
+	}
+	if !hasQueries {
+		fmt.Println("==> sqlc generate (skipped: no query SQL)")
+	}
 	outputDir, err := os.MkdirTemp("", "air-agent-build-*")
 	if err != nil {
 		return fmt.Errorf("create build output directory: %w", err)
@@ -344,7 +358,7 @@ func runBuild(dir string) error {
 	}
 
 	tailwindCmd := tailwindBinaryPath(localToolchainPrefix)
-	steps := buildSteps(tailwindCmd, filepath.Join(outputDir, outputName))
+	steps := buildSteps(sqlcBinaryPath(localToolchainPrefix), tailwindCmd, filepath.Join(outputDir, outputName), hasQueries)
 	for _, step := range steps {
 		fmt.Printf("==> %s\n", step.name)
 		cmd := exec.Command(step.cmd[0], step.cmd[1:]...)
@@ -363,13 +377,63 @@ type buildStep struct {
 	cmd  []string
 }
 
-func buildSteps(tailwindCmd, outputPath string) []buildStep {
-	return []buildStep{
+func buildSteps(sqlcCmd, tailwindCmd, outputPath string, generateSQLC bool) []buildStep {
+	steps := []buildStep{
 		{"go mod tidy", []string{"go", "mod", "tidy"}},
 		{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
 		{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
 		{"go build", []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
 	}
+	if generateSQLC {
+		steps = append([]buildStep{{"sqlc generate", []string{sqlcCmd, "generate"}}}, steps...)
+	}
+	return steps
+}
+
+func hasSQLFiles(dir string) (bool, error) {
+	found := false
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) && path == dir {
+				return filepath.SkipDir
+			}
+			return err
+		}
+		if !entry.IsDir() && filepath.Ext(entry.Name()) == ".sql" {
+			found = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found, err
+}
+
+func cleanSQLCOutput(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	const generatedHeader = "// Code generated by sqlc. DO NOT EDIT.\n"
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if len(body) < len(generatedHeader) || string(body[:len(generatedHeader)]) != generatedHeader {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureEmptyDir creates dir if missing and errors if it exists and is
@@ -425,8 +489,9 @@ func cmdInstallToolchain(args []string) error {
 		return err
 	}
 
-	fmt.Println("\nFrontend toolchain ready:")
+	fmt.Println("\nBuild toolchain ready:")
 	fmt.Printf("  templ       %s -> go tool templ\n", scaffold.TemplVersion)
+	fmt.Printf("  sqlc        %s -> %s\n", scaffold.SqlcVersion, sqlcBinaryPath(prefix))
 	fmt.Printf("  tailwindcss %s -> %s\n", scaffold.TailwindVersion, tailwindBinaryPath(prefix))
 	fmt.Printf("  daisyui     %s -> %s\n", scaffold.DaisyUIVersion, filepath.Join(prefix, "lib", "tailwind"))
 	fmt.Printf("  skills      %s -> %s\n", scaffold.SkillsDigest(), filepath.Join(prefix, "skills"))
@@ -465,6 +530,14 @@ func toolchainCacheDir() (string, error) {
 }
 
 func ensureToolchainCache(cacheDir string) error {
+	if _, err := os.Stat(sqlcCachePath(cacheDir)); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := installSQLC(cacheDir); err != nil {
+			return err
+		}
+	}
 	if _, err := os.Stat(tailwindCachePath(cacheDir)); err != nil {
 		if !os.IsNotExist(err) {
 			return err
@@ -492,6 +565,7 @@ func projectToolchain(prefix, cacheDir string) error {
 		src  string
 		perm os.FileMode
 	}{
+		sqlcBinaryPath(prefix):     {src: sqlcCachePath(cacheDir), perm: 0o755},
 		tailwindBinaryPath(prefix): {src: tailwindCachePath(cacheDir), perm: 0o755},
 		filepath.Join(prefix, "lib", "tailwind", "daisyui.mjs"): {
 			src:  filepath.Join(daisyUICacheDir(cacheDir), "daisyui.mjs"),
@@ -519,6 +593,7 @@ func toolchainComplete(prefix string) bool {
 		return false
 	}
 	for _, path := range []string{
+		sqlcBinaryPath(prefix),
 		tailwindBinaryPath(prefix),
 		filepath.Join(prefix, "lib", "tailwind", "daisyui.mjs"),
 		filepath.Join(prefix, "lib", "tailwind", "daisyui-theme.mjs"),
@@ -542,7 +617,21 @@ func writeToolchainMarker(prefix string) error {
 }
 
 func toolchainMarker() string {
-	return fmt.Sprintf("templ=%s\ntailwindcss=%s\ndaisyui=%s\nskills=%s\n", scaffold.TemplVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion, scaffold.SkillsDigest())
+	return fmt.Sprintf("templ=%s\nsqlc=%s\ntailwindcss=%s\ndaisyui=%s\nskills=%s\n", scaffold.TemplVersion, scaffold.SqlcVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion, scaffold.SkillsDigest())
+}
+
+func installSQLC(cacheDir string) error {
+	asset, err := sqlcAsset(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("https://github.com/sqlc-dev/sqlc/releases/download/v%s/%s", scaffold.SqlcVersion, asset)
+	dst := sqlcCachePath(cacheDir)
+	fmt.Printf("Installing sqlc %s (%s) -> %s\n", scaffold.SqlcVersion, asset, dst)
+	if err := downloadTarGzFile(url, sqlcBinaryName(), dst, 0o755); err != nil {
+		return fmt.Errorf("install sqlc: %w", err)
+	}
+	return nil
 }
 
 func installTailwind(cacheDir string) error {
@@ -578,6 +667,14 @@ func tailwindBinaryPath(prefix string) string {
 	return filepath.Join(prefix, "bin", tailwindBinaryName())
 }
 
+func sqlcBinaryPath(prefix string) string {
+	return filepath.Join(prefix, "bin", sqlcBinaryName())
+}
+
+func sqlcCachePath(cacheDir string) string {
+	return filepath.Join(cacheDir, "sqlc", scaffold.SqlcVersion, runtime.GOOS+"-"+runtime.GOARCH, sqlcBinaryName())
+}
+
 func tailwindCachePath(cacheDir string) string {
 	return filepath.Join(cacheDir, "tailwindcss", scaffold.TailwindVersion, runtime.GOOS+"-"+runtime.GOARCH, tailwindBinaryName())
 }
@@ -588,6 +685,14 @@ func daisyUICacheDir(cacheDir string) string {
 
 func tailwindBinaryName() string {
 	name := "tailwindcss"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
+func sqlcBinaryName() string {
+	name := "sqlc"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
@@ -673,6 +778,78 @@ func tailwindAsset(goos, goarch string) (string, error) {
 		return fmt.Sprintf("tailwindcss-%s-%s.exe", osPart, archPart), nil
 	}
 	return fmt.Sprintf("tailwindcss-%s-%s", osPart, archPart), nil
+}
+
+func sqlcAsset(goos, goarch string) (string, error) {
+	switch goos {
+	case "linux", "darwin":
+	case "windows":
+		if goarch != "amd64" {
+			return "", fmt.Errorf("unsupported architecture %q for sqlc on windows (supported: amd64)", goarch)
+		}
+	default:
+		return "", fmt.Errorf("unsupported OS %q for sqlc (supported: linux, darwin, windows)", goos)
+	}
+	if goarch != "amd64" && goarch != "arm64" {
+		return "", fmt.Errorf("unsupported architecture %q for sqlc (supported: amd64, arm64)", goarch)
+	}
+	return fmt.Sprintf("sqlc_%s_%s_%s.tar.gz", scaffold.SqlcVersion, goos, goarch), nil
+}
+
+func downloadTarGzFile(url, member, dst string, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return writeHint(err, dst)
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download %s: unexpected status %s", url, resp.Status)
+	}
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", url, err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return fmt.Errorf("archive %s does not contain %s", url, member)
+		}
+		if err != nil {
+			return fmt.Errorf("read %s: %w", url, err)
+		}
+		if filepath.Base(header.Name) != member {
+			continue
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(dst), ".air-sqlc-*")
+		if err != nil {
+			return writeHint(err, dst)
+		}
+		tmpName := tmp.Name()
+		defer os.Remove(tmpName)
+		if _, err := io.Copy(tmp, tr); err != nil {
+			tmp.Close()
+			return fmt.Errorf("extract %s: %w", member, err)
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := os.Chmod(tmpName, perm); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpName, dst); err != nil {
+			return writeHint(err, dst)
+		}
+		return nil
+	}
 }
 
 // downloadFile fetches url and writes it to dst with mode perm, creating parent

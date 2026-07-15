@@ -1,3 +1,7 @@
+ARG SQLC_VERSION={{.SqlcVersion}}
+
+FROM sqlc/sqlc:${SQLC_VERSION} AS sqlc
+
 # Default empty module proxy. Airlock's dev builds override this stage with
 # `docker build --build-context goproxy=<dir>`, where <dir> is a generated
 # file:// module proxy serving the airlock-owned libs (agentsdk/goai/sol) at
@@ -27,6 +31,7 @@ COPY . .
 # local CLI installer writes, so styles/app.css can load the plugin by one
 # relative path in both local builds and Docker builds.
 RUN mkdir -p .airlock/toolchain/bin .airlock/toolchain/lib/tailwind views/static
+COPY --from=sqlc /workspace/sqlc /build/.airlock/toolchain/bin/sqlc
 ADD https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /build/.airlock/toolchain/bin/tailwindcss
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /build/.airlock/toolchain/lib/tailwind/daisyui.mjs
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui-theme.mjs /build/.airlock/toolchain/lib/tailwind/daisyui-theme.mjs
@@ -41,13 +46,15 @@ RUN chmod +x .airlock/toolchain/bin/tailwindcss
 # `go mod tidy` fills go.sum for the templ tool directive's transitive deps
 # that `go mod download` skips as of Go 1.24.
 #
-# Order: templ generate first (emits *_templ.go); tailwindcss next so it scans
-# the materialised .templ source for class names; go build last so the
-# stylesheet exists before //go:embed reads it.
+# Order: sqlc regenerates database access from committed SQL; templ generate
+# emits *_templ.go; tailwindcss scans the materialised .templ source for class
+# names; go build runs last so every generated input exists.
 RUN --mount=type=bind,from=goproxy,target=/goproxy \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off \
+    find internal/db -type f -name '*.go' ! -name 'doc.go' -delete && \
+    if find db/queries -type f -name '*.sql' -print -quit | grep -q .; then .airlock/toolchain/bin/sqlc generate; fi && \
     go mod tidy && \
     go tool templ generate && \
     .airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify && \

@@ -11,8 +11,8 @@ If the agent needs its own database tables:
 
 1. Migration files in `db/migrations/` (e.g. `00001_init.sql`)
 2. Query files in `db/queries/` (e.g. `queries.sql`)
-3. `sqlc generate` — produces Go code in `internal/db/`
-4. Import `internal/db` in your code
+3. Run `go tool air build` — it regenerates Go code in `internal/db/`
+4. Import `internal/db` in your code; commit the SQL inputs, not generated Go
 
 Migrations run automatically at container startup via **goose**. Each `.sql`
 file has Up and Down sections:

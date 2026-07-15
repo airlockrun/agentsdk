@@ -25,6 +25,7 @@ type ScaffoldData struct {
 	TemplVersion    string
 	TailwindVersion string
 	DaisyUIVersion  string
+	SqlcVersion     string
 }
 
 // applyToolchainVersions fills any unset toolchain/Go version field from the
@@ -42,6 +43,9 @@ func (d *ScaffoldData) applyToolchainVersions() {
 	}
 	if d.DaisyUIVersion == "" {
 		d.DaisyUIVersion = DaisyUIVersion
+	}
+	if d.SqlcVersion == "" {
+		d.SqlcVersion = SqlcVersion
 	}
 }
 
@@ -61,6 +65,7 @@ var templateFiles = []templateFile{
 	{"templates/scaffold_gen.go.tmpl", "scaffold_gen.go"},
 	{"templates/go.mod.tmpl", "go.mod"},
 	{"templates/sqlc.yaml.tmpl", "sqlc.yaml"},
+	{"templates/internal_db_doc.go.tmpl", "internal/db/doc.go"},
 	{"templates/layout.templ.tmpl", "views/layout.templ"},
 	{"templates/index.templ.tmpl", "views/index.templ"},
 	// views/viewmodel.go holds the view-model types templ files render

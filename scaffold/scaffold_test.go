@@ -27,6 +27,7 @@ func TestMaterialize(t *testing.T) {
 		"main_test.go",
 		"go.mod",
 		"sqlc.yaml",
+		"internal/db/doc.go",
 		"Dockerfile",
 		".gitignore",
 		"THIRD_PARTY_NOTICES.generated.md",
@@ -105,7 +106,7 @@ func TestMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read .gitignore: %v", err)
 	}
-	for _, want := range []string{"go.work", "go.work.sum", "*_templ.go", "views/static/app.css", ".airlock/local/", ".airlock/toolchain/"} {
+	for _, want := range []string{"go.work", "go.work.sum", "*_templ.go", "views/static/app.css", "internal/db/db.go", "internal/db/models.go", "internal/db/*.sql.go", ".airlock/local/", ".airlock/toolchain/"} {
 		if !strings.Contains(string(gitignore), want) {
 			t.Errorf(".gitignore missing %q entry", want)
 		}
@@ -142,6 +143,12 @@ func TestMaterialize(t *testing.T) {
 	}
 	if !strings.Contains(dockerfileStr, "setup.sh") {
 		t.Error("Dockerfile missing setup.sh hook")
+	}
+	if !strings.Contains(dockerfileStr, "ARG SQLC_VERSION=1.30.0") || !strings.Contains(dockerfileStr, "FROM sqlc/sqlc:${SQLC_VERSION} AS sqlc") {
+		t.Error("Dockerfile missing pinned sqlc stage")
+	}
+	if !strings.Contains(dockerfileStr, ".airlock/toolchain/bin/sqlc generate") {
+		t.Error("Dockerfile missing sqlc generation")
 	}
 	if !strings.Contains(dockerfileStr, "type=cache,target=/var/lib/apt/lists") {
 		t.Error("Dockerfile missing apt cache mount")

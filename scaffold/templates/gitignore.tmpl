@@ -11,6 +11,12 @@ views/static/app.css
 # templ output — regenerated from committed .templ source before each build.
 *_templ.go
 
+# sqlc output — regenerated from committed migrations and query SQL before each
+# build. internal/db/doc.go is the tracked package anchor.
+internal/db/db.go
+internal/db/models.go
+internal/db/*.sql.go
+
 # Local Airlock runtime state: storage, caches, and other developer-machine data.
 .airlock/local/
 

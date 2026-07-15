@@ -63,15 +63,13 @@ After writing code, run the SDK-owned build chain:
 go tool air build
 ```
 
-This reconciles module sums, generates templ output, compiles Tailwind and
-DaisyUI, and verifies the Go binary without leaving it in the source tree.
+This regenerates sqlc and templ output, reconciles module sums, compiles
+Tailwind and DaisyUI, and verifies the Go binary without leaving it in the
+source tree.
 
-Run `sqlc generate` only if you created or changed `.sql` files in
-`db/queries/`. The Docker build re-runs `templ generate` and `tailwindcss`, so
-`*_templ.go` and `views/static/app.css` are regenerated there and not
-committed. It does **not** run sqlc, so the generated `internal/db/` **is**
-committed (and updated whenever you change a query) — otherwise a fresh-clone
-`docker build` would fail to find the package.
+The Docker and local build chains regenerate sqlc, templ, and Tailwind output.
+Commit migrations, query SQL, and `internal/db/doc.go`; do not commit generated
+`internal/db/*.go`, `*_templ.go`, or `views/static/app.css` files.
 
 ## Design principle: always register granular tools
 
