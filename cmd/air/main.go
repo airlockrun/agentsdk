@@ -73,6 +73,14 @@ func run(args []string) error {
 		return cmdToolchain(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "integrations":
+		return cmdIntegrations(args[1:])
+	case "connection":
+		return cmdConnection(args[1:])
+	case "exec":
+		return cmdExec(args[1:])
+	case "mcp":
+		return cmdMCP(args[1:])
 	case "login":
 		return cmdLogin(args[1:])
 	case "logout":
@@ -98,6 +106,10 @@ Usage:
   air update [dir] [flags]        regenerate the airlock-managed files in place
   air toolchain install           ensure the pinned build toolchain and skills
   air build [dir]                 run the local build chain
+  air integrations list           list configured external integrations
+  air connection request ...      call a bound HTTP connection
+  air exec run ...                 run a command on a bound exec endpoint
+  air mcp probe|tools|call ...     inspect or call MCP servers
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
   air deploy [dir] [flags]        upload source and start a build

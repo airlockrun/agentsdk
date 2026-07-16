@@ -39,6 +39,9 @@ type deployFlags struct {
 }
 
 func cmdDeploy(args []string) error {
+	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" {
+		return errors.New("deploy is unavailable with a codegen integration token")
+	}
 	f, err := parseDeployFlags(args)
 	if err != nil {
 		return err

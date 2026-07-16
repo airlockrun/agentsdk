@@ -49,6 +49,14 @@ airlock and are encrypted at rest. The public key carries a dated
 comment (`airlock-{agentSlug}-{endpointSlug}-YYYY-MM-DD`) so on rotation
 the operator can `grep` `authorized_keys` and remove old lines.
 
+After setup, validate the remote command from a bound workspace or Airlock
+codegen without downloading the SSH key:
+
+```bash
+go tool air integrations list
+go tool air exec run ci-runner -- kick-build --branch main
+```
+
 **Access is required.** Exec hands arbitrary commands to a real machine;
 `AccessAdmin` is normally the right choice, and `AccessUser` is available when
 members should run commands. `AccessPublic` panics at registration because exec

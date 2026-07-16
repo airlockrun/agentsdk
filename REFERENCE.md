@@ -616,9 +616,6 @@ agent.RegisterMCP(&agentsdk.MCP{
 })
 ```
 
-(Airlock builder: use the `mcp_probe` tool to check what a URL supports before
-writing this.)
-
 ## RegisterExecEndpoint — remote commands
 
 Declare a slug for running commands on a server the container can't reach as a
@@ -640,6 +637,8 @@ res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build", Args: []stri
 
 → Full API (Run vs RunStream, the `exec_{slug}.run` JS binding, shell features,
 errors, and the shared `*SavedTo` overflow handling): **`/libs/agentsdk/reference/exec.md`**.
+
+Live connection, exec, and MCP validation CLI: **`/libs/agentsdk/reference/integrations.md`**.
 
 ## RegisterEnvVar — operator-configured environment variables
 
