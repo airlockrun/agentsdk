@@ -62,11 +62,17 @@ func cmdDeploy(args []string) error {
 	}
 	boundRemote, _ := binding.remote(remoteName)
 	baseURL := normalizeBaseURL(f.url)
+	if baseURL != "" && boundRemote.AirlockURL != "" && baseURL != normalizeBaseURL(boundRemote.AirlockURL) {
+		return fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remoteName, boundRemote.AirlockURL, baseURL)
+	}
 	if baseURL == "" {
 		baseURL = boundRemote.AirlockURL
 	}
 	if baseURL == "" {
 		return errors.New("deploy needs an Airlock URL: pass --url or run air init --airlock <url>")
+	}
+	if f.create && boundRemote.AgentID != "" {
+		return fmt.Errorf("remote %q is already bound to agent %s; rerun deploy without --create, or choose a different --remote name", remoteName, boundRemote.AgentID)
 	}
 
 	ctx := context.Background()
@@ -103,12 +109,12 @@ func cmdDeploy(args []string) error {
 			return err
 		}
 		target.AirlockURL = baseURL
-		binding.setRemote(remoteName, target)
+		binding.putRemote(remoteName, target)
 		if err := writeAgentBinding(f.dir, binding); err != nil {
 			return err
 		}
 	} else {
-		target, err = resolveDeployTarget(ctx, baseURL, token, f.agent, boundRemote)
+		target, err = resolveAgentTarget(ctx, baseURL, token, f.agent, remoteName, boundRemote)
 		if err != nil {
 			return err
 		}
@@ -131,7 +137,7 @@ func cmdDeploy(args []string) error {
 				}
 				return fmt.Errorf("the connected Git branch changed since this workspace last synced.\n\nClone the current branch into another directory:\n  git clone%s %s ../%s-latest\n\nMerge your changes there and push through Git", branchArg, stale.gitRemote, target.Slug)
 			}
-			return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  air deploy\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, baseURL, target.Slug)
+			return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  air deploy\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
 		}
 		return err
 	}
@@ -140,7 +146,7 @@ func cmdDeploy(args []string) error {
 	}
 	target.SourceState = newState
 	target.AirlockURL = baseURL
-	binding.setRemote(remoteName, target)
+	binding.putRemote(remoteName, target)
 	if err := writeAgentBinding(f.dir, binding); err != nil {
 		return err
 	}
@@ -340,41 +346,46 @@ func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags)
 	return agentRemoteBinding{AirlockURL: baseURL, AgentID: resp.Agent.Id, Slug: resp.Agent.Slug}, nil
 }
 
-func resolveDeployTarget(ctx context.Context, baseURL, token, flagAgent string, binding agentRemoteBinding) (agentRemoteBinding, error) {
+func resolveAgentTarget(ctx context.Context, baseURL, token, flagAgent, remoteName string, binding agentRemoteBinding) (agentRemoteBinding, error) {
 	target := flagAgent
 	if target == "" {
 		target = binding.AgentID
 	}
-	if target == "" && binding.Slug != "" {
-		return agentRemoteBinding{}, fmt.Errorf("%s has slug %q but no agent_id; run air deploy --agent %s once to resolve and persist the stable binding", agentBindingPath, binding.Slug, binding.Slug)
-	}
 	if target == "" {
-		return agentRemoteBinding{}, fmt.Errorf("deploy needs a target: pass --agent, --create, or set %s", agentBindingPath)
+		return agentRemoteBinding{}, fmt.Errorf("remote %q needs an agent target: pass --agent or configure %s", remoteName, agentBindingPath)
 	}
+	var resolved agentRemoteBinding
 	if deployUUIDRe.MatchString(target) {
 		agent, err := getAgentDetail(ctx, baseURL, token, target)
 		if err != nil {
 			return agentRemoteBinding{}, err
 		}
-		if binding.AgentID == target && binding.Slug != "" && agent.GetSlug() != binding.Slug {
-			return agentRemoteBinding{}, fmt.Errorf("%s has agent_id %s but slug %q; Airlock reports slug %q", agentBindingPath, target, binding.Slug, agent.GetSlug())
+		if agent.GetId() != target {
+			return agentRemoteBinding{}, fmt.Errorf("resolve agent %q: Airlock returned agent %q", target, agent.GetId())
 		}
-		return agentRemoteBinding{AirlockURL: baseURL, AgentID: target, Slug: agent.GetSlug(), SourceState: binding.SourceState}, nil
-	}
-
-	var resp airlockv1.ListAgentsResponse
-	if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/agents", token, nil, &resp); err != nil {
-		return agentRemoteBinding{}, fmt.Errorf("resolve agent %q: %w", target, err)
-	}
-	for _, a := range resp.Agents {
-		if a.GetSlug() == target || a.GetId() == target {
-			if binding.AgentID != "" && binding.Slug == target && a.GetId() != binding.AgentID {
-				return agentRemoteBinding{}, fmt.Errorf("%s has slug %q but agent_id %s; Airlock reports agent_id %s", agentBindingPath, binding.Slug, binding.AgentID, a.GetId())
+		resolved = agentRemoteBinding{AirlockURL: baseURL, AgentID: agent.GetId(), Slug: agent.GetSlug()}
+	} else {
+		var resp airlockv1.ListAgentsResponse
+		if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/agents", token, nil, &resp); err != nil {
+			return agentRemoteBinding{}, fmt.Errorf("resolve agent %q: %w", target, err)
+		}
+		for _, a := range resp.Agents {
+			if a.GetSlug() == target || a.GetId() == target {
+				resolved = agentRemoteBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug()}
+				break
 			}
-			return agentRemoteBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug(), SourceState: binding.SourceState}, nil
 		}
 	}
-	return agentRemoteBinding{}, fmt.Errorf("agent %q not found in %s", target, baseURL)
+	if resolved.AgentID == "" {
+		return agentRemoteBinding{}, fmt.Errorf("agent %q not found in %s", target, baseURL)
+	}
+	if binding.AgentID != "" && resolved.AgentID != binding.AgentID {
+		return agentRemoteBinding{}, fmt.Errorf("remote %q is bound to agent %s, not %s; choose a different --remote name", remoteName, binding.AgentID, resolved.AgentID)
+	}
+	if normalizeBaseURL(binding.AirlockURL) == normalizeBaseURL(baseURL) && binding.AgentID == resolved.AgentID {
+		resolved.SourceState = binding.SourceState
+	}
+	return resolved, nil
 }
 
 func getAgentDetail(ctx context.Context, baseURL, token, agentID string) (*airlockv1.AgentInfo, error) {

@@ -16,7 +16,7 @@ func TestResolveIntegrationTargetCodegen(t *testing.T) {
 	t.Setenv("AIRLOCK_API_URL", "https://airlock.example/")
 	t.Setenv("AIRLOCK_AGENT_ID", "agent-id")
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "token")
-	target, err := resolveIntegrationTarget(t.Context())
+	target, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{})
 	if err != nil {
 		t.Fatalf("resolveIntegrationTarget() error: %v", err)
 	}
@@ -30,8 +30,89 @@ func TestResolveIntegrationTargetCodegen(t *testing.T) {
 
 func TestResolveIntegrationTargetRequiresCompleteEnvironment(t *testing.T) {
 	t.Setenv("AIRLOCK_API_URL", "https://airlock.example")
-	if _, err := resolveIntegrationTarget(t.Context()); err == nil {
+	if _, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{}); err == nil {
 		t.Fatal("resolveIntegrationTarget() succeeded with incomplete environment")
+	}
+}
+
+func TestResolveIntegrationTargetSelectsNamedRemote(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const prodID = "11111111-1111-1111-1111-111111111111"
+	const devID = "22222222-2222-2222-2222-222222222222"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/"+devID {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer user-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agent":{"id":"` + devID + `","slug":"dev"}}`))
+	}))
+	defer server.Close()
+	if err := saveLoginCredentials(server.URL, "dev@example.com", "user-token", ""); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	binding := agentBinding{}
+	binding.putRemote("prod", agentRemoteBinding{AirlockURL: server.URL, AgentID: prodID, Slug: "prod"})
+	binding.putRemote("dev", agentRemoteBinding{AirlockURL: server.URL, AgentID: devID, Slug: "dev"})
+	if err := writeAgentBinding(dir, binding); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	target, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{remote: "dev"})
+	if err != nil {
+		t.Fatalf("resolveIntegrationTarget: %v", err)
+	}
+	if target.baseURL != server.URL || target.agentID != devID || target.token != "user-token" || target.codegen {
+		t.Fatalf("target = %+v", target)
+	}
+	got, _, err := loadAgentBinding(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultRemote != "prod" {
+		t.Fatalf("DefaultRemote = %q, want prod", got.DefaultRemote)
+	}
+}
+
+func TestResolveIntegrationTargetRejectsRemoteURLChange(t *testing.T) {
+	dir := t.TempDir()
+	binding := agentBinding{}
+	binding.putRemote("prod", agentRemoteBinding{AirlockURL: "https://prod.example", AgentID: "agent"})
+	if err := writeAgentBinding(dir, binding); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	_, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{url: "https://dev.example"})
+	if err == nil || !strings.Contains(err.Error(), "different --remote") {
+		t.Fatalf("resolveIntegrationTarget error = %v", err)
+	}
+}
+
+func TestResolveIntegrationTargetRejectsCodegenSelectors(t *testing.T) {
+	t.Setenv("AIRLOCK_API_URL", "https://airlock.example")
+	t.Setenv("AIRLOCK_AGENT_ID", "agent-id")
+	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "token")
+	_, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{remote: "dev"})
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("resolveIntegrationTarget error = %v", err)
+	}
+}
+
+func TestParseIntegrationTargetFlags(t *testing.T) {
+	flags, err := parseIntegrationTargetFlags([]string{"--remote", "dev", "--url", "https://airlock.example", "--agent", "dev-agent"})
+	if err != nil {
+		t.Fatalf("parseIntegrationTargetFlags: %v", err)
+	}
+	if flags.remote != "dev" || flags.url != "https://airlock.example" || flags.agent != "dev-agent" {
+		t.Fatalf("flags = %#v", flags)
+	}
+	if _, err := parseIntegrationTargetFlags([]string{"--remote", "bad remote"}); err == nil {
+		t.Fatal("parseIntegrationTargetFlags accepted an invalid remote")
 	}
 }
 
@@ -64,6 +145,51 @@ func TestConnectionRequestCodegen(t *testing.T) {
 		return cmdConnection([]string{"request", "home", "--method", "POST", "--path", "/devices", "--data", `{"active":true}`})
 	})
 	if output != `{"ok":true}` {
+		t.Fatalf("stdout = %q", output)
+	}
+}
+
+func TestExecNamedRemotePreservesCommandFlags(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const prodID = "11111111-1111-1111-1111-111111111111"
+	const devID = "22222222-2222-2222-2222-222222222222"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/agents/" + devID:
+			encoded, _ := protojson.Marshal(&airlockv1.GetAgentDetailResponse{Agent: &airlockv1.AgentInfo{Id: devID, Slug: "dev"}})
+			_, _ = w.Write(encoded)
+		case "/api/v1/agents/" + devID + "/integrations/exec/shell/run":
+			var req airlockv1.InvokeExecRequest
+			raw, _ := io.ReadAll(r.Body)
+			if err := protojson.Unmarshal(raw, &req); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			if req.Command != "runner" || len(req.Args) != 2 || req.Args[0] != "--remote" || req.Args[1] != "inside" {
+				t.Errorf("command = %q, args = %q", req.Command, req.Args)
+			}
+			encoded, _ := protojson.Marshal(&airlockv1.InvokeExecResponse{Stdout: []byte("ok")})
+			_, _ = w.Write(encoded)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	if err := saveLoginCredentials(server.URL, "dev@example.com", "user-token", ""); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	binding := agentBinding{}
+	binding.putRemote("prod", agentRemoteBinding{AirlockURL: server.URL, AgentID: prodID, Slug: "prod"})
+	binding.putRemote("dev", agentRemoteBinding{AirlockURL: server.URL, AgentID: devID, Slug: "dev"})
+	if err := writeAgentBinding(dir, binding); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	output := captureCommandStdout(t, func() error {
+		return cmdExec([]string{"run", "shell", "--remote", "dev", "--", "runner", "--remote", "inside"})
+	})
+	if output != "ok" {
 		t.Fatalf("stdout = %q", output)
 	}
 }

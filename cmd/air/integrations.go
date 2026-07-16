@@ -25,13 +25,22 @@ type integrationTarget struct {
 	codegen bool
 }
 
-func resolveIntegrationTarget(ctx context.Context) (integrationTarget, error) {
+type integrationTargetFlags struct {
+	url    string
+	remote string
+	agent  string
+}
+
+func resolveIntegrationTarget(ctx context.Context, flags integrationTargetFlags) (integrationTarget, error) {
 	baseURL := os.Getenv("AIRLOCK_API_URL")
 	agentID := os.Getenv("AIRLOCK_AGENT_ID")
 	token := os.Getenv("AIRLOCK_INTEGRATION_TOKEN")
 	if baseURL != "" || agentID != "" || token != "" {
 		if baseURL == "" || agentID == "" || token == "" {
 			return integrationTarget{}, errors.New("AIRLOCK_API_URL, AIRLOCK_AGENT_ID, and AIRLOCK_INTEGRATION_TOKEN must be set together")
+		}
+		if flags != (integrationTargetFlags{}) {
+			return integrationTarget{}, errors.New("--url, --remote, and --agent are unavailable with a codegen integration token")
 		}
 		return integrationTarget{baseURL: normalizeBaseURL(baseURL), agentID: agentID, token: token, codegen: true}, nil
 	}
@@ -43,15 +52,30 @@ func resolveIntegrationTarget(ctx context.Context) (integrationTarget, error) {
 	if !ok {
 		return integrationTarget{}, errors.New("workspace is not bound to Airlock; deploy or clone it first")
 	}
-	remote, ok := binding.remote("")
-	if !ok || remote.AirlockURL == "" || remote.AgentID == "" {
-		return integrationTarget{}, errors.New("workspace binding requires an Airlock URL and agent ID")
+	remoteName := flags.remote
+	if remoteName == "" {
+		remoteName = binding.DefaultRemote
 	}
-	token, err = accessTokenForURL(ctx, remote.AirlockURL)
+	remote, _ := binding.remote(remoteName)
+	baseURL = normalizeBaseURL(flags.url)
+	if baseURL != "" && remote.AirlockURL != "" && baseURL != normalizeBaseURL(remote.AirlockURL) {
+		return integrationTarget{}, fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remoteName, remote.AirlockURL, baseURL)
+	}
+	if baseURL == "" {
+		baseURL = remote.AirlockURL
+	}
+	if baseURL == "" {
+		return integrationTarget{}, fmt.Errorf("remote %q needs an Airlock URL: pass --url or configure %s", remoteName, agentBindingPath)
+	}
+	token, err = accessTokenForURL(ctx, baseURL)
 	if err != nil {
 		return integrationTarget{}, err
 	}
-	return integrationTarget{baseURL: remote.AirlockURL, agentID: remote.AgentID, token: token}, nil
+	resolved, err := resolveAgentTarget(ctx, baseURL, token, flags.agent, remoteName, remote)
+	if err != nil {
+		return integrationTarget{}, err
+	}
+	return integrationTarget{baseURL: baseURL, agentID: resolved.AgentID, token: token}, nil
 }
 
 func (t integrationTarget) path(suffix string) string {
@@ -62,11 +86,15 @@ func (t integrationTarget) path(suffix string) string {
 }
 
 func cmdIntegrations(args []string) error {
-	if len(args) != 1 || args[0] != "list" {
-		return errors.New("integrations requires: list")
+	if len(args) == 0 || args[0] != "list" {
+		return errors.New("integrations requires: list [--remote <name>] [--url <url>] [--agent <slug-or-id>]")
+	}
+	flags, err := parseIntegrationTargetFlags(args[1:])
+	if err != nil {
+		return err
 	}
 	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx)
+	target, err := resolveIntegrationTarget(ctx, flags)
 	if err != nil {
 		return err
 	}
@@ -93,7 +121,14 @@ func cmdConnection(args []string) error {
 	slug := args[1]
 	method, path, body := http.MethodGet, "", ""
 	headers := map[string]string{}
+	var targetFlags integrationTargetFlags
 	for i := 2; i < len(args); i++ {
+		if handled, err := consumeIntegrationTargetFlag(args, &i, &targetFlags); handled || err != nil {
+			if err != nil {
+				return err
+			}
+			continue
+		}
 		switch args[i] {
 		case "--method", "--path", "--data", "--header":
 			if i+1 >= len(args) {
@@ -123,7 +158,7 @@ func cmdConnection(args []string) error {
 		return errors.New("--path is required")
 	}
 	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx)
+	target, err := resolveIntegrationTarget(ctx, targetFlags)
 	if err != nil {
 		return err
 	}
@@ -150,11 +185,18 @@ func cmdExec(args []string) error {
 	}
 	slug := args[1]
 	timeout := time.Duration(0)
+	var targetFlags integrationTargetFlags
 	separator := -1
 	for i := 2; i < len(args); i++ {
 		if args[i] == "--" {
 			separator = i
 			break
+		}
+		if handled, err := consumeIntegrationTargetFlag(args, &i, &targetFlags); handled || err != nil {
+			if err != nil {
+				return err
+			}
+			continue
 		}
 		if args[i] != "--timeout" || i+1 >= len(args) {
 			return fmt.Errorf("unknown exec flag %q", args[i])
@@ -173,7 +215,7 @@ func cmdExec(args []string) error {
 		return errors.New("exec command must follow --")
 	}
 	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx)
+	target, err := resolveIntegrationTarget(ctx, targetFlags)
 	if err != nil {
 		return err
 	}
@@ -207,33 +249,45 @@ func cmdMCP(args []string) error {
 		}
 		return probeMCP(args[1])
 	case "tools":
-		if len(args) != 2 {
-			return errors.New("mcp tools requires exactly one server slug")
+		if len(args) < 2 {
+			return errors.New("mcp tools requires a server slug")
 		}
-		return listMCPTools(args[1])
+		flags, err := parseIntegrationTargetFlags(args[2:])
+		if err != nil {
+			return err
+		}
+		return listMCPTools(args[1], flags)
 	case "call":
 		if len(args) < 3 {
 			return errors.New("mcp call requires: <server-slug> <tool> [--args <json>]")
 		}
 		arguments := "{}"
-		if len(args) > 3 {
-			if len(args) != 5 || args[3] != "--args" {
-				return errors.New("mcp call accepts only --args <json>")
+		var flags integrationTargetFlags
+		for i := 3; i < len(args); i++ {
+			if handled, err := consumeIntegrationTargetFlag(args, &i, &flags); handled || err != nil {
+				if err != nil {
+					return err
+				}
+				continue
 			}
-			arguments = args[4]
+			if args[i] != "--args" || i+1 >= len(args) {
+				return fmt.Errorf("unknown mcp call flag %q", args[i])
+			}
+			arguments = args[i+1]
+			i++
 		}
 		if !json.Valid([]byte(arguments)) {
 			return errors.New("MCP arguments must be valid JSON")
 		}
-		return callMCPTool(args[1], args[2], []byte(arguments))
+		return callMCPTool(args[1], args[2], []byte(arguments), flags)
 	default:
 		return fmt.Errorf("unknown mcp subcommand %q", args[0])
 	}
 }
 
-func listMCPTools(slug string) error {
+func listMCPTools(slug string, flags integrationTargetFlags) error {
 	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx)
+	target, err := resolveIntegrationTarget(ctx, flags)
 	if err != nil {
 		return err
 	}
@@ -265,9 +319,9 @@ func listMCPTools(slug string) error {
 	return nil
 }
 
-func callMCPTool(slug, toolName string, arguments []byte) error {
+func callMCPTool(slug, toolName string, arguments []byte, flags integrationTargetFlags) error {
 	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx)
+	target, err := resolveIntegrationTarget(ctx, flags)
 	if err != nil {
 		return err
 	}
@@ -284,6 +338,44 @@ func callMCPTool(slug, toolName string, arguments []byte) error {
 		return errors.New("MCP tool returned an error")
 	}
 	return nil
+}
+
+func parseIntegrationTargetFlags(args []string) (integrationTargetFlags, error) {
+	var flags integrationTargetFlags
+	for i := 0; i < len(args); i++ {
+		handled, err := consumeIntegrationTargetFlag(args, &i, &flags)
+		if err != nil {
+			return integrationTargetFlags{}, err
+		}
+		if !handled {
+			return integrationTargetFlags{}, fmt.Errorf("unknown integration target flag %q", args[i])
+		}
+	}
+	return flags, nil
+}
+
+func consumeIntegrationTargetFlag(args []string, index *int, flags *integrationTargetFlags) (bool, error) {
+	key := args[*index]
+	if key != "--url" && key != "--remote" && key != "--agent" {
+		return false, nil
+	}
+	if *index+1 >= len(args) {
+		return true, fmt.Errorf("%s requires a value", key)
+	}
+	value := args[*index+1]
+	(*index)++
+	switch key {
+	case "--url":
+		flags.url = value
+	case "--remote":
+		if !validRemoteName(value) {
+			return true, fmt.Errorf("invalid remote %q: use letters, digits, dashes, and underscores", value)
+		}
+		flags.remote = value
+	case "--agent":
+		flags.agent = value
+	}
+	return true, nil
 }
 
 func probeMCP(rawURL string) error {
