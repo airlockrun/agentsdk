@@ -8,6 +8,7 @@ import (
 
 	"agent/views"
 
+	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/agenttest"
 )
 
@@ -15,26 +16,33 @@ import (
 // newAgent through the real SDK mux. Handler behavior has package-local tests.
 func TestAgentComposition(t *testing.T) {
 	env := agenttest.New(t, newAgent)
-	srv := httptest.NewServer(env.Agent.Handler())
-	defer srv.Close()
+	user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
 
-	for _, path := range []string{"/", views.AppCSSPath} {
-		resp, err := http.Get(srv.URL + path)
-		if err != nil {
-			t.Fatalf("GET %s: %v", path, err)
+	for _, tt := range []struct {
+		path   string
+		authed bool
+	}{
+		{path: "/", authed: true},
+		{path: views.AppCSSPath},
+	} {
+		r := httptest.NewRequest(http.MethodGet, tt.path, nil)
+		if tt.authed {
+			r = r.WithContext(agenttest.WithUser(r.Context(), user))
 		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("GET %s = %d, want %d", path, resp.StatusCode, http.StatusOK)
+		w := httptest.NewRecorder()
+		env.Agent.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want %d", tt.path, w.Code, http.StatusOK)
 		}
 	}
 }
 
 // TestDBMigratesAndConnects is the worked example for DB-backed tests.
 // agenttest.New uses TEST_DB_URL when supplied or starts pgvector with Docker.
-// agentsdk.New resets and applies db/migrations before newAgent constructs
-// dependencies or registrations. Once you add tables, query through Agent.DB()
-// and assert on the results; this run checks that the migrated pool is reachable.
+// agentsdk.New finds db/migrations at the enclosing module root, resets the
+// schema, and applies migrations before newAgent constructs dependencies or
+// registrations. Once you add tables, query through Agent.DB() and assert on
+// the results; this run checks that the migrated pool is reachable.
 func TestDBMigratesAndConnects(t *testing.T) {
 	env := agenttest.New(t, newAgent)
 	if err := env.Agent.DB().PingContext(context.Background()); err != nil {

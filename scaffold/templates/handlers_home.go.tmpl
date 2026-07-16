@@ -12,21 +12,16 @@ package handlers
 import (
 	"net/http"
 
-	"agent/deps"
 	"agent/views"
 )
 
-// Handler owns the typed dependencies used by HTTP handlers.
-type Handler struct {
-	deps *deps.Deps
-}
+// Handler owns the HTTP handlers. Add a package-local Deps struct and accept it
+// in New when handlers need services from a domain package.
+type Handler struct{}
 
 // New constructs the HTTP handler set.
-func New(d *deps.Deps) *Handler {
-	if d == nil {
-		panic("handlers: deps are required")
-	}
-	return &Handler{deps: d}
+func New() *Handler {
+	return &Handler{}
 }
 
 // Home renders the default placeholder homepage. The view-model is

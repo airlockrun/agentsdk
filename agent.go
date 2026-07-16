@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/airlockrun/agentsdk/internal/testcaller"
 	"github.com/airlockrun/agentsdk/prompt"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/google/uuid"
@@ -138,6 +139,9 @@ func UserFromContext(ctx context.Context) (User, bool) {
 			return User{}, false
 		}
 		return User{ID: l.userID, Email: l.userEmail, DisplayName: l.userDisplayName}, true
+	}
+	if test, ok := testcaller.FromContext(ctx); ok && test.UserID != "" {
+		return User{ID: test.UserID, Email: test.Email, DisplayName: test.DisplayName}, true
 	}
 	return User{}, false
 }

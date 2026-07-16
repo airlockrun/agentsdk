@@ -79,6 +79,34 @@ tool github.com/a-h/templ/cmd/templ
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	writeIntegrationFile(t, filepath.Join(dir, "db", "migrations", "00001_nested_test.sql"), `-- +goose Up
+CREATE TABLE nested_migration_test (id integer PRIMARY KEY);
+
+-- +goose Down
+DROP TABLE nested_migration_test;
+`)
+	writeIntegrationFile(t, filepath.Join(dir, "nested", "migration_test.go"), `package nested
+
+import (
+	"testing"
+
+	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/agenttest"
+)
+
+func TestAgenttestFindsModuleMigrations(t *testing.T) {
+	env := agenttest.New(t, func() *agentsdk.Agent {
+		return agentsdk.New(agentsdk.Config{Description: "nested migration test"})
+	})
+	var table string
+	if err := env.Agent.DB().QueryRowContext(t.Context(), "SELECT to_regclass('nested_migration_test')").Scan(&table); err != nil {
+		t.Fatal(err)
+	}
+	if table != "nested_migration_test" {
+		t.Fatalf("table = %q, want nested_migration_test", table)
+	}
+}
+`)
 
 	// Disable any ambient go.work (the hq monorepo has one) so resolution
 	// goes purely through go.mod + the proxy. CI doesn't have a workspace
@@ -164,7 +192,7 @@ tool github.com/a-h/templ/cmd/templ
 		}
 	}
 
-	generatedTests := exec.Command("go", "test", "-count=1", "./...")
+	generatedTests := exec.Command("go", "test", "-p=1", "-count=1", "./...")
 	generatedTests.Dir = dir
 	generatedTests.Env = append(env, "TEST_DB_URL="+dsn)
 	if out, err := generatedTests.CombinedOutput(); err != nil {
@@ -209,6 +237,16 @@ tool github.com/a-h/templ/cmd/templ
 		return // success
 	}
 	t.Fatal("agent did not start within 5 seconds")
+}
+
+func writeIntegrationFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func freePort(t *testing.T) int {

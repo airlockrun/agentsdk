@@ -1,5 +1,5 @@
-// Package agenttest provides an atomic environment and database bootstrap for
-// tests of agents built on agentsdk.
+// Package agenttest provides agent environments, platform mocks, and caller
+// contexts for tests of agents built on agentsdk.
 package agenttest
 
 import (
@@ -26,9 +26,10 @@ type Env struct {
 
 // New configures a mock Airlock and test database before invoking factory.
 // TEST_DB_URL is used when explicitly supplied; otherwise New starts a
-// throwaway pgvector container. agentsdk.New resets and applies db/migrations
-// before it returns to the rest of factory, so dependency construction and
-// registrations always see a clean, migrated schema.
+// throwaway pgvector container. agentsdk.New finds db/migrations from the
+// enclosing Go module, then resets and applies them before it returns to the
+// rest of factory, so dependency construction and registrations always see a
+// clean, migrated schema.
 func New(t *testing.T, factory func() *agentsdk.Agent) *Env {
 	t.Helper()
 	if factory == nil {

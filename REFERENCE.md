@@ -68,13 +68,12 @@ go tool air build
 
 This reconciles module sums, conditionally generates sqlc output when
 `db/queries/*.sql` exists, generates templ output, compiles Tailwind and
-DaisyUI, runs `go test -count=1 ./...`, and verifies the Go binary without
+DaisyUI, runs `go test -p=1 -count=1 ./...`, and verifies the Go binary without
 leaving it in the source tree.
 
-Generated `*_templ.go`, `views/static/app.css`, `internal/db/*` (except the
-tracked `internal/db/doc.go`), and root `agent` binaries are disposable and
-gitignored. Commit their source inputs; local and Docker builds regenerate the
-outputs.
+Generated `*_templ.go`, `views/static/app.css`, `internal/db/*` except
+`internal/db/doc.go`, and root binaries are gitignored. Commit source inputs;
+builds regenerate outputs.
 
 Agent integration tests use `agenttest.New(t, factory)`, which configures the
 Airlock API mock and test database before constructing the agent. The returned
@@ -82,32 +81,36 @@ Airlock API mock and test database before constructing the agent. The returned
 HTTP mock can use `agenttest.NewMockAirlock`; transport payload types remain an
 SDK runtime detail rather than part of the root author API.
 
-## Design principle: always register granular tools
+Authenticated in-process handler tests attach caller state without private
+transport headers:
 
-Whenever you build a feature (route, cron, webhook, connection), also register
-**granular tools** giving the LLM the same data and operations.
+```go
+user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
+req := httptest.NewRequest(http.MethodGet, "/", nil)
+req = req.WithContext(agenttest.WithUser(req.Context(), user)) // AccessUser
+env.Agent.Handler().ServeHTTP(httptest.NewRecorder(), req)
+```
 
-Bad: only `importPlaylist` (bulk insert). The LLM can import but can't inspect
-or query.
+`agenttest.WithCaller(ctx, user, access)` selects explicit access. Identity and
+access are independent; plain contexts are public. Context values do not cross
+`httptest.NewServer`.
 
-Good: `importPlaylist`, `listSongs`, `getSong`, `voteSong`. Now the LLM can
-answer "which song has the most votes?" through `run_js`.
+## Design principle: register granular tools
 
-Think: "what would the LLM need to call to be a helpful conversational
-assistant in this domain?" and register those tools.
+Give the LLM the same useful operations as every route or integration. Prefer
+`importPlaylist`, `listSongs`, `getSong`, and `voteSong` over one bulk-only tool;
+the agent must be able to inspect and query the data it changes.
 
 ## Worked example
 
-A connection + typed dependency injection + granular tools. Routes, crons,
-webhooks and the rest follow the same `Register*` shape: `newAgent` constructs
-the dependency graph once, then registers bound methods from domain packages.
+A connection, direct dependency injection, and a granular tool. Other
+`Register*` methods use the same constructed-receiver pattern.
 
 ```go
 // main.go
 package main
 
 import (
-    "agent/deps"
     "agent/spotify"
     "github.com/airlockrun/agentsdk"
     "github.com/airlockrun/goai/tool"
@@ -136,8 +139,8 @@ func newAgent() *agentsdk.Agent {
         Access:        agentsdk.AccessUser,
     })
 
-    appDeps := deps.New(spotifyConn)
-    tools := spotify.NewTools(appDeps)
+    spotifyService := spotify.NewService(spotifyConn)
+    tools := spotify.NewTools(spotifyService)
 
     agent.RegisterTool(tool.Typed[spotify.SearchIn, spotify.SearchOut]("search_tracks").
         Description("Search Spotify tracks.").
@@ -149,20 +152,35 @@ func newAgent() *agentsdk.Agent {
 ```
 
 ```go
-// deps/deps.go
-package deps
+// spotify/service.go
+package spotify
 
-import "github.com/airlockrun/agentsdk"
+import (
+    "context"
+    "net/url"
 
-type Deps struct {
-    Spotify *agentsdk.ConnectionHandle
+    "github.com/airlockrun/agentsdk"
+)
+
+type Service struct {
+    connection *agentsdk.ConnectionHandle
 }
 
-func New(spotify *agentsdk.ConnectionHandle) *Deps {
-    if spotify == nil {
-        panic("deps: Spotify is required")
+func NewService(connection *agentsdk.ConnectionHandle) *Service {
+    if connection == nil {
+        panic("spotify: connection is required")
     }
-    return &Deps{Spotify: spotify}
+    return &Service{connection: connection}
+}
+
+func (s *Service) SearchTracks(ctx context.Context, in SearchIn) (SearchOut, error) {
+    body, err := s.connection.Request(ctx, agentsdk.RequestOpts{
+        Path: "/v1/search?type=track&q=" + url.QueryEscape(in.Query),
+    })
+    if err != nil {
+        return SearchOut{}, err
+    }
+    return SearchOut{Response: body}, nil
 }
 ```
 
@@ -173,10 +191,6 @@ package spotify
 import (
     "context"
     "encoding/json"
-    "net/url"
-
-    "agent/deps"
-    "github.com/airlockrun/agentsdk"
 )
 
 type SearchIn struct {
@@ -187,33 +201,25 @@ type SearchOut struct {
 }
 
 type Tools struct {
-    deps *deps.Deps
+    service *Service
 }
 
-func NewTools(d *deps.Deps) *Tools {
-    if d == nil {
-        panic("spotify: deps are required")
+func NewTools(service *Service) *Tools {
+    if service == nil {
+        panic("spotify: service is required")
     }
-    return &Tools{deps: d}
+    return &Tools{service: service}
 }
 
 func (t *Tools) SearchTracks(ctx context.Context, in SearchIn) (SearchOut, error) {
-    body, err := t.deps.Spotify.Request(ctx, agentsdk.RequestOpts{
-        Path: "/v1/search?type=track&q=" + url.QueryEscape(in.Query),
-    })
-    if err != nil {
-        return SearchOut{}, err
-    }
-    return SearchOut{Response: json.RawMessage(body)}, nil
+    return t.service.SearchTracks(ctx, in)
 }
 ```
 
 **Key patterns:**
 - `RegisterConnection` returns `*ConnectionHandle`; use it for all API calls.
-- `deps.New` takes every required handle and service; changing its signature
-  exposes missing composition as a compile error.
-- Handlers and tools are methods on constructed receiver types. `newAgent`
-  registers bound methods such as `tools.SearchTracks`.
+- `newAgent` injects handles into services and services into consumers, then
+  registers bound receiver methods.
 - `handle.Request(ctx, agentsdk.RequestOpts{Path: ...})` returns raw bytes.
   `RequestOpts.Method` defaults to `"GET"`; `Body` auto-encodes (struct → JSON,
   `[]byte`/`string` as-is, `nil` → no body); `Headers` is an optional
@@ -244,15 +250,14 @@ weather agent 🌦️, an invoicing agent 🧾, a calendar agent 📅. Think
 
 ## Typed dependency composition
 
-`Deps` lives in its own `deps` package so `main.go`, handlers, and domain
-packages can import the same type. Its constructor is the single place that
-assembles required handles and services. Keep `newAgent` as a thin composition
-root: register SDK handles, call `deps.New` once, construct receiver-based
-handlers/tools/services, and register their bound methods.
+`newAgent` registers handles, constructs services, and injects them directly
+into consumers. Use direct parameters for one or two dependencies and a
+package-local constructor `Deps` struct for larger sets. There is no application-
+wide dependency package or shared container. Reject nil requirements.
 
-The worked example above shows the complete shape. Add required constructor
-parameters and fields together, reject nil required values in constructors,
-and use the same receiver pattern for handlers and services.
+A domain package must never import a package that imports that domain.
+`handlers` may import `spotify`, but `spotify` must not import `handlers`;
+`newAgent` injects the same `*spotify.Service` into both consumers.
 
 ## RegisterTool
 
@@ -498,7 +503,7 @@ import (
     "agent/handlers"
 )
 
-pages := handlers.New(appDeps)
+pages := handlers.New(handlers.Deps{Spotify: spotifyService})
 agent.RegisterRoute(&agentsdk.Route{
     Method:  "GET",
     Path:    "/",

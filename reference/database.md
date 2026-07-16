@@ -82,8 +82,11 @@ func Up00002(ctx context.Context, db *sql.DB) error {
 func Down00002(ctx context.Context, db *sql.DB) error { return nil }
 ```
 
-`main.go` already blank-imports `db/migrations`, so `init()` fires
-automatically.
+Generated `scaffold_gen.go` blank-imports `db/migrations`, so `init()` fires in
+the agent binary and root-package tests. A subpackage test binary that exercises
+Go migrations must also blank-import `agent/db/migrations`; prefer an external
+test package if a migration imports the package under test. SQL migrations need
+no import.
 
 **Wrap external side effects.** `MigrationExternalStep` skips its callback while
 build-time validation runs up, down, and up against a test DB without S3,
@@ -100,7 +103,7 @@ when the source exists, treats source-missing/destination-present as complete,
 and returns `ErrNotFound` when both are absent. `ListDir` returns `[]FileInfo`;
 use `string(file.Path)` as the canonical object key.
 
-**Validate after creating migrations** (Airlock builder; three env vars
+**Validate SQL-only migrations after creating them** (Airlock builder; three env vars
 `TEST_DB_URL` for goose, `TEST_DB_PSQL` for psql, `TEST_DB_SCHEMA` — skip if
 `$TEST_DB_URL` is unset):
 
@@ -112,10 +115,20 @@ goose -dir db/migrations postgres "$TEST_DB_URL" up
 psql "$TEST_DB_PSQL" -c "SET search_path TO $TEST_DB_SCHEMA; SELECT table_name FROM information_schema.tables WHERE table_schema = '$TEST_DB_SCHEMA'"
 ```
 
+The standalone goose CLI cannot register numbered Go migrations. If any `.go`
+migration exists, use `go tool air build` for source verification. Airlock then
+runs the compiled image through up, down, and up before deployment, which
+validates SQL and registered Go migrations together.
+
 The agent gets its own Postgres schema. `AIRLOCK_DB_URL` is required, and
 `agentsdk.New` opens, checks, and migrates one owned pool before returning.
 `agent.DB()` always returns that `*AgentDB`; pass it straight to generated
 sqlc constructors. `Serve` closes the pool during shutdown.
+
+`agenttest.New` resolves source `db/migrations` from the nearest enclosing Go
+module, so DB-backed tests work from subpackages without changing process cwd.
+The SDK build runs packages serially because package test binaries sharing one
+`TEST_DB_URL` must not reset the same schema concurrently.
 
 Each startup migration pass has a bounded context and holds a PostgreSQL
 advisory lock keyed by agent ID from its first goose operation through its last.

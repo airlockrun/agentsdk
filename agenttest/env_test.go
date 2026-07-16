@@ -15,6 +15,9 @@ import (
 
 func TestNewSetsDatabaseAndMigratesBeforeFactoryContinues(t *testing.T) {
 	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/agent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	migrations := filepath.Join(workspace, "db", "migrations")
 	if err := os.MkdirAll(migrations, 0o755); err != nil {
 		t.Fatal(err)
@@ -27,7 +30,11 @@ DROP TABLE bootstrap_order;
 	if err := os.WriteFile(filepath.Join(migrations, "00001_bootstrap.sql"), []byte(migration), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(workspace)
+	nested := filepath.Join(workspace, "internal", "feature")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(nested)
 	t.Setenv("TEST_DB_URL", "")
 	inherited := "postgres://production:secret@127.0.0.1:1/production"
 	t.Setenv("AIRLOCK_DB_URL", inherited)
@@ -70,6 +77,9 @@ DROP TABLE bootstrap_order;
 
 func TestNewStaticAssetRoundTrip(t *testing.T) {
 	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/agent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(workspace, "db", "migrations"), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -87,7 +88,11 @@ func (a *Agent) autoMigrate() {
 	var downTo int64
 
 	if os.Getenv(testMigrationEnv) == "1" {
-		dir = sourceMigrationsPath
+		var err error
+		dir, err = sourceMigrationsDir()
+		if err != nil {
+			panic("agentsdk: resolve source migrations: " + err.Error())
+		}
 		mode = migrationTestReset
 	} else if isValidatingMigrations() {
 		mode = migrationValidate
@@ -127,6 +132,33 @@ func (a *Agent) autoMigrate() {
 		os.Exit(0)
 	default:
 		agentLogger().Info("migrations applied")
+	}
+}
+
+func sourceMigrationsDir() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("get working directory: %w", err)
+	}
+	start := dir
+	for {
+		goMod := filepath.Join(dir, "go.mod")
+		info, err := os.Stat(goMod)
+		switch {
+		case err == nil:
+			if !info.Mode().IsRegular() {
+				return "", fmt.Errorf("module marker %s is not a regular file", goMod)
+			}
+			return filepath.Join(dir, sourceMigrationsPath), nil
+		case !os.IsNotExist(err):
+			return "", fmt.Errorf("inspect module marker %s: %w", goMod, err)
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("find enclosing Go module from %s: go.mod not found", start)
+		}
+		dir = parent
 	}
 }
 

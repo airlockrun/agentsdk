@@ -47,7 +47,7 @@ assumption in `NOTES.md`.
 
 ```
 {agent-repo}/
-├── main.go            # newAgent() composes deps and registers bound methods
+├── main.go            # newAgent() injects dependencies and registers bound methods
 ├── main_test.go       # Composition smoke test via agent.Handler()
 ├── handlers/          # CONTROLLERS — HTTP handlers; import domain + views
 │   ├── home.go
@@ -60,8 +60,6 @@ assumption in `NOTES.md`.
 │   └── static/        # Tailwind build output (gitignored)
 ├── styles/
 │   └── app.css        # Tailwind v4 + DaisyUI source
-├── deps/
-│   └── deps.go        # Typed dependency graph + New constructor
 ├── db/
 │   ├── migrations/    # goose migrations (you create; doc.go pre-scaffolded)
 │   └── queries/       # sqlc query files (you create)
@@ -73,11 +71,12 @@ assumption in `NOTES.md`.
 └── NOTES.md           # Agent-specific design log
 ```
 
-**Keep `main.go` thin.** `newAgent()` registers SDK handles, constructs the
-typed graph once with `deps.New(...)`, constructs receiver-based handlers and
-tools, and registers their bound methods. Business logic lives in domain
-packages, never inline in main. `main()` only calls `newAgent().Serve()`; keep
-that split so tests can build the complete agent and serve `agent.Handler()`.
+**Keep `main.go` thin.** `newAgent()` is the composition root: register SDK
+handles, construct services, inject those values directly into each consuming
+package's constructor, and register bound handler and tool methods. Business
+logic lives in domain packages, never inline in main. `main()` only calls
+`newAgent().Serve()`; keep that split so tests can build the complete agent and
+serve `agent.Handler()`.
 
 ## MVC: handlers are the integration point
 
@@ -86,8 +85,8 @@ add domain packages and HTTP handlers; the rule below keeps the package
 graph cycle-free.
 
 ```
-main.go      →   deps + <domain> (model)
-                 handlers (controller) → deps + <domain> + views
+main.go      →   <domain> (model)
+                 handlers (controller) → <domain> + views
                  views (view)
 ```
 
@@ -98,8 +97,8 @@ main.go      →   deps + <domain> (model)
   (`views.HomeView`, `views.BoardView`). Templates take view-model
   types only; `views/` never imports a domain package.
 - **Controller** — `handlers/` holds a constructed receiver with HTTP methods
-  (`pages.Home`, `pages.BoardPage`). It imports `deps`, domain packages, and
-  `views/`, does the model→view-model conversion, and renders. Nothing imports
+  (`pages.Home`, `pages.BoardPage`). It imports domain packages and `views/`,
+  does the model→view-model conversion, and renders. Nothing imports
   `handlers/` back.
 
 **If you find yourself wanting to import `views` from a domain
@@ -109,17 +108,22 @@ domain → views → domain.
 
 ## Domain package shape
 
-`Deps` is shared across handlers and domain packages, so it lives in `deps/` —
-not inside any feature package. Its `New` constructor takes every required SDK
-handle and service. Add constructor arguments and fields together; an omitted
-dependency then fails in `newAgent` at compile time, while a nil dependency can
-fail immediately in the constructor.
+Dependencies are values, not a shared package. Use direct constructor parameters
+for one or two dependencies and a package-local `Deps` struct for larger sets.
+`main.go` constructs each service or SDK handle once and passes it directly to
+consumers. Omitted wiring fails when `newAgent` compiles; nil required values
+panic immediately in constructors.
+
+**A domain package must never import a package that imports that domain.** In
+particular, domain packages never import `handlers/`; handlers may import the
+domain and adapt its types for views. Do not move shared dependencies into a
+package imported by both sides if that package imports either consumer.
 
 Each domain package has two layers:
 
 1. **Pure Go** — business logic, API calls. Accepts handles, returns
    plain types.
-2. **Tool receiver** — a `Tools` type constructed with `*deps.Deps`, with
+2. **Tool receiver** — a `Tools` type constructed with the domain service, with
    `func (t *Tools) Name(ctx, In) (Out, error)` methods that call the pure
    layer. Register those bound methods with `RegisterTool`.
 
@@ -128,7 +132,7 @@ A typical domain package:
 ```
 spotify/
 ├── service.go  # NewService(...) + methods returning plain types
-└── tools.go    # NewTools(deps) + bound RegisterTool targets
+└── tools.go    # NewTools(service) + bound RegisterTool targets
 ```
 
 LLM-callable tools live in `tools.go`. HTTP routes live in `handlers/`.
@@ -136,22 +140,23 @@ Both consume the pure layer in `service.go`; neither imports the other.
 
 ```go
 // feature/tools.go
-type Tools struct{ deps *deps.Deps }
+type Tools struct{ service *Service }
 
-func NewTools(d *deps.Deps) *Tools {
-    if d == nil {
-        panic("feature: deps are required")
+func NewTools(service *Service) *Tools {
+    if service == nil {
+        panic("feature: service is required")
     }
-    return &Tools{deps: d}
+    return &Tools{service: service}
 }
 
 func (t *Tools) List(ctx context.Context, in ListIn) (ListOut, error) {
-    return t.deps.Feature.List(ctx, in)
+    return t.service.List(ctx, in)
 }
 
 // main.go
-appDeps := deps.New(featureService)
-featureTools := feature.NewTools(appDeps)
+featureService := feature.NewService(featureHandle)
+featureTools := feature.NewTools(featureService)
+pages := handlers.New(handlers.Deps{Feature: featureService})
 agent.RegisterTool(tool.Typed[ListIn, ListOut]("list").
     Description("List items.").Execute(featureTools.List).Build(), agentsdk.AccessUser)
 ```
@@ -181,7 +186,7 @@ go mod tidy
 .airlock/toolchain/bin/sqlc generate # only when db/queries/*.sql exists
 go tool templ generate
 .airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify
-go test -count=1 ./...
+go test -p=1 -count=1 ./...
 go build -buildvcs=false -o <temporary-path> .
 ```
 
@@ -209,9 +214,10 @@ templ, and Tailwind output before compiling.
 
 ## Testing
 
-Write Go tests for what you add. The build runs `go test -count=1 ./...` so
-cached successes cannot hide a regression. A failing test means the build
-isn't done. Keep the suite focused: test
+Write Go tests for what you add. The build runs
+`go test -p=1 -count=1 ./...` so cached successes cannot hide a regression and
+packages sharing `$TEST_DB_URL` cannot reset the schema concurrently. A failing
+test means the build isn't done. Keep the suite focused: test
 complex logic, regressions, and important route behavior, not every function or
 handler by default.
 
@@ -233,12 +239,20 @@ Tests must not load secrets, connection credentials, or MCP credentials from
   ```go
   func TestAgentComposition(t *testing.T) {
       env := agenttest.New(t, newAgent)
-      srv := httptest.NewServer(env.Agent.Handler())
-      defer srv.Close()
-      resp, _ := http.Get(srv.URL + "/")
+      user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
+      req := httptest.NewRequest(http.MethodGet, "/", nil)
+      req = req.WithContext(agenttest.WithUser(req.Context(), user))
+      rec := httptest.NewRecorder()
+      env.Agent.Handler().ServeHTTP(rec, req)
       // assert status, content type, body
   }
   ```
+
+  Use `agenttest.WithUser` for ordinary authenticated users and
+  `agenttest.WithCaller` when the test needs explicit public, user, or admin
+  access. Do not set `X-User-*` or `X-Caller-Access`; those are private transport
+  details. Context values do not cross an `httptest.NewServer` network boundary,
+  so caller-sensitive tests invoke `env.Agent.Handler()` in process.
 
   Keep this test as a narrow composition check. Put detailed route behavior in
   the handler package and detailed domain behavior beside its service. Exercise
@@ -247,9 +261,10 @@ Tests must not load secrets, connection credentials, or MCP credentials from
 - **DB-backed tests:** `agenttest.New` uses `$TEST_DB_URL` only when supplied;
   otherwise it starts a throwaway `pgvector/pgvector:pg17` container. It never
   connects to an inherited `$AIRLOCK_DB_URL`. `agentsdk.New` resets the schema
-  and applies source `db/migrations` before it returns inside the factory, so
-  dependency constructors and registrations can immediately use the migrated
-  `agent.DB()`. The
+  and applies source migrations from the enclosing module's `db/migrations`
+  before it returns inside the factory, including when the test belongs to a
+  subpackage. Never change process cwd to find migrations. Dependency
+  constructors and registrations can immediately use the migrated `agent.DB()`. The
   helper closes the pool and test services during cleanup.
 
   ```go
@@ -264,13 +279,14 @@ Tests must not load secrets, connection credentials, or MCP credentials from
 
 ## Database
 
-Migrations under `db/migrations/`, schema-modifying SQL only. Use
-goose's naming convention (`NNN_short_description.sql`) and
-sequential numbering. Query files under `db/queries/` are sqlc input;
-each `-- name: FuncName :one|:many|:exec` block becomes a typed Go
+Migrations live under `db/migrations/`. Use SQL for schema changes and Go
+migrations only for repeat-safe operational side effects that require agent Go
+code or external services. Use sequential goose names
+(`NNN_short_description.sql` or `.go`). Query files under `db/queries/` are sqlc
+input; each `-- name: FuncName :one|:many|:exec` block becomes a typed Go
 function in `internal/db/`.
 
-To validate migrations locally when `$TEST_DB_URL` is set:
+For SQL-only migrations, validate locally when `$TEST_DB_URL` is set:
 
 ```bash
 goose -dir db/migrations postgres "$TEST_DB_URL" up
@@ -278,6 +294,10 @@ goose -dir db/migrations postgres "$TEST_DB_URL" reset
 goose -dir db/migrations postgres "$TEST_DB_URL" up
 psql "$TEST_DB_URL" -c "\dt"  # verify final schema shape
 ```
+
+The standalone goose CLI cannot register Go migrations. When any numbered `.go`
+migration exists, use `go tool air build` for source verification; Airlock runs
+the compiled agent image through up, down, and up before deployment.
 
 ## Dockerfile & system setup
 

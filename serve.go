@@ -229,6 +229,7 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caller := callerFromRequest(r)
+	user := userFromRequest(r)
 	if !accessSatisfies(caller.Access, rt.access) {
 		http.Error(w, `{"error":"tool requires higher access"}`, http.StatusForbidden)
 		return
@@ -252,11 +253,13 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	// A2A and external MCP tool calls; CheckFileAccess consults them
 	// when gating reads on scoped directories.
 	lazy := &lazyRun{
-		agent:        a,
-		triggerRef:   "mcp-tool:" + name,
-		parentRunID:  r.Header.Get("X-Parent-Run-ID"),
-		userID:       r.Header.Get("X-User-ID"),
-		callerAccess: caller.Access,
+		agent:           a,
+		triggerRef:      "mcp-tool:" + name,
+		parentRunID:     r.Header.Get("X-Parent-Run-ID"),
+		userID:          user.ID,
+		userEmail:       user.Email,
+		userDisplayName: user.DisplayName,
+		callerAccess:    caller.Access,
 	}
 
 	timeout := defaultTimeout
@@ -298,12 +301,13 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 		// X-User-Email on authed proxied requests) so UserFromContext works
 		// in route handlers — without materializing a run.
 		caller := callerFromRequest(r)
+		user := userFromRequest(r)
 		lazy := &lazyRun{
 			agent:           a,
 			triggerRef:      "route:" + key,
-			userID:          r.Header.Get("X-User-ID"),
-			userEmail:       r.Header.Get("X-User-Email"),
-			userDisplayName: r.Header.Get("X-User-Name"),
+			userID:          user.ID,
+			userEmail:       user.Email,
+			userDisplayName: user.DisplayName,
 			callerAccess:    caller.Access,
 		}
 		ctx := withCaller(contextWithLazyRun(r.Context(), lazy), caller)
@@ -345,13 +349,30 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 func callerFromRequest(r *http.Request) caller {
 	access := Access(r.Header.Get("X-Caller-Access"))
 	if access == "" {
-		access = AccessPublic
+		access = callerFromContext(r.Context()).Access
 	}
+	user := userFromRequest(r)
 	return caller{
 		Access: access,
-		UserID: r.Header.Get("X-User-ID"),
+		UserID: user.ID,
 		RunID:  r.Header.Get("X-Parent-Run-ID"),
 	}
+}
+
+func userFromRequest(r *http.Request) User {
+	if len(r.Header.Values("X-User-ID")) != 0 ||
+		len(r.Header.Values("X-User-Email")) != 0 ||
+		len(r.Header.Values("X-User-Name")) != 0 {
+		return User{
+			ID:          r.Header.Get("X-User-ID"),
+			Email:       r.Header.Get("X-User-Email"),
+			DisplayName: r.Header.Get("X-User-Name"),
+		}
+	}
+	if user, ok := UserFromContext(r.Context()); ok {
+		return user
+	}
+	return User{}
 }
 
 func completeLazyRun(ctx context.Context, lazy *lazyRun, status int, dispatchErr error, panicTrace string) {
