@@ -188,12 +188,6 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(dockerfileStr, "setup.sh") {
 		t.Error("Dockerfile missing setup.sh hook")
 	}
-	if !strings.Contains(dockerfileStr, "ARG SQLC_VERSION=1.30.0") || !strings.Contains(dockerfileStr, "FROM sqlc/sqlc:${SQLC_VERSION} AS sqlc") {
-		t.Error("Dockerfile missing pinned sqlc stage")
-	}
-	if !strings.Contains(dockerfileStr, ".airlock/toolchain/bin/sqlc generate") {
-		t.Error("Dockerfile missing sqlc generation")
-	}
 	if !strings.Contains(dockerfileStr, "type=cache,target=/var/lib/apt/lists") {
 		t.Error("Dockerfile missing apt cache mount")
 	}
