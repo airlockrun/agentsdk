@@ -91,6 +91,8 @@ func run(args []string) error {
 		return cmdPull(args[1:])
 	case "clone":
 		return cmdClone(args[1:])
+	case "remote":
+		return cmdRemote(args[1:])
 	default:
 		// Bare `air <dir>` is shorthand for `air init <dir>`.
 		return cmdInit(args)
@@ -106,15 +108,16 @@ Usage:
   air update [dir] [flags]        regenerate the airlock-managed files in place
   air toolchain install           ensure the pinned build toolchain and skills
   air build [dir]                 run the local build chain
-  air integrations list           list configured external integrations
-  air connection request ...      call a bound HTTP connection
-  air exec run ...                 run a command on a bound exec endpoint
+  air integrations list [flags]   list configured external integrations
+  air connection request ...      call a target's HTTP connection
+  air exec run ...                 run a command on a target's exec endpoint
   air mcp probe|tools|call ...     inspect or call MCP servers
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
   air deploy [dir] [flags]        upload source and start a build
   air pull [dir] [flags]          fast-forward a local workspace from Airlock
   air clone <agent> <dir> [flags] clone Airlock source without Git
+  air remote default <name>       select the default deployment target
 
 Init flags:
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
@@ -148,24 +151,32 @@ Login flags:
 Deploy flags:
   --create                   create a draft agent before uploading source
   --slug <slug>              agent slug for --create (derived from --name or dir if omitted)
-  --agent <slug-or-id>       existing agent target; overrides .airlock/local/agent.toml
-  --url <url>                Airlock URL; overrides .airlock/local/agent.toml
-  --remote <name>            named remote in .airlock/local/agent.toml (default "default")
+  --agent <slug-or-id>       existing agent target for a new or matching remote
+  --url <url>                Airlock URL for a new or matching remote
+  --remote <name>            named deployment target (default: configured default_remote)
   --name <name>              display name for --create (default dir or slug)
   --description <text>       description for --create
   -m, --message <text>       internal source commit message (single line, 200 bytes max)
   --force                    replace stale Airlock source intentionally
 
 Pull flags:
-  --agent <slug-or-id>       existing agent target; overrides local binding
-  --url <url>                Airlock URL; overrides local binding
-  --remote <name>            named local binding (default "default")
+  --agent <slug-or-id>       existing agent target for a new or matching remote
+  --url <url>                Airlock URL for a new or matching remote
+  --remote <name>            named deployment target (default: configured default_remote)
   --force                    discard local source changes
 
 Clone flags:
   --url <url>                Airlock URL; defaults to the sole saved login
-  --remote <name>            named binding when run inside a bound workspace
-	`,
+  --remote <name>            name stored as the cloned workspace's target
+
+Integration target flags:
+  --agent <slug-or-id>       agent for a new or matching remote
+  --url <url>                Airlock URL for a new or matching remote
+  --remote <name>            named deployment target (default: configured default_remote)
+
+A remote binds one Airlock URL and one stable agent ID. Selecting a remote
+does not change default_remote. Use air remote default <name> to change it.
+`,
 		agentsdk.Version,
 		agentsdk.Version,
 		agentsdk.Version,
@@ -256,7 +267,7 @@ func runInit(args []string, tidy func(string) error) error {
 	}
 	if f.airlockURL != "" {
 		binding := agentBinding{}
-		binding.setRemote(defaultRemoteName, agentRemoteBinding{AirlockURL: normalizeBaseURL(f.airlockURL)})
+		binding.putRemote(defaultRemoteName, agentRemoteBinding{AirlockURL: normalizeBaseURL(f.airlockURL)})
 		if err := writeAgentBinding(dir, binding); err != nil {
 			return fmt.Errorf("write agent binding: %w", err)
 		}
@@ -271,6 +282,27 @@ func runInit(args []string, tidy func(string) error) error {
 	fmt.Printf("  cd %s\n", dir)
 	fmt.Println("  go tool air toolchain install   # install build tools + coding skills")
 	fmt.Println("  go tool air build")
+	return nil
+}
+
+func cmdRemote(args []string) error {
+	if len(args) != 2 || args[0] != "default" {
+		return errors.New("remote requires: default <name>")
+	}
+	binding, ok, err := loadAgentBinding(".")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("workspace is not bound to Airlock; deploy or clone it first")
+	}
+	if err := binding.setDefaultRemote(args[1]); err != nil {
+		return err
+	}
+	if err := writeAgentBinding(".", binding); err != nil {
+		return err
+	}
+	fmt.Printf("Default remote is now %s\n", args[1])
 	return nil
 }
 

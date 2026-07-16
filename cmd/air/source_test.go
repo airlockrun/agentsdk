@@ -93,7 +93,7 @@ func TestCmdPullRefusesTwoSidedChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := agentBinding{}
-	binding.setRemote(defaultRemoteName, agentRemoteBinding{
+	binding.putRemote(defaultRemoteName, agentRemoteBinding{
 		AirlockURL: srv.URL, AgentID: agentID, Slug: "agent", SourceState: baseState,
 	})
 	if err := writeAgentBinding(dir, binding); err != nil {
@@ -105,6 +105,23 @@ func TestCmdPullRefusesTwoSidedChange(t *testing.T) {
 	}
 	if body, err := os.ReadFile(filepath.Join(dir, "local.txt")); err != nil || string(body) != "local change" {
 		t.Fatalf("local source changed: %q, %v", body, err)
+	}
+}
+
+func TestResolveSourceAirlockCloneDoesNotRebindCurrentWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, agentBindingPath), "not valid TOML")
+
+	flags := sourceFlags{url: "https://other.example", remote: "prod"}
+	baseURL, remoteName, err := resolveSourceAirlock(dir, flags, false)
+	if err != nil {
+		t.Fatalf("clone resolveSourceAirlock: %v", err)
+	}
+	if baseURL != "https://other.example" || remoteName != "prod" {
+		t.Fatalf("baseURL=%q remoteName=%q", baseURL, remoteName)
+	}
+	if _, _, err := resolveSourceAirlock(dir, flags, true); err == nil {
+		t.Fatalf("pull resolveSourceAirlock error = %v", err)
 	}
 }
 

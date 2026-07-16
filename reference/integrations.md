@@ -14,13 +14,31 @@ go tool air mcp call github search_repos --args '{"query":"airlock"}'
 ```
 
 `mcp probe` connects directly to a URL and is useful before registration. The
-other commands resolve the current agent through `.airlock/local/agent.toml`
-for local development or the build-bound environment in hosted codegen.
+other commands resolve a deployment target through `.airlock/local/agent.toml`
+for local development or the build-bound environment in hosted codegen. A
+named remote binds one Airlock URL and one stable agent ID, so one workspace can
+address production and development agents on the same or different instances:
+
+```bash
+go tool air deploy --remote dev --url https://airlock.example.com --agent my-agent-dev
+go tool air integrations list --remote dev
+go tool air connection request spotify --remote dev --path /v1/me
+go tool air exec run ci-runner --remote dev -- kick-build --branch main
+go tool air mcp tools github --remote dev
+```
+
+Selecting `dev` does not change `default_remote`. Subsequent deploys and pulls
+can use `--remote dev` without repeating the URL or agent. Run
+`go tool air remote default dev` only when `dev` should become the workspace
+default. An existing remote cannot be rebound to another URL or agent; use a
+different remote name so source synchronization state stays attached to one
+deployment target.
 
 Airlock injects connection and MCP credentials and performs SSH authentication.
 Local calls require agent-admin access. Hosted codegen receives a short-lived
 integration token that cannot deploy, update source, configure credentials, or
-call unrelated agent APIs.
+call unrelated agent APIs. Hosted codegen is fixed to its build-bound target and
+does not accept local target-selection flags.
 
 Connection response bodies are written to stdout. Exec preserves remote stdout
 and stderr and returns a non-zero local status when the remote command fails.

@@ -42,10 +42,7 @@ triggers (webhooks/crons/bridges), and the per-agent Postgres schema.
 
 ## Deep-dive references
 
-Four subsystems live in their own companion files to keep this reference small
-enough to read in one pass. This file covers everything else in full and gives
-each of the four a short stub at its API slot. **Read the companion when your
-task touches it** (paths are where they live in the build container):
+Read the relevant companion at its build-container path:
 
 - **[Object storage](reference/files.md)** (`/libs/agentsdk/reference/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
@@ -53,6 +50,8 @@ task touches it** (paths are where they live in the build container):
 - **[Remote execution](reference/exec.md)** (`/libs/agentsdk/reference/exec.md`) — `RegisterExecEndpoint`: running commands
   on a remote machine over SSH, plus the shared overflow-response shape
   (`*SavedTo` + `fileRead`) used by connections, exec, and `httpRequest`.
+- **[Live integrations](reference/integrations.md)** (`/libs/agentsdk/reference/integrations.md`) — validate configured
+  connections, exec endpoints, and MCP servers without retrieving credentials.
 - **[Interactive authentication](reference/auth-web.md)** (`/libs/agentsdk/reference/auth-web.md`) — login flows (one-time
   code / password / click) driven from an admin web page, ending in `Seal`.
 - **[Database](reference/database.md)** (`/libs/agentsdk/reference/database.md`) — Postgres: goose migrations, sqlc

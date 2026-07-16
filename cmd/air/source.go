@@ -27,10 +27,13 @@ func cmdClone(args []string) error {
 	if err != nil {
 		return err
 	}
+	if f.agent != "" {
+		return errors.New("clone takes its agent slug-or-id as the first positional argument, not --agent")
+	}
 	if len(positional) != 2 {
 		return errors.New("clone requires an agent slug-or-id and destination directory")
 	}
-	baseURL, remoteName, err := resolveSourceAirlock(".", f)
+	baseURL, remoteName, err := resolveSourceAirlock(".", f, false)
 	if err != nil {
 		return err
 	}
@@ -39,7 +42,7 @@ func cmdClone(args []string) error {
 	if err != nil {
 		return err
 	}
-	target, err := resolveDeployTarget(ctx, baseURL, token, positional[0], agentRemoteBinding{})
+	target, err := resolveAgentTarget(ctx, baseURL, token, positional[0], remoteName, agentRemoteBinding{})
 	if err != nil {
 		return err
 	}
@@ -71,7 +74,7 @@ func cmdClone(args []string) error {
 	target.AirlockURL = baseURL
 	target.SourceState = state
 	binding := agentBinding{}
-	binding.setRemote(remoteName, target)
+	binding.putRemote(remoteName, target)
 	if err := writeAgentBinding(dst, binding); err != nil {
 		return err
 	}
@@ -96,7 +99,7 @@ func cmdPull(args []string) error {
 	if err != nil {
 		return err
 	}
-	baseURL, remoteName, err := resolveSourceAirlock(dir, f)
+	baseURL, remoteName, err := resolveSourceAirlock(dir, f, true)
 	if err != nil {
 		return err
 	}
@@ -106,7 +109,7 @@ func cmdPull(args []string) error {
 	if err != nil {
 		return err
 	}
-	target, err := resolveDeployTarget(ctx, baseURL, token, f.agent, bound)
+	target, err := resolveAgentTarget(ctx, baseURL, token, f.agent, remoteName, bound)
 	if err != nil {
 		return err
 	}
@@ -122,20 +125,20 @@ func cmdPull(args []string) error {
 	if localState == remoteState {
 		target.SourceState = remoteState
 		target.AirlockURL = baseURL
-		binding.setRemote(remoteName, target)
+		binding.putRemote(remoteName, target)
 		if err := writeAgentBinding(dir, binding); err != nil {
 			return err
 		}
 		fmt.Println("Local source already matches Airlock")
 		return nil
 	}
-	baseState := bound.SourceState
+	baseState := target.SourceState
 	if remoteState == baseState && !f.force {
 		fmt.Println("Airlock source is unchanged; local source has unpushed changes")
 		return nil
 	}
 	if !f.force && (baseState == "" || localState != baseState) {
-		return sourceConflictError(target, baseURL)
+		return sourceConflictError(target, baseURL, remoteName)
 	}
 	if err := sourcebundle.Mirror(tmp, dir); err != nil {
 		return fmt.Errorf("update local source: %w", err)
@@ -149,7 +152,7 @@ func cmdPull(args []string) error {
 	}
 	target.SourceState = remoteState
 	target.AirlockURL = baseURL
-	binding.setRemote(remoteName, target)
+	binding.putRemote(remoteName, target)
 	if err := writeAgentBinding(dir, binding); err != nil {
 		return err
 	}
@@ -188,11 +191,20 @@ func parseSourceFlags(args []string, allowForce bool) (sourceFlags, []string, er
 			return sourceFlags{}, nil, fmt.Errorf("unknown flag --%s", key)
 		}
 	}
+	if f.remote != "" && !validRemoteName(f.remote) {
+		return sourceFlags{}, nil, fmt.Errorf("invalid remote %q: use letters, digits, dashes, and underscores", f.remote)
+	}
 	return f, positional, nil
 }
 
-func resolveSourceAirlock(dir string, f sourceFlags) (string, string, error) {
+func resolveSourceAirlock(dir string, f sourceFlags, requireRemoteMatch bool) (string, string, error) {
 	remoteName := f.remote
+	if !requireRemoteMatch && f.url != "" {
+		if remoteName == "" {
+			remoteName = defaultRemoteName
+		}
+		return normalizeBaseURL(f.url), remoteName, nil
+	}
 	binding, _, err := loadAgentBinding(dir)
 	if err != nil {
 		return "", "", err
@@ -204,6 +216,11 @@ func resolveSourceAirlock(dir string, f sourceFlags) (string, string, error) {
 		remoteName = defaultRemoteName
 	}
 	baseURL := normalizeBaseURL(f.url)
+	if baseURL != "" && requireRemoteMatch {
+		if remote, ok := binding.remote(remoteName); ok && remote.AirlockURL != "" && baseURL != normalizeBaseURL(remote.AirlockURL) {
+			return "", "", fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remoteName, remote.AirlockURL, baseURL)
+		}
+	}
 	if baseURL == "" {
 		if remote, ok := binding.remote(remoteName); ok {
 			baseURL = remote.AirlockURL
@@ -271,8 +288,8 @@ func downloadSource(ctx context.Context, baseURL, token, agentID string) (string
 	return tmp, state, nil
 }
 
-func sourceConflictError(target agentRemoteBinding, baseURL string) error {
-	return fmt.Errorf("local and Airlock source both changed since the last sync.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --url %s\n\nMerge your changes into that directory, then deploy from there", target.AgentID, target.Slug, baseURL)
+func sourceConflictError(target agentRemoteBinding, baseURL, remoteName string) error {
+	return fmt.Errorf("local and Airlock source both changed since the last sync.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there", target.AgentID, target.Slug, remoteName, baseURL)
 }
 
 func quoteETag(state string) string {

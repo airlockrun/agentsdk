@@ -206,8 +206,8 @@ func TestCmdInitSmoke(t *testing.T) {
 func TestAgentBindingRemoteSections(t *testing.T) {
 	dir := t.TempDir()
 	b := agentBinding{}
-	b.setRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com/", AgentID: "agent-1", Slug: "todo", SourceState: "sha256:prod"})
-	b.setRemote("staging", agentRemoteBinding{AirlockURL: "https://staging.example.com", AgentID: "agent-2", Slug: "todo-staging"})
+	b.putRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com/", AgentID: "agent-1", Slug: "todo", SourceState: "sha256:prod"})
+	b.putRemote("staging", agentRemoteBinding{AirlockURL: "https://staging.example.com", AgentID: "agent-2", Slug: "todo-staging"})
 	if err := writeAgentBinding(dir, b); err != nil {
 		t.Fatalf("writeAgentBinding: %v", err)
 	}
@@ -215,16 +215,93 @@ func TestAgentBindingRemoteSections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadAgentBinding: %v", err)
 	}
-	if !ok || got.DefaultRemote != "staging" {
+	if !ok || got.DefaultRemote != "prod" {
 		t.Fatalf("binding = %#v, ok=%v", got, ok)
 	}
 	prod, ok := got.remote("prod")
 	if !ok || prod.AirlockURL != "https://airlock.example.com" || prod.AgentID != "agent-1" || prod.Slug != "todo" || prod.SourceState != "sha256:prod" {
 		t.Fatalf("prod remote = %#v, ok=%v", prod, ok)
 	}
-	staging, ok := got.remote("")
+	defaultRemote, ok := got.remote("")
+	if !ok || defaultRemote.AgentID != "agent-1" {
+		t.Fatalf("default remote = %#v, ok=%v", defaultRemote, ok)
+	}
+	staging, ok := got.remote("staging")
 	if !ok || staging.AirlockURL != "https://staging.example.com" || staging.AgentID != "agent-2" || staging.Slug != "todo-staging" {
-		t.Fatalf("default remote = %#v, ok=%v", staging, ok)
+		t.Fatalf("staging remote = %#v, ok=%v", staging, ok)
+	}
+}
+
+func TestAgentBindingExplicitDefault(t *testing.T) {
+	dir := t.TempDir()
+	b := agentBinding{}
+	b.putRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com", AgentID: "prod"})
+	b.putRemote("dev", agentRemoteBinding{AirlockURL: "https://airlock.example.com", AgentID: "dev"})
+	if err := b.setDefaultRemote("dev"); err != nil {
+		t.Fatalf("setDefaultRemote: %v", err)
+	}
+	if err := writeAgentBinding(dir, b); err != nil {
+		t.Fatalf("writeAgentBinding: %v", err)
+	}
+	got, _, err := loadAgentBinding(dir)
+	if err != nil {
+		t.Fatalf("loadAgentBinding: %v", err)
+	}
+	if got.DefaultRemote != "dev" {
+		t.Fatalf("DefaultRemote = %q, want dev", got.DefaultRemote)
+	}
+	if err := got.setDefaultRemote("missing"); err == nil {
+		t.Fatal("setDefaultRemote accepted an undefined remote")
+	}
+}
+
+func TestCmdRemoteDefault(t *testing.T) {
+	dir := t.TempDir()
+	b := agentBinding{}
+	b.putRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com", AgentID: "prod"})
+	b.putRemote("dev", agentRemoteBinding{AirlockURL: "https://airlock.example.com", AgentID: "dev"})
+	if err := writeAgentBinding(dir, b); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	if err := cmdRemote([]string{"default", "dev"}); err != nil {
+		t.Fatalf("cmdRemote: %v", err)
+	}
+	got, _, err := loadAgentBinding(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultRemote != "dev" {
+		t.Fatalf("DefaultRemote = %q, want dev", got.DefaultRemote)
+	}
+}
+
+func TestLoadAgentBindingRejectsDuplicateTOML(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "top-level key",
+			body: "default_remote = \"prod\"\ndefault_remote = \"dev\"\n[remotes.prod]\nurl = \"https://prod.example\"\n[remotes.dev]\nurl = \"https://dev.example\"\n",
+		},
+		{
+			name: "remote section",
+			body: "default_remote = \"prod\"\n[remotes.prod]\nurl = \"https://prod.example\"\n[remotes.prod]\nagent_id = \"agent\"\n",
+		},
+		{
+			name: "remote key",
+			body: "default_remote = \"prod\"\n[remotes.prod]\nagent_id = \"one\"\nagent_id = \"two\"\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mustWrite(t, filepath.Join(dir, agentBindingPath), tt.body)
+			if _, _, err := loadAgentBinding(dir); err == nil || !strings.Contains(err.Error(), "duplicate") {
+				t.Fatalf("loadAgentBinding error = %v", err)
+			}
+		})
 	}
 }
 
@@ -330,6 +407,24 @@ func TestParseDeployFlags(t *testing.T) {
 		if _, err := parseDeployFlags([]string{"--message", message}); err == nil {
 			t.Errorf("invalid message %q returned nil error", message)
 		}
+	}
+}
+
+func TestDeployCreateRejectsBoundRemoteWithRetryInstruction(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module agent\n")
+	binding := agentBinding{}
+	binding.putRemote("dev", agentRemoteBinding{
+		AirlockURL: "https://airlock.example.com",
+		AgentID:    "11111111-1111-1111-1111-111111111111",
+		Slug:       "dev",
+	})
+	if err := writeAgentBinding(dir, binding); err != nil {
+		t.Fatal(err)
+	}
+	err := cmdDeploy([]string{dir, "--create", "--slug", "dev"})
+	if err == nil || !strings.Contains(err.Error(), "without --create") {
+		t.Fatalf("cmdDeploy error = %v", err)
 	}
 }
 
@@ -649,7 +744,7 @@ func TestCleanGeneratedDBFilesPreservesDocGo(t *testing.T) {
 	}
 }
 
-func TestResolveDeployTargetFailsOnBindingSlugMismatch(t *testing.T) {
+func TestResolveAgentTargetRefreshesBindingSlug(t *testing.T) {
 	const id = "11111111-1111-1111-1111-111111111111"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agents/"+id {
@@ -660,13 +755,16 @@ func TestResolveDeployTargetFailsOnBindingSlugMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "", agentRemoteBinding{AgentID: id, Slug: "stale-slug"})
-	if err == nil || !strings.Contains(err.Error(), "stale-slug") || !strings.Contains(err.Error(), "real-slug") {
-		t.Fatalf("resolveDeployTarget error = %v", err)
+	target, err := resolveAgentTarget(context.Background(), srv.URL, "tok", "", "prod", agentRemoteBinding{AirlockURL: srv.URL, AgentID: id, Slug: "stale-slug", SourceState: "state"})
+	if err != nil {
+		t.Fatalf("resolveAgentTarget error = %v", err)
+	}
+	if target.AgentID != id || target.Slug != "real-slug" || target.SourceState != "state" {
+		t.Fatalf("target = %#v", target)
 	}
 }
 
-func TestResolveDeployTargetFailsOnBindingIDMismatch(t *testing.T) {
+func TestResolveAgentTargetFailsOnBindingIDMismatch(t *testing.T) {
 	const boundID = "11111111-1111-1111-1111-111111111111"
 	const realID = "22222222-2222-2222-2222-222222222222"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -678,16 +776,53 @@ func TestResolveDeployTargetFailsOnBindingIDMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, err := resolveDeployTarget(context.Background(), srv.URL, "tok", "todo", agentRemoteBinding{AgentID: boundID, Slug: "todo"})
-	if err == nil || !strings.Contains(err.Error(), boundID) || !strings.Contains(err.Error(), realID) {
-		t.Fatalf("resolveDeployTarget error = %v", err)
+	_, err := resolveAgentTarget(context.Background(), srv.URL, "tok", "todo", "prod", agentRemoteBinding{AgentID: boundID, Slug: "todo"})
+	if err == nil || !strings.Contains(err.Error(), boundID) || !strings.Contains(err.Error(), realID) || !strings.Contains(err.Error(), "different --remote") {
+		t.Fatalf("resolveAgentTarget error = %v", err)
 	}
 }
 
-func TestResolveDeployTargetRejectsSlugOnlyBinding(t *testing.T) {
-	_, err := resolveDeployTarget(context.Background(), "https://airlock.example.com", "tok", "", agentRemoteBinding{Slug: "todo"})
-	if err == nil || !strings.Contains(err.Error(), "no agent_id") || !strings.Contains(err.Error(), "--agent todo") {
-		t.Fatalf("resolveDeployTarget error = %v", err)
+func TestResolveAgentTargetDoesNotInheritUnboundSourceState(t *testing.T) {
+	const id = "22222222-2222-2222-2222-222222222222"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agents":[{"id":"` + id + `","slug":"dev"}]}`))
+	}))
+	defer srv.Close()
+
+	target, err := resolveAgentTarget(context.Background(), srv.URL, "tok", "dev", "dev", agentRemoteBinding{
+		AirlockURL: srv.URL, SourceState: "sha256:other-agent",
+	})
+	if err != nil {
+		t.Fatalf("resolveAgentTarget: %v", err)
+	}
+	if target.AgentID != id || target.SourceState != "" {
+		t.Fatalf("target = %#v", target)
+	}
+}
+
+func TestResolveAgentTargetRejectsWrongUUIDResponse(t *testing.T) {
+	const requestedID = "11111111-1111-1111-1111-111111111111"
+	const returnedID = "22222222-2222-2222-2222-222222222222"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agent":{"id":"` + returnedID + `","slug":"other"}}`))
+	}))
+	defer srv.Close()
+
+	_, err := resolveAgentTarget(context.Background(), srv.URL, "tok", requestedID, "dev", agentRemoteBinding{})
+	if err == nil || !strings.Contains(err.Error(), returnedID) {
+		t.Fatalf("resolveAgentTarget error = %v", err)
+	}
+}
+
+func TestResolveAgentTargetRequiresAgent(t *testing.T) {
+	_, err := resolveAgentTarget(context.Background(), "https://airlock.example.com", "tok", "", "prod", agentRemoteBinding{Slug: "todo"})
+	if err == nil || !strings.Contains(err.Error(), "remote \"prod\" needs an agent target") {
+		t.Fatalf("resolveAgentTarget error = %v", err)
 	}
 }
 
