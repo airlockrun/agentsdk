@@ -4,12 +4,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"agent/deps"
 )
 
 func TestHomeRenders(t *testing.T) {
-	handler := New(deps.New())
+	handler := New()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 

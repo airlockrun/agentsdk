@@ -2,6 +2,7 @@ package scaffold
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -25,7 +26,6 @@ func TestMaterialize(t *testing.T) {
 	expectedFiles := []string{
 		"main.go",
 		"main_test.go",
-		"deps/deps.go",
 		"handlers/home_test.go",
 		"NOTES.md",
 		"go.mod",
@@ -34,6 +34,9 @@ func TestMaterialize(t *testing.T) {
 		"Dockerfile",
 		".gitignore",
 		"THIRD_PARTY_NOTICES.generated.md",
+	}
+	if _, err := os.Stat(filepath.Join(dir, "deps", "deps.go")); !os.IsNotExist(err) {
+		t.Errorf("deps/deps.go must not be generated: %v", err)
 	}
 	for _, f := range expectedFiles {
 		path := filepath.Join(dir, f)
@@ -73,8 +76,8 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(string(mainGo), "newAgent().Serve()") {
 		t.Error("main.go missing newAgent().Serve()")
 	}
-	if !strings.Contains(string(mainGo), "appDeps := deps.New()") || !strings.Contains(string(mainGo), "pages := handlers.New(appDeps)") {
-		t.Error("main.go missing typed dependency composition")
+	if !strings.Contains(string(mainGo), "pages := handlers.New()") {
+		t.Error("main.go missing handler construction")
 	}
 	if !strings.Contains(string(mainGo), "Handler:     pages.Home") {
 		t.Error("main.go missing bound home handler registration")
@@ -83,20 +86,20 @@ func TestMaterialize(t *testing.T) {
 		t.Error("main.go missing SDK static asset registration")
 	}
 
-	depsGo, err := os.ReadFile(filepath.Join(dir, "deps", "deps.go"))
+	mainTest, err := os.ReadFile(filepath.Join(dir, "main_test.go"))
 	if err != nil {
-		t.Fatalf("read deps/deps.go: %v", err)
+		t.Fatalf("read main_test.go: %v", err)
 	}
-	if !strings.Contains(string(depsGo), "type Deps struct") || !strings.Contains(string(depsGo), "func New() *Deps") {
-		t.Error("deps/deps.go missing typed dependency graph constructor")
+	if !strings.Contains(string(mainTest), "agenttest.WithUser") {
+		t.Error("main_test.go missing authenticated caller helper")
 	}
 
 	homeGo, err := os.ReadFile(filepath.Join(dir, "handlers", "home.go"))
 	if err != nil {
 		t.Fatalf("read handlers/home.go: %v", err)
 	}
-	if !strings.Contains(string(homeGo), "func New(d *deps.Deps) *Handler") || !strings.Contains(string(homeGo), "func (h *Handler) Home") {
-		t.Error("handlers/home.go missing dependency-injected receiver handler")
+	if !strings.Contains(string(homeGo), "func New() *Handler") || !strings.Contains(string(homeGo), "func (h *Handler) Home") {
+		t.Error("handlers/home.go missing constructed receiver handler")
 	}
 
 	notes, err := os.ReadFile(filepath.Join(dir, "NOTES.md"))
@@ -210,6 +213,92 @@ func TestMaterialize_RequiresSDKVersion(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AgentSDKVersion") {
 		t.Fatalf("error = %v, want mention of AgentSDKVersion", err)
+	}
+}
+
+func TestPackageLocalDepsCompositionCompiles(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"go.mod": "module agent\n\ngo 1.26\n",
+		"feature/service.go": `package feature
+
+type Service struct{ Prefix string }
+
+func NewService(prefix string) *Service {
+	if prefix == "" {
+		panic("feature: prefix is required")
+	}
+	return &Service{Prefix: prefix}
+}
+
+type Deps struct {
+	Service *Service
+}
+
+type Tools struct {
+	service *Service
+}
+
+func NewTools(d Deps) *Tools {
+	if d.Service == nil {
+		panic("feature: service is required")
+	}
+	return &Tools{service: d.Service}
+}
+
+func (t *Tools) Label(name string) string { return t.service.Prefix + name }
+`,
+		"handlers/home.go": `package handlers
+
+import "agent/feature"
+
+type Deps struct {
+	Feature *feature.Service
+}
+
+type Handler struct {
+	feature *feature.Service
+}
+
+func New(d Deps) *Handler {
+	if d.Feature == nil {
+		panic("handlers: feature service is required")
+	}
+	return &Handler{feature: d.Feature}
+}
+
+func (h *Handler) Title() string { return h.feature.Prefix + "home" }
+`,
+		"main.go": `package main
+
+import (
+	"agent/feature"
+	"agent/handlers"
+)
+
+func main() {
+	service := feature.NewService("agent: ")
+	tools := feature.NewTools(feature.Deps{Service: service})
+	pages := handlers.New(handlers.Deps{Feature: service})
+	_, _ = tools.Label("tool"), pages.Title()
+}
+`,
+	}
+	for name, content := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("package-local dependency composition failed to compile: %v\n%s", err, out)
 	}
 }
 

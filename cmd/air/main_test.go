@@ -596,11 +596,16 @@ func TestBuildStepsWritesBinaryOutsideRepository(t *testing.T) {
 	if len(steps) != 6 {
 		t.Fatalf("len(buildSteps) = %d, want 6", len(steps))
 	}
-	wantNames := []string{"go mod tidy", "sqlc generate", "go tool templ generate", "tailwindcss", "go test -count=1 ./...", "go build"}
+	wantNames := []string{"go mod tidy", "sqlc generate", "go tool templ generate", "tailwindcss", "go test -p=1 -count=1 ./...", "go build"}
 	for i, want := range wantNames {
 		if steps[i].name != want {
 			t.Errorf("steps[%d].name = %q, want %q", i, steps[i].name, want)
 		}
+	}
+	wantTest := []string{"go", "test", "-p=1", "-count=1", "./..."}
+	gotTest := steps[len(steps)-2].cmd
+	if strings.Join(gotTest, "\x00") != strings.Join(wantTest, "\x00") {
+		t.Fatalf("test command = %q, want %q", gotTest, wantTest)
 	}
 	want := []string{"go", "build", "-buildvcs=false", "-o", output, "."}
 	got := steps[len(steps)-1].cmd

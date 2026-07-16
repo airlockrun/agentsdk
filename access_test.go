@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/internal/testcaller"
 )
 
 // TestNormalizePath covers the path-normalization rules — slashless
@@ -98,6 +100,40 @@ func TestCheckFileAccess_FailClosed(t *testing.T) {
 	})
 	if err := a.CheckFileAccess(context.Background(), "reports/x", OpRead); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected fail-closed deny on plain ctx, got %v", err)
+	}
+}
+
+func TestCallerFromContextFrameworkStatePrecedesTestCaller(t *testing.T) {
+	a, _ := testAgent(t)
+	testCtx := testcaller.With(context.Background(), testcaller.Caller{Access: string(AccessPublic)})
+
+	r := newRun(a, "run-1", "", "", context.Background())
+	r.callerAccess = AccessAdmin
+	if got := callerFromContext(contextWithRun(testCtx, r)).Access; got != AccessAdmin {
+		t.Errorf("run caller access = %q, want %q", got, AccessAdmin)
+	}
+
+	lazy := &lazyRun{agent: a, callerAccess: AccessUser}
+	if got := callerFromContext(contextWithLazyRun(testCtx, lazy)).Access; got != AccessUser {
+		t.Errorf("lazy-run caller access = %q, want %q", got, AccessUser)
+	}
+}
+
+func TestTestCallerProvidesUserScope(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterDirectory("private", DirectoryOpts{
+		Read:        AccessAdmin,
+		Write:       AccessAdmin,
+		List:        AccessAdmin,
+		Scope:       ScopeUser,
+		Description: "Private files",
+	})
+	ctx := testcaller.With(context.Background(), testcaller.Caller{
+		UserID: "test-user",
+		Access: string(AccessPublic),
+	})
+	if err := a.CheckFileAccess(ctx, "private/user-test-user/file.txt", OpRead); err != nil {
+		t.Fatalf("CheckFileAccess() error = %v, want nil", err)
 	}
 }
 

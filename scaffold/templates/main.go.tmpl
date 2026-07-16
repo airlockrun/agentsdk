@@ -1,7 +1,6 @@
 package main
 
 import (
-	"agent/deps"
 	"agent/handlers"
 	"agent/views"
 
@@ -20,8 +19,7 @@ func newAgent() *agentsdk.Agent {
 	agent := agentsdk.New(agentsdk.Config{
 		Description: "New agent — update this description after implementation",
 	})
-	appDeps := deps.New()
-	pages := handlers.New(appDeps)
+	pages := handlers.New()
 
 	agent.RegisterRoute(&agentsdk.Route{
 		Method:      "GET",

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/internal/testcaller"
 	"github.com/airlockrun/agentsdk/wire"
 )
 
@@ -80,6 +81,23 @@ func callerFromContext(ctx context.Context) caller {
 			v.Access = AccessPublic
 		}
 		return v
+	}
+	if r := runFromContext(ctx); r != nil {
+		access := r.callerAccess
+		if access == "" {
+			access = AccessPublic
+		}
+		return caller{Access: access, UserID: r.userID, RunID: r.id}
+	}
+	if l := lazyRunFromContext(ctx); l != nil {
+		access := l.callerAccess
+		if access == "" {
+			access = AccessPublic
+		}
+		return caller{Access: access, UserID: l.userID, RunID: l.parentRunID}
+	}
+	if test, ok := testcaller.FromContext(ctx); ok {
+		return caller{Access: Access(test.Access), UserID: test.UserID}
 	}
 	return caller{Access: AccessPublic}
 }
@@ -296,16 +314,18 @@ func pickScopeKey(scope DirectoryScope, userID, convID, parentRunID string) stri
 }
 
 // scopeKeysFromContext pulls the (userID, conversationID, parentRunID)
-// triple from whichever run-shaped value is on the ctx — a real run,
-// or a lazyRun whose .get() hasn't fired yet. Returns zero strings
-// when no run context is present (rare; mostly tests or builder code
-// running outside any dispatch).
+// triple from whichever run-shaped value is on the ctx — a real run or a
+// lazyRun whose .get() hasn't fired yet. Test caller state supplies the user ID
+// when no run context is present; otherwise it returns zero strings.
 func scopeKeysFromContext(ctx context.Context) (userID, convID, parentRunID string) {
 	if r := runFromContext(ctx); r != nil {
 		return r.userID, r.conversationID, r.parentRunID
 	}
 	if l := lazyRunFromContext(ctx); l != nil {
 		return l.userID, l.conversationID, l.parentRunID
+	}
+	if test, ok := testcaller.FromContext(ctx); ok {
+		return test.UserID, "", ""
 	}
 	return "", "", ""
 }

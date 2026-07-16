@@ -411,7 +411,7 @@ func buildSteps(sqlcCmd, tailwindCmd, outputPath string, generateSQLC bool) []bu
 	return append(steps,
 		buildStep{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
 		buildStep{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
-		buildStep{"go test -count=1 ./...", []string{"go", "test", "-count=1", "./..."}},
+		buildStep{"go test -p=1 -count=1 ./...", []string{"go", "test", "-p=1", "-count=1", "./..."}},
 		buildStep{"go build", []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
 	)
 }
