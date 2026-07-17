@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -40,6 +41,7 @@ func cmdLogin(args []string) error {
 	forceWait := false
 	noWait := false
 	check := false
+	reauthenticate := false
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -56,12 +58,14 @@ func cmdLogin(args []string) error {
 			noWait = true
 		case "check":
 			check = true
+		case "reauthenticate":
+			reauthenticate = true
 		default:
 			return fmt.Errorf("unknown flag --%s", key)
 		}
 	}
-	if check && (forceWait || noWait || noBrowser) {
-		return errors.New("--check cannot be combined with --wait, --no-wait, or --no-browser")
+	if check && (forceWait || noWait || noBrowser || reauthenticate) {
+		return errors.New("--check cannot be combined with --wait, --no-wait, --no-browser, or --reauthenticate")
 	}
 	if forceWait && noWait {
 		return errors.New("--wait and --no-wait cannot be combined")
@@ -86,7 +90,54 @@ func cmdLogin(args []string) error {
 		wait = false
 	}
 	openBrowser := interactive && !noBrowser
+	if !reauthenticate {
+		loggedIn, err := validateExistingLogin(ctx, baseURL)
+		if err != nil {
+			return err
+		}
+		if loggedIn {
+			return nil
+		}
+	}
 	return loginWithDeviceCode(ctx, baseURL, openBrowser, wait)
+}
+
+func validateExistingLogin(ctx context.Context, baseURL string) (bool, error) {
+	creds, err := loadCredentials()
+	if err != nil {
+		return false, err
+	}
+	baseURL = normalizeBaseURL(baseURL)
+	sess, ok := creds.Sessions[baseURL]
+	if !ok {
+		return false, nil
+	}
+	if sess.AccessToken == "" && sess.RefreshToken == "" {
+		return false, fmt.Errorf("saved login for %s has no access or refresh token", baseURL)
+	}
+	token, err := accessTokenForURL(ctx, baseURL)
+	if err != nil {
+		var expired *loginExpiredError
+		if errors.As(err, &expired) {
+			return false, nil
+		}
+		return false, err
+	}
+	var me airlockv1.MeResponse
+	if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/me", token, nil, &me); err != nil {
+		if isAuthRejected(err) {
+			if clearErr := clearLoginSession(baseURL); clearErr != nil {
+				return false, clearErr
+			}
+			return false, nil
+		}
+		return false, fmt.Errorf("validate login for %s: %w", baseURL, err)
+	}
+	if me.User == nil || strings.TrimSpace(me.User.GetEmail()) == "" {
+		return false, fmt.Errorf("validate login for %s: server response missing user email", baseURL)
+	}
+	fmt.Printf("Already logged in to %s as %s. Use --reauthenticate to log in again.\n", baseURL, me.User.GetEmail())
+	return true, nil
 }
 
 func loginWithDeviceCode(ctx context.Context, baseURL string, openBrowser, wait bool) error {
@@ -117,7 +168,7 @@ func loginWithDeviceCode(ctx context.Context, baseURL string, openBrowser, wait 
 		}
 	}
 	if !wait {
-		fmt.Printf("After approving, run: air login %s --check\n", baseURL)
+		fmt.Printf("After approving, run: go tool air login %s --check\n", baseURL)
 		return nil
 	}
 	fmt.Println("Waiting for approval...")
@@ -156,7 +207,7 @@ func checkDeviceLogin(ctx context.Context, baseURL string) error {
 	}
 	pending, ok := creds.PendingDeviceLogins[normalizeBaseURL(baseURL)]
 	if !ok || pending.DeviceCode == "" {
-		return fmt.Errorf("no pending device login for %s; run air login %s --no-wait", baseURL, baseURL)
+		return fmt.Errorf("no pending device login for %s; run go tool air login %s --no-wait", baseURL, baseURL)
 	}
 	if time.Now().After(pending.ExpiresAt) {
 		delete(creds.PendingDeviceLogins, normalizeBaseURL(baseURL))
@@ -292,6 +343,15 @@ func clearPendingDeviceLogin(baseURL string) error {
 	return saveCredentials(creds)
 }
 
+func clearLoginSession(baseURL string) error {
+	creds, err := loadCredentials()
+	if err != nil {
+		return err
+	}
+	delete(creds.Sessions, normalizeBaseURL(baseURL))
+	return saveCredentials(creds)
+}
+
 func saveLoginCredentials(baseURL, email, accessToken, refreshToken string) error {
 	creds, err := loadCredentials()
 	if err != nil {
@@ -318,6 +378,14 @@ func openURL(url string) error {
 
 const httpMethodPost = "POST"
 
+type loginExpiredError struct {
+	baseURL string
+}
+
+func (e *loginExpiredError) Error() string {
+	return fmt.Sprintf("login expired for %s; run go tool air login %s", e.baseURL, e.baseURL)
+}
+
 func accessTokenForURL(ctx context.Context, baseURL string) (string, error) {
 	creds, err := loadCredentials()
 	if err != nil {
@@ -325,7 +393,7 @@ func accessTokenForURL(ctx context.Context, baseURL string) (string, error) {
 	}
 	sess, ok := creds.Sessions[normalizeBaseURL(baseURL)]
 	if !ok || (sess.AccessToken == "" && sess.RefreshToken == "") {
-		return "", fmt.Errorf("not logged in to %s; run air login %s", baseURL, baseURL)
+		return "", fmt.Errorf("not logged in to %s; run go tool air login %s", baseURL, baseURL)
 	}
 	if sess.RefreshToken == "" {
 		return sess.AccessToken, nil
@@ -337,9 +405,12 @@ func accessTokenForURL(ctx context.Context, baseURL string) (string, error) {
 			if saveErr := saveCredentials(creds); saveErr != nil {
 				return "", saveErr
 			}
-			return "", fmt.Errorf("login expired for %s; run air login %s", baseURL, baseURL)
+			return "", &loginExpiredError{baseURL: normalizeBaseURL(baseURL)}
 		}
 		return "", fmt.Errorf("refresh login for %s: %w", baseURL, err)
+	}
+	if resp.AccessToken == "" {
+		return "", fmt.Errorf("refresh login for %s: server response missing access_token", baseURL)
 	}
 	sess.AccessToken = resp.AccessToken
 	creds.Sessions[normalizeBaseURL(baseURL)] = sess

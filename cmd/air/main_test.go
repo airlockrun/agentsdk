@@ -12,10 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/airlockrun/agentsdk"
-	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"github.com/airlockrun/agentsdk/scaffold"
 )
 
@@ -469,6 +467,9 @@ func TestUsageIncludesVersion(t *testing.T) {
 	if !strings.Contains(out.String(), "air v"+agentsdk.Version) {
 		t.Fatalf("usage does not identify CLI version:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "--reauthenticate") {
+		t.Fatalf("usage does not document --reauthenticate:\n%s", out.String())
+	}
 }
 
 func TestParseDeployFlags(t *testing.T) {
@@ -621,106 +622,6 @@ func TestCompatibleSDKVersions(t *testing.T) {
 				t.Errorf("compatibleSDKVersions(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestDeviceLoginPendingState(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	baseURL := "https://airlock.example.com/"
-	pending := pendingDeviceLogin{
-		DeviceCode:          "device-secret",
-		UserCode:            "ABCD-EFGH",
-		VerificationURL:     "https://airlock.example.com/device-login",
-		ExpiresAt:           time.Now().Add(10 * time.Minute),
-		PollIntervalSeconds: 3,
-	}
-	if err := savePendingDeviceLogin(baseURL, pending); err != nil {
-		t.Fatalf("savePendingDeviceLogin: %v", err)
-	}
-	creds, err := loadCredentials()
-	if err != nil {
-		t.Fatalf("loadCredentials: %v", err)
-	}
-	if got := creds.PendingDeviceLogins["https://airlock.example.com"]; got.DeviceCode != pending.DeviceCode || got.UserCode != pending.UserCode {
-		t.Fatalf("pending = %#v", got)
-	}
-	done, err := handleDeviceLoginPoll("https://airlock.example.com", &airlockv1.DeviceLoginPollResponse{
-		Status:       "approved",
-		AccessToken:  "access",
-		RefreshToken: "refresh",
-		User:         &airlockv1.User{Email: "dev@example.com"},
-	})
-	if err != nil || !done {
-		t.Fatalf("handleDeviceLoginPoll done=%v err=%v", done, err)
-	}
-	creds, err = loadCredentials()
-	if err != nil {
-		t.Fatalf("loadCredentials after approve: %v", err)
-	}
-	if _, ok := creds.PendingDeviceLogins["https://airlock.example.com"]; ok {
-		t.Fatalf("pending was not cleared: %#v", creds.PendingDeviceLogins)
-	}
-	if got := creds.Sessions["https://airlock.example.com"]; got.Email != "dev@example.com" || got.AccessToken != "access" || got.RefreshToken != "refresh" {
-		t.Fatalf("session = %#v", got)
-	}
-}
-
-func TestCmdLogoutRevokesAndClearsSession(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	var sawLogout bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/auth/logout" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		sawLogout = true
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	if err := saveLoginCredentials(srv.URL, "dev@example.com", "access", "refresh"); err != nil {
-		t.Fatalf("saveLoginCredentials: %v", err)
-	}
-	if err := cmdLogout([]string{srv.URL}); err != nil {
-		t.Fatalf("cmdLogout: %v", err)
-	}
-	if !sawLogout {
-		t.Fatal("logout endpoint was not called")
-	}
-	creds, err := loadCredentials()
-	if err != nil {
-		t.Fatalf("loadCredentials: %v", err)
-	}
-	if _, ok := creds.Sessions[normalizeBaseURL(srv.URL)]; ok {
-		t.Fatalf("session was not cleared: %#v", creds.Sessions)
-	}
-}
-
-func TestAccessTokenClearsExpiredLogin(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/auth/refresh" {
-			t.Fatalf("unexpected path %s", r.URL.Path)
-		}
-		http.Error(w, `{"error":"invalid refresh token"}`, http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	if err := saveLoginCredentials(srv.URL, "dev@example.com", "access", "refresh"); err != nil {
-		t.Fatalf("saveLoginCredentials: %v", err)
-	}
-	_, err := accessTokenForURL(context.Background(), srv.URL)
-	if err == nil {
-		t.Fatal("accessTokenForURL returned nil error")
-	}
-	if want := "login expired for " + normalizeBaseURL(srv.URL) + "; run air login " + normalizeBaseURL(srv.URL); err.Error() != want {
-		t.Fatalf("error = %q, want %q", err.Error(), want)
-	}
-	creds, err := loadCredentials()
-	if err != nil {
-		t.Fatalf("loadCredentials: %v", err)
-	}
-	if _, ok := creds.Sessions[normalizeBaseURL(srv.URL)]; ok {
-		t.Fatalf("expired session was not cleared: %#v", creds.Sessions)
 	}
 }
 

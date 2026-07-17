@@ -138,14 +138,17 @@ Toolchain install:
     references     (agentsdk + UI docs -> .airlock/toolchain/skills)
 
 Login flags:
+  --reauthenticate            start a new device login even if already logged in
   --no-browser               print the device login URL without opening a browser
   --no-wait                  start device login, save pending state, and exit
   --wait                     wait for browser approval even without a TTY
   --check                    check one pending device login once and exit
 
-  Login uses browser approval with a manually entered device code. In a TTY,
-  air login waits for approval. Without a TTY, it behaves like --no-wait so
-  code harnesses do not hang on a foreground poll loop.
+  Login validates and reuses working credentials saved for the Airlock URL.
+  Rejected credentials start a new browser approval; --reauthenticate starts
+  one even when the saved login works. In a TTY, air login waits for approval.
+  Without a TTY, it behaves like --no-wait so code harnesses do not hang on a
+  foreground poll loop.
 
 Deploy flags:
   --create                   create a draft agent before uploading source

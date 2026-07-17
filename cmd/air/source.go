@@ -236,7 +236,7 @@ func resolveSourceAirlock(dir string, f sourceFlags, requireRemoteMatch bool) (s
 				baseURL = url
 			}
 		} else if len(creds.Sessions) == 0 {
-			return "", "", errors.New("source command needs an Airlock URL: pass --url after running air login")
+			return "", "", errors.New("source command needs an Airlock URL: pass --url after running go tool air login")
 		} else {
 			var urls []string
 			for url := range creds.Sessions {
