@@ -2,8 +2,8 @@
 //
 // It wraps the agentsdk/scaffold package with local build and source-sync commands:
 //
-//	air [init] <dir>             scaffold a new agent into <dir>
-//	air update [dir]             regenerate the airlock-managed files in place
+//	air init <dir>               scaffold a new agent into <dir>
+//	air update [dir]             reconcile module pins, managed files, and toolchain
 //	go tool air toolchain install
 //	                             install the pinned build toolchain
 //	go tool air build            run the local build chain
@@ -32,11 +32,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/scaffold"
+	"golang.org/x/mod/modfile"
 )
 
 const (
@@ -94,8 +96,7 @@ func run(args []string) error {
 	case "remote":
 		return cmdRemote(args[1:])
 	default:
-		// Bare `air <dir>` is shorthand for `air init <dir>`.
-		return cmdInit(args)
+		return fmt.Errorf("unknown command %q; run 'air help' for usage", args[0])
 	}
 }
 
@@ -104,9 +105,9 @@ func usage(w io.Writer) {
 
 Usage:
   air version                     print the selected CLI version
-  air [init] <dir> [flags]        scaffold a new agent into <dir>
-  air update [dir] [flags]        regenerate the airlock-managed files in place
-  air toolchain install           ensure the pinned build toolchain and skills
+  air init <dir> [flags]          scaffold a new agent into <dir>
+  air update [dir]                update module pins, managed files, and toolchain
+  air toolchain install           ensure the pinned build tools and references
   air build [dir]                 run the local build chain
   air integrations list [flags]   list configured external integrations
   air connection request ...      call a target's HTTP connection
@@ -123,12 +124,10 @@ Init flags:
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
   --airlock <url>            write .airlock/local/agent.toml with this Airlock URL
 
-Update flags (dir defaults to "."):
-  --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
-
-  Updates the airlock-managed files (Dockerfile, AGENTS.md, .gitignore, %s)
-  in place - the external equivalent of airlock's build housekeeping. Run it
-  after bumping the agentsdk pin. Requires an existing go.mod in dir.
+Update (dir defaults to "."):
+  Reconciles go.mod with this air version, updates the airlock-managed files
+  (Dockerfile, AGENTS.md, .gitignore, %s), runs go mod tidy, and refreshes
+  .airlock/toolchain. Requires an existing go.mod in dir.
 
 Toolchain install:
   Ensures the build toolchain pinned by the scaffold:
@@ -136,7 +135,7 @@ Toolchain install:
     sqlc        %s (standalone binary -> .airlock/toolchain/bin)
     tailwindcss %s (standalone binary -> .airlock/toolchain/bin)
     daisyui     %s (plugin mjs files -> .airlock/toolchain/lib/tailwind)
-    skills         (version-matched references -> .airlock/toolchain/skills)
+    references     (agentsdk + UI docs -> .airlock/toolchain/skills)
 
 Login flags:
   --no-browser               print the device login URL without opening a browser
@@ -179,13 +178,12 @@ does not change default_remote. Use air remote default <name> to change it.
 `,
 		agentsdk.Version,
 		agentsdk.Version,
-		agentsdk.Version,
 		scaffold.NoticesFilename,
 		scaffold.TemplVersion, scaffold.SQLCVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion,
 	)
 }
 
-// scaffoldFlags holds the flags shared by init and update.
+// scaffoldFlags holds the inputs used to materialize a scaffold.
 type scaffoldFlags struct {
 	agentSDKVersion string
 	airlockURL      string
@@ -193,9 +191,9 @@ type scaffoldFlags struct {
 
 // parseFlags walks a simple `--key value` flag list starting at args, calling
 // set for each recognized flag. It returns the non-flag positional arguments.
-// We hand-roll this (rather than flag.FlagSet) so a bare `air <dir>` and
-// `air init <dir>` share one positional/flag parser and the help text stays a
-// single source of truth.
+// We hand-roll this (rather than flag.FlagSet) so positional arguments and
+// flags can appear in either order and the help text stays a single source of
+// truth.
 func parseFlags(args []string, set func(key, value string) error) ([]string, error) {
 	var positional []string
 	for i := 0; i < len(args); i++ {
@@ -307,36 +305,115 @@ func cmdRemote(args []string) error {
 }
 
 func cmdUpdate(args []string) error {
-	f, positional, err := parseScaffoldFlags(args)
-	if err != nil {
-		return err
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "--") {
+			return fmt.Errorf("unknown update flag %s", arg)
+		}
 	}
 	dir := "."
-	switch len(positional) {
+	switch len(args) {
 	case 0:
 	case 1:
-		dir = positional[0]
+		dir = args[0]
 	default:
 		return errors.New("update takes at most one argument: the target directory")
 	}
+	return runUpdateCommand(dir, tidyModule, ensureToolchain)
+}
 
+func runUpdateCommand(dir string, tidy func(string) error, install func(string, string) error) error {
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
 		return fmt.Errorf("no go.mod in %s - update must run in an existing agent repo: %w", dir, err)
 	}
-
+	version := runningAgentSDKVersion()
+	if err := reconcileAgentModule(dir, version); err != nil {
+		return err
+	}
+	if err := tidy(dir); err != nil {
+		return err
+	}
 	data := scaffold.ScaffoldData{
-		AgentSDKVersion: f.agentSDKVersion,
+		AgentSDKVersion: version,
 		AgentBaseImage:  defaultBaseImage,
 	}
 	if err := runUpdate(dir, data); err != nil {
 		return err
 	}
+	if err := install(dir, filepath.Join(dir, localToolchainPrefix)); err != nil {
+		return err
+	}
 
-	fmt.Printf("Updated airlock-managed files in %s:\n", dir)
+	fmt.Printf("Updated agent workspace in %s:\n", dir)
+	fmt.Println("  go.mod and go.sum")
 	fmt.Println("  Dockerfile")
 	fmt.Println("  AGENTS.md")
 	fmt.Println("  .gitignore")
 	fmt.Printf("  %s\n", scaffold.NoticesFilename)
+	fmt.Println("  .airlock/toolchain")
+	return nil
+}
+
+func runningAgentSDKVersion() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		if info.Main.Path == "github.com/airlockrun/agentsdk" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			return info.Main.Version
+		}
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/airlockrun/agentsdk" && dep.Version != "" && dep.Version != "(devel)" {
+				return dep.Version
+			}
+		}
+	}
+	return "v" + agentsdk.Version
+}
+
+func reconcileAgentModule(dir, agentSDKVersion string) error {
+	path := filepath.Join(dir, "go.mod")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	mf, err := modfile.Parse(path, body, nil)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	var hasAgentSDK bool
+	for _, require := range mf.Require {
+		if require.Mod.Path == "github.com/airlockrun/agentsdk" {
+			hasAgentSDK = true
+			break
+		}
+	}
+	if !hasAgentSDK {
+		return fmt.Errorf("%s: no require directive for github.com/airlockrun/agentsdk", path)
+	}
+	if err := mf.AddGoStmt(scaffold.GoVersion); err != nil {
+		return fmt.Errorf("set Go version: %w", err)
+	}
+	if err := mf.AddRequire("github.com/a-h/templ", scaffold.TemplVersion); err != nil {
+		return fmt.Errorf("require templ %s: %w", scaffold.TemplVersion, err)
+	}
+	if err := mf.AddRequire("github.com/airlockrun/agentsdk", agentSDKVersion); err != nil {
+		return fmt.Errorf("require agentsdk %s: %w", agentSDKVersion, err)
+	}
+	for _, tool := range []string{
+		"github.com/a-h/templ/cmd/templ",
+		"github.com/airlockrun/agentsdk/cmd/air",
+	} {
+		if err := mf.AddTool(tool); err != nil {
+			return fmt.Errorf("add tool %s: %w", tool, err)
+		}
+	}
+	updated, err := mf.Format()
+	if err != nil {
+		return fmt.Errorf("format %s: %w", path, err)
+	}
+	if string(updated) == string(body) {
+		return nil
+	}
+	if err := os.WriteFile(path, updated, 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
 	return nil
 }
 
@@ -389,7 +466,7 @@ func tidyModule(dir string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("initialize module dependencies: %w", err)
+		return fmt.Errorf("tidy module dependencies: %w", err)
 	}
 	return nil
 }
@@ -410,7 +487,7 @@ func runBuild(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
 		return fmt.Errorf("build requires an agent repo with go.mod in %s: %w", dir, err)
 	}
-	if err := ensureToolchain(filepath.Join(dir, localToolchainPrefix)); err != nil {
+	if err := ensureToolchain(dir, filepath.Join(dir, localToolchainPrefix)); err != nil {
 		return err
 	}
 	if err := cleanGeneratedDBFiles(dir); err != nil {
@@ -534,7 +611,7 @@ func cmdInstallToolchain(args []string) error {
 	}
 	prefix := localToolchainPrefix
 
-	if err := ensureToolchain(prefix); err != nil {
+	if err := ensureToolchain(".", prefix); err != nil {
 		return err
 	}
 
@@ -543,13 +620,22 @@ func cmdInstallToolchain(args []string) error {
 	fmt.Printf("  sqlc        %s -> %s\n", scaffold.SQLCVersion, sqlcBinaryPath(prefix))
 	fmt.Printf("  tailwindcss %s -> %s\n", scaffold.TailwindVersion, tailwindBinaryPath(prefix))
 	fmt.Printf("  daisyui     %s -> %s\n", scaffold.DaisyUIVersion, filepath.Join(prefix, "lib", "tailwind"))
-	fmt.Printf("  skills      %s -> %s\n", scaffold.SkillsDigest(), filepath.Join(prefix, "skills"))
+	fmt.Printf("  UI refs     %s -> %s\n", scaffold.SkillsDigest(), filepath.Join(prefix, "skills"))
+	fmt.Printf("  agentsdk    %s -> %s\n", runningAgentSDKVersion(), filepath.Join(prefix, "skills", "agentsdk"))
 	return nil
 }
 
-func ensureToolchain(prefix string) error {
+func ensureToolchain(projectDir, prefix string) error {
+	moduleDir, err := agentSDKModuleDir(projectDir)
+	if err != nil {
+		return err
+	}
+	return ensureToolchainFromModule(prefix, moduleDir)
+}
+
+func ensureToolchainFromModule(prefix, moduleDir string) error {
 	if toolchainComplete(prefix) {
-		return nil
+		return installAgentSDKSkill(filepath.Join(prefix, "skills", "agentsdk"), moduleDir)
 	}
 	cacheDir, err := toolchainCacheDir()
 	if err != nil {
@@ -567,7 +653,76 @@ func ensureToolchain(prefix string) error {
 	if !toolchainComplete(prefix) {
 		return fmt.Errorf("projected toolchain into %s, but required files are still missing", prefix)
 	}
-	return nil
+	return installAgentSDKSkill(filepath.Join(prefix, "skills", "agentsdk"), moduleDir)
+}
+
+func agentSDKModuleDir(projectDir string) (string, error) {
+	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/airlockrun/agentsdk")
+	cmd.Dir = projectDir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("resolve agentsdk module directory: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	dir := strings.TrimSpace(string(out))
+	if dir == "" {
+		return "", errors.New("resolve agentsdk module directory: go list returned an empty directory")
+	}
+	return dir, nil
+}
+
+func installAgentSDKSkill(dst, moduleDir string) error {
+	root, err := os.ReadFile(filepath.Join(moduleDir, "REFERENCE.md"))
+	if err != nil {
+		return fmt.Errorf("read agentsdk reference: %w", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(moduleDir, "reference"))
+	if err != nil {
+		return fmt.Errorf("read agentsdk companion references: %w", err)
+	}
+	parent := filepath.Dir(dst)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(parent, ".agentsdk-skill-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	header := fmt.Sprintf("---\nname: agentsdk\ndescription: Airlock Agents SDK API and runtime reference. TRIGGER when writing or changing agent Go code.\nmetadata:\n  version: %s\n---\n\n", runningAgentSDKVersion())
+	if err := os.WriteFile(filepath.Join(tmp, "SKILL.md"), append([]byte(header), root...), 0o644); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "reference"), 0o755); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".md" {
+			continue
+		}
+		if err := copyFile(
+			filepath.Join(moduleDir, "reference", entry.Name()),
+			filepath.Join(tmp, "reference", entry.Name()),
+			0o644,
+		); err != nil {
+			return fmt.Errorf("copy agentsdk reference %s: %w", entry.Name(), err)
+		}
+	}
+	backup := dst + ".old"
+	if err := os.RemoveAll(backup); err != nil {
+		return err
+	}
+	if _, err := os.Stat(dst); err == nil {
+		if err := os.Rename(dst, backup); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Rename(backup, dst)
+		return err
+	}
+	return os.RemoveAll(backup)
 }
 
 func toolchainCacheDir() (string, error) {

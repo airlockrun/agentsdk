@@ -274,7 +274,7 @@ func ensureDeploySDKVersion(ctx context.Context, baseURL, token string) error {
 	if commandImport == "" {
 		commandImport = "github.com/airlockrun/agentsdk/cmd/air"
 	}
-	return fmt.Errorf("Airlock uses agentsdk v%s, but this air CLI is v%s; update this repo, validate the build, then rerun deploy:\n  go get github.com/airlockrun/agentsdk@v%s\n  go get -tool %s@v%s\n  go mod tidy\n  go tool air build", serverVersion, localVersion, serverVersion, commandImport, serverVersion)
+	return fmt.Errorf("Airlock uses agentsdk v%s, but this air CLI is v%s; update this repo, validate the build, then rerun deploy:\n  go get -tool %s@v%s\n  go tool air update\n  go tool air build", serverVersion, localVersion, commandImport, serverVersion)
 }
 
 // compatibleSDKVersions accepts a local CLI from the same major/minor series

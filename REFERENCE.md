@@ -9,9 +9,9 @@ It is consumed two ways, and both should treat it as authoritative:
 
 - **The Airlock agent-builder** reads it before generating or upgrading
   agent code.
-- **You, by hand** — point your editor's AI at this file (it ships in
-  the `agentsdk` module) or read it directly when writing or modifying
-  an agent.
+- **You, by hand** — point your editor's AI at
+  `.airlock/toolchain/skills/agentsdk/SKILL.md`; the same reference ships in
+  the `agentsdk` module.
 
 For the orthogonal half — *how* to wire the SDK together inside a real
 agent (file layout, MVC, build chain, NOTES.md convention, UI design

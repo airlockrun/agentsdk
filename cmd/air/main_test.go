@@ -21,6 +21,39 @@ import (
 
 var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
+func TestRunRejectsUnknownCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "multiple arguments", args: []string{"skill", "list"}, want: `unknown command "skill"; run 'air help' for usage`},
+		{name: "directory without init", args: []string{"my-agent"}, want: `unknown command "my-agent"; run 'air help' for usage`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := run(tt.args)
+			if err == nil {
+				t.Fatal("run() accepted an unknown command")
+			}
+			if err.Error() != tt.want {
+				t.Fatalf("run() error = %q, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunExplicitInitPreservesArgumentError(t *testing.T) {
+	err := run([]string{"init", "one", "two"})
+	if err == nil {
+		t.Fatal("run() accepted init with two directories")
+	}
+	want := "init requires exactly one argument: the target directory"
+	if err.Error() != want {
+		t.Fatalf("run() error = %q, want %q", err, want)
+	}
+}
+
 func TestNewUUID(t *testing.T) {
 	seen := make(map[string]bool)
 	for i := 0; i < 100; i++ {
@@ -333,8 +366,21 @@ func TestCmdUpdateRequiresGoMod(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("custom-output/\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := cmdUpdate([]string{dir}); err != nil {
-			t.Fatalf("cmdUpdate: %v", err)
+		var calls []string
+		if err := runUpdateCommand(dir,
+			func(string) error {
+				calls = append(calls, "tidy")
+				return nil
+			},
+			func(string, string) error {
+				calls = append(calls, "toolchain")
+				return nil
+			},
+		); err != nil {
+			t.Fatalf("runUpdateCommand: %v", err)
+		}
+		if got := strings.Join(calls, ","); got != "tidy,toolchain" {
+			t.Fatalf("update calls = %q, want tidy,toolchain", got)
 		}
 		if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
 			t.Fatalf("Dockerfile not updated: %v", err)
@@ -352,6 +398,53 @@ func TestCmdUpdateRequiresGoMod(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("rejects removed version flag", func(t *testing.T) {
+		err := cmdUpdate([]string{"--agentsdk-version", "v9.9.9"})
+		if err == nil || !strings.Contains(err.Error(), "unknown update flag") {
+			t.Fatalf("cmdUpdate error = %v", err)
+		}
+	})
+}
+
+func TestReconcileAgentModule(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), `module agent
+
+go 1.25.0
+
+require (
+	github.com/a-h/templ v0.2.0
+	github.com/airlockrun/agentsdk v0.3.0
+)
+`)
+	if err := reconcileAgentModule(dir, "v0.4.0-rc.30"); err != nil {
+		t.Fatalf("reconcileAgentModule: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"go " + scaffold.GoVersion,
+		"github.com/a-h/templ " + scaffold.TemplVersion,
+		"github.com/airlockrun/agentsdk v0.4.0-rc.30",
+		"github.com/a-h/templ/cmd/templ",
+		"github.com/airlockrun/agentsdk/cmd/air",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("go.mod missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestReconcileAgentModuleRequiresAgentSDK(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module example.com/not-an-agent\n\ngo 1.26.0\n")
+	err := reconcileAgentModule(dir, "v0.4.0-rc.30")
+	if err == nil || !strings.Contains(err.Error(), "no require directive for github.com/airlockrun/agentsdk") {
+		t.Fatalf("reconcileAgentModule error = %v", err)
+	}
 }
 
 func TestManagedScaffoldFlagsCannotBeOverridden(t *testing.T) {
@@ -492,9 +585,8 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 		for _, want := range []string{
 			"Airlock uses agentsdk v9.9.9",
 			"this air CLI is v" + agentsdk.Version,
-			"go get github.com/airlockrun/agentsdk@v9.9.9",
 			"go get -tool github.com/airlockrun/agentsdk/cmd/air@v9.9.9",
-			"go mod tidy",
+			"go tool air update",
 			"go tool air build",
 		} {
 			if !strings.Contains(err.Error(), want) {
@@ -639,13 +731,16 @@ func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 		t.Fatalf("toolchainCacheDir: %v", err)
 	}
 	prefix := filepath.Join(t.TempDir(), ".airlock", "toolchain")
+	moduleDir := t.TempDir()
+	mustWrite(t, filepath.Join(moduleDir, "REFERENCE.md"), "# SDK reference\n")
+	mustWrite(t, filepath.Join(moduleDir, "reference", "files.md"), "# Files\n")
 	mustWrite(t, sqlcCachePath(cacheDir), "sqlc")
 	mustWrite(t, tailwindCachePath(cacheDir), "tailwind")
 	mustWrite(t, filepath.Join(daisyUICacheDir(cacheDir), "daisyui.mjs"), "daisyui")
 	mustWrite(t, filepath.Join(daisyUICacheDir(cacheDir), "daisyui-theme.mjs"), "theme")
 
-	if err := ensureToolchain(prefix); err != nil {
-		t.Fatalf("ensureToolchain: %v", err)
+	if err := ensureToolchainFromModule(prefix, moduleDir); err != nil {
+		t.Fatalf("ensureToolchainFromModule: %v", err)
 	}
 	if !toolchainComplete(prefix) {
 		t.Fatal("toolchain is incomplete after projecting cached tools")
@@ -678,10 +773,23 @@ func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 		filepath.Join(prefix, "skills", "daisyui", "SKILL.md"),
 		filepath.Join(prefix, "skills", "templ", "reference", "03-syntax-and-usage", "06-if-else.md"),
 		filepath.Join(prefix, "skills", "htmx", "reference", "docs.md"),
+		filepath.Join(prefix, "skills", "agentsdk", "SKILL.md"),
+		filepath.Join(prefix, "skills", "agentsdk", "reference", "files.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("projected skill file %s: %v", path, err)
 		}
+	}
+	mustWrite(t, filepath.Join(moduleDir, "REFERENCE.md"), "# Updated SDK reference\n")
+	if err := ensureToolchainFromModule(prefix, moduleDir); err != nil {
+		t.Fatalf("refresh agentsdk reference: %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(prefix, "skills", "agentsdk", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(installed), "# Updated SDK reference") {
+		t.Fatalf("agentsdk skill was not refreshed:\n%s", installed)
 	}
 }
 
