@@ -137,7 +137,7 @@ func cmdDeploy(args []string) error {
 				}
 				return fmt.Errorf("the connected Git branch changed since this workspace last synced.\n\nClone the current branch into another directory:\n  git clone%s %s ../%s-latest\n\nMerge your changes there and push through Git", branchArg, stale.gitRemote, target.Slug)
 			}
-			return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  air deploy\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
+			return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  air deploy -m \"Describe this deployment\"\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
 		}
 		return err
 	}
@@ -224,17 +224,18 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 	if f.remote != "" && !validRemoteName(f.remote) {
 		return deployFlags{}, fmt.Errorf("invalid remote %q: use letters, digits, dashes, and underscores", f.remote)
 	}
-	if messageSet {
-		f.message = strings.TrimSpace(f.message)
-		if f.message == "" {
-			return deployFlags{}, errors.New("deploy message must not be blank")
-		}
-		if strings.ContainsAny(f.message, "\r\n") {
-			return deployFlags{}, errors.New("deploy message must be a single line")
-		}
-		if len(f.message) > maxDeployMessageBytes {
-			return deployFlags{}, fmt.Errorf("deploy message is %d bytes; maximum is %d", len(f.message), maxDeployMessageBytes)
-		}
+	if !messageSet {
+		return deployFlags{}, errors.New("deploy requires -m or --message")
+	}
+	f.message = strings.TrimSpace(f.message)
+	if f.message == "" {
+		return deployFlags{}, errors.New("deploy message must not be blank")
+	}
+	if strings.ContainsAny(f.message, "\r\n") {
+		return deployFlags{}, errors.New("deploy message must be a single line")
+	}
+	if len(f.message) > maxDeployMessageBytes {
+		return deployFlags{}, fmt.Errorf("deploy message is %d bytes; maximum is %d", len(f.message), maxDeployMessageBytes)
 	}
 	if f.create {
 		if f.name == "" {
@@ -420,9 +421,7 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState
 	if sourceState != "" {
 		req.Header.Set("If-Match", quoteETag(sourceState))
 	}
-	if commitMessage != "" {
-		req.Header.Set("X-Airlock-Commit-Message", commitMessage)
-	}
+	req.Header.Set("X-Airlock-Commit-Message", commitMessage)
 	if force {
 		req.Header.Set("X-Airlock-Force", "true")
 	}
