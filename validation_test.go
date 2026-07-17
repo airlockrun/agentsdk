@@ -124,6 +124,13 @@ func TestRegistrationValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "connection reserved OAuth auth param",
+			want: "AuthParams key \"redirect_URI\" is reserved",
+			call: func(a *Agent) {
+				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthOAuth, AuthURL: "https://example.com/auth", TokenURL: "https://example.com/token", AuthParams: map[string]string{"redirect_URI": "https://evil.example"}, Access: AccessUser})
+			},
+		},
+		{
 			name: "mcp URL",
 			want: "absolute http(s) URL",
 			call: func(a *Agent) {
