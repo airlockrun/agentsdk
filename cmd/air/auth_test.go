@@ -75,7 +75,7 @@ func TestCmdLoginRefreshesBeforeValidation(t *testing.T) {
 		paths = append(paths, r.URL.Path)
 		switch r.URL.Path {
 		case "/auth/refresh":
-			writeTestJSON(w, `{"accessToken":"fresh"}`)
+			writeTestJSON(w, `{"accessToken":"fresh","refreshToken":"rotated"}`)
 		case "/api/v1/me":
 			if got := r.Header.Get("Authorization"); got != "Bearer fresh" {
 				t.Errorf("Authorization = %q", got)
@@ -105,6 +105,9 @@ func TestCmdLoginRefreshesBeforeValidation(t *testing.T) {
 	}
 	if got := creds.Sessions[srv.URL].AccessToken; got != "fresh" {
 		t.Fatalf("saved access token = %q", got)
+	}
+	if got := creds.Sessions[srv.URL].RefreshToken; got != "rotated" {
+		t.Fatalf("saved refresh token = %q", got)
 	}
 }
 

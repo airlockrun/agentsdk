@@ -107,7 +107,8 @@ type Connection struct {
 	TokenURL    string
 	Scopes      []string
 	// AuthParams are extra query parameters added to the OAuth
-	// authorization request, overriding the platform defaults per key.
+	// authorization request. OAuth identity, callback, state, response type,
+	// and PKCE parameters are reserved and rejected during registration.
 	// Optional escape hatch for providers whose refresh-token handshake
 	// differs from the default.
 	AuthParams map[string]string

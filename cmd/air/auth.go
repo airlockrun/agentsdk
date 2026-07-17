@@ -412,7 +412,11 @@ func accessTokenForURL(ctx context.Context, baseURL string) (string, error) {
 	if resp.AccessToken == "" {
 		return "", fmt.Errorf("refresh login for %s: server response missing access_token", baseURL)
 	}
+	if resp.RefreshToken == "" {
+		return "", fmt.Errorf("refresh login for %s: server response missing refresh_token", baseURL)
+	}
 	sess.AccessToken = resp.AccessToken
+	sess.RefreshToken = resp.RefreshToken
 	creds.Sessions[normalizeBaseURL(baseURL)] = sess
 	if err := saveCredentials(creds); err != nil {
 		return "", err
@@ -465,5 +469,22 @@ func saveCredentials(creds credentialsFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(b, '\n'), 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }

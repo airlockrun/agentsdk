@@ -299,6 +299,10 @@ func validateConnection(c *Connection) {
 		if strings.TrimSpace(key) == "" {
 			panic(fmt.Sprintf("agentsdk: RegisterConnection(%q): AuthParams keys must not be empty", c.Slug))
 		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "client_id", "redirect_uri", "state", "response_type", "code_challenge", "code_challenge_method":
+			panic(fmt.Sprintf("agentsdk: RegisterConnection(%q): AuthParams key %q is reserved", c.Slug, key))
+		}
 	}
 }
 
