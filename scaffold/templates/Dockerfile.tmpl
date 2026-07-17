@@ -50,7 +50,7 @@ RUN chmod +x .airlock/toolchain/bin/tailwindcss
 RUN --mount=type=bind,from=goproxy,target=/goproxy \
     --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off \
+    export GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off && \
     find internal/db -type f -name '*.go' ! -name 'doc.go' -delete && \
     go mod tidy && \
     if [ -n "$(find db/queries -type f -name '*.sql' -print -quit)" ]; then .airlock/toolchain/bin/sqlc generate; fi && \
