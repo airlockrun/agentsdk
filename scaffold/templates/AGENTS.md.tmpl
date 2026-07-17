@@ -11,14 +11,14 @@ authoritative reference for *this* repo's shape.
 
 Two other documents complete the picture:
 
-- **The agentsdk API reference (`REFERENCE.md`)** — every `Register*` function,
+- **The agentsdk API reference** — every `Register*` function,
   the LLM-calling APIs, seal/unseal, built-in JS bindings, the full surface;
   deep-dive companions (`reference/`) cover storage, remote exec, live integration
-  validation, interactive-login pages, and the database. It ships inside the agentsdk module; your
-  environment provides its location — the airlock toolserver mounts it at
-  `/libs/agentsdk/REFERENCE.md`, and in a plain checkout you can find it with
-  `go list -m -f '{{"{{.Dir}}"}}' github.com/airlockrun/agentsdk`. Read it for
-  "what does the SDK give me?" — read this file for "how do I wire it together?".
+  validation, interactive-login pages, and the database. In a plain checkout,
+  read `.airlock/toolchain/skills/agentsdk/SKILL.md`; the airlock toolserver
+  mounts the same version-matched source at `/libs/agentsdk/REFERENCE.md`.
+  Read it for "what does the SDK give me?" — read this file for "how do I wire
+  it together?".
 - **`NOTES.md`** — the agent-specific design log. Decisions made for
   *this* agent (chosen integrations, non-obvious trade-offs, the
   styling palette, anything a future upgrade needs to know about).
@@ -327,14 +327,16 @@ DaisyUI (styling). htmx is served same-origin by the framework under
 the agent's own `/static/app.{hash}.css` URL after `newAgent` passes its embedded
 bytes to `agentsdk.RegisterStaticAsset`.
 
-**Read the version-matched `templ`, `htmx`, and `daisyui` skill references
-before writing UI** — each carries the language/library reference. In a plain
-checkout, run `go tool air toolchain install` and read their entry points at
-`.airlock/toolchain/skills/{templ,htmx,daisyui}/SKILL.md`. In the airlock
-toolserver, load those same bundled references through the `skill` tool. The
-gotchas below are the high-frequency traps; the skills have
-the full rules. templ markup is not a Go function body and an `hx-*` swap
-is not a free-form DOM write — when in doubt, read the skill, don't guess.
+**Read the version-matched `agentsdk`, `templ`, `htmx`, and `daisyui` skill
+references before writing code** — each carries its API or language/library
+reference. In a plain checkout, `go tool air update` refreshes their entry
+points at `.airlock/toolchain/skills/{agentsdk,templ,htmx,daisyui}/SKILL.md`;
+`go tool air toolchain install` installs them directly. In the airlock
+toolserver, load the UI references through the `skill` tool and read the SDK at
+`/libs/agentsdk/REFERENCE.md`. The gotchas below are the high-frequency traps;
+the skills have the full rules. templ markup is not a Go function body and an
+`hx-*` swap is not a free-form DOM write — when in doubt, read the skill, don't
+guess.
 
 Design principles:
 
