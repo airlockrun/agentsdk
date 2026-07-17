@@ -176,8 +176,8 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(dockerfileStr, "FROM scratch AS goproxy") {
 		t.Error("Dockerfile missing the goproxy build-context stage")
 	}
-	if !strings.Contains(dockerfileStr, "GOPROXY=") {
-		t.Error("Dockerfile missing GOPROXY in the build RUN")
+	if !strings.Contains(dockerfileStr, `export GOPROXY="file:///goproxy,https://proxy.golang.org" GONOSUMDB="*" GOSUMDB=off && \`) {
+		t.Error("Dockerfile must export the dev module proxy configuration for every Go command in the build RUN")
 	}
 	if !strings.Contains(dockerfileStr, "FROM sqlc/sqlc:1.30.0 AS sqlc") || !strings.Contains(dockerfileStr, ".airlock/toolchain/bin/sqlc generate") {
 		t.Error("Dockerfile missing pinned conditional sqlc generation")
