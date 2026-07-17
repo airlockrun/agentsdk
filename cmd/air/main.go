@@ -9,7 +9,7 @@
 //	go tool air build            run the local build chain
 //	air login <airlock-url>      store CLI credentials outside the repo
 //	air logout <airlock-url>     revoke and remove CLI credentials
-//	air deploy                   upload this repo's source and start a build
+//	air deploy -m "Fix retries"  upload this repo's source and start a build
 //	air pull                     fast-forward this workspace from Airlock
 //	air clone <agent> <dir>      clone Airlock source without Git
 //
@@ -115,7 +115,7 @@ Usage:
   air mcp probe|tools|call ...     inspect or call MCP servers
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
-  air deploy [dir] [flags]        upload source and start a build
+  air deploy [dir] -m <text>      upload source and start a build
   air pull [dir] [flags]          fast-forward a local workspace from Airlock
   air clone <agent> <dir> [flags] clone Airlock source without Git
   air remote default <name>       select the default deployment target
@@ -158,7 +158,7 @@ Deploy flags:
   --remote <name>            named deployment target (default: configured default_remote)
   --name <name>              display name for --create (default dir or slug)
   --description <text>       description for --create
-  -m, --message <text>       internal source commit message (single line, 200 bytes max)
+  -m, --message <text>       required build message (single line, 200 bytes max)
   --force                    replace stale Airlock source intentionally
 
 Pull flags:

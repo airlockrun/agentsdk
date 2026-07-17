@@ -20,7 +20,7 @@ named remote binds one Airlock URL and one stable agent ID, so one workspace can
 address production and development agents on the same or different instances:
 
 ```bash
-go tool air deploy --remote dev --url https://airlock.example.com --agent my-agent-dev
+go tool air deploy --remote dev --url https://airlock.example.com --agent my-agent-dev -m "Configure development integrations"
 go tool air integrations list --remote dev
 go tool air connection request spotify --remote dev --path /v1/me
 go tool air exec run ci-runner --remote dev -- kick-build --branch main

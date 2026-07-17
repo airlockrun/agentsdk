@@ -480,7 +480,7 @@ func TestParseDeployFlags(t *testing.T) {
 	if !f.create || f.slug != "todo" || f.name != "todo" || f.url != "https://airlock.example.com" || f.remote != "prod" || f.message != "Add reminders" || f.dir != "repo" {
 		t.Fatalf("flags = %#v", f)
 	}
-	f, err = parseDeployFlags([]string{"--create", "--name", "Sales Deck", "repo"})
+	f, err = parseDeployFlags([]string{"--create", "--name", "Sales Deck", "-m", "Initial implementation", "repo"})
 	if err != nil {
 		t.Fatalf("parseDeployFlags with derived slug: %v", err)
 	}
@@ -492,6 +492,9 @@ func TestParseDeployFlags(t *testing.T) {
 	}
 	if _, err := parseDeployFlags([]string{"--remote", "bad remote"}); err == nil {
 		t.Fatal("invalid --remote returned nil error")
+	}
+	if _, err := parseDeployFlags(nil); err == nil || !strings.Contains(err.Error(), "requires -m") {
+		t.Fatalf("missing message error = %v", err)
 	}
 	f, err = parseDeployFlags([]string{"-m", "Fix retries"})
 	if err != nil || f.message != "Fix retries" {
@@ -516,7 +519,7 @@ func TestDeployCreateRejectsBoundRemoteWithRetryInstruction(t *testing.T) {
 	if err := writeAgentBinding(dir, binding); err != nil {
 		t.Fatal(err)
 	}
-	err := cmdDeploy([]string{dir, "--create", "--slug", "dev"})
+	err := cmdDeploy([]string{dir, "--create", "--slug", "dev", "-m", "Initial implementation"})
 	if err == nil || !strings.Contains(err.Error(), "without --create") {
 		t.Fatalf("cmdDeploy error = %v", err)
 	}
