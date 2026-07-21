@@ -344,9 +344,11 @@ Design principles:
   agent, admin console — each earns a distinct aesthetic. Decide
   first; build to it. A centered title + three buttons is the stock-
   demo trap.
-- **Mobile-first.** Design for narrow viewports, then add `sm:` /
-  `md:` / `lg:` variants for wider screens. Test at ~375px before
-  declaring done.
+- **Mobile-first, desktop-complete.** Start with narrow viewports, then
+  deliberately adapt layout, density, and navigation with `sm:` / `md:` /
+  `lg:` variants so wide screens use their space well. Test at ~375px and
+  a desktop width before declaring done; don't merely stretch the mobile
+  layout across a large viewport.
 - **Brand through DaisyUI's theme**, not per-element overrides.
   Set the theme in `styles/app.css` (see **Theming** below). Don't
   sprinkle `bg-[#...]` or inline `style=` colours through templates.
