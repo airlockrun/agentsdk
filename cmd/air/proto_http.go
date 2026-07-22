@@ -35,11 +35,15 @@ func (e *httpStatusError) Error() string {
 }
 
 func isAuthRejected(err error) bool {
+	return hasHTTPStatus(err, http.StatusUnauthorized) || hasHTTPStatus(err, http.StatusForbidden)
+}
+
+func hasHTTPStatus(err error, code int) bool {
 	var statusErr *httpStatusError
 	if !errors.As(err, &statusErr) {
 		return false
 	}
-	return statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden
+	return statusErr.StatusCode == code
 }
 
 func doProto(ctx context.Context, baseURL, method, path, token string, in proto.Message, out proto.Message) error {
@@ -71,14 +75,18 @@ func doProto(ctx context.Context, baseURL, method, path, token string, in proto.
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var er airlockv1.ErrorResponse
-		if err := protoUnmarshal.Unmarshal(bodyBytes, &er); err == nil && er.Error != "" {
-			return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: er.Error}
-		}
-		return &httpStatusError{StatusCode: resp.StatusCode, Status: resp.Status, Message: strings.TrimSpace(string(bodyBytes))}
+		return newHTTPStatusError(resp.StatusCode, resp.Status, bodyBytes)
 	}
 	if out == nil {
 		return nil
 	}
 	return protoUnmarshal.Unmarshal(bodyBytes, out)
+}
+
+func newHTTPStatusError(statusCode int, status string, body []byte) error {
+	var er airlockv1.ErrorResponse
+	if err := protoUnmarshal.Unmarshal(body, &er); err == nil && er.Error != "" {
+		return &httpStatusError{StatusCode: statusCode, Status: status, Message: er.Error}
+	}
+	return &httpStatusError{StatusCode: statusCode, Status: status, Message: strings.TrimSpace(string(body))}
 }

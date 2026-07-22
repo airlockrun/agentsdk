@@ -119,6 +119,7 @@ Usage:
   air pull [dir] [flags]          fast-forward a local workspace from Airlock
   air clone <agent> <dir> [flags] clone Airlock source without Git
   air remote default <name>       select the default deployment target
+  air remote unbind <name>        clear a remote's local agent binding
 
 Init flags:
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
@@ -178,6 +179,8 @@ Integration target flags:
 
 A remote binds one Airlock URL and one stable agent ID. Selecting a remote
 does not change default_remote. Use air remote default <name> to change it.
+Unbinding clears only the local agent ID, slug, and source state; it preserves
+the Airlock URL and does not delete or modify an agent in Airlock.
 `,
 		agentsdk.Version,
 		agentsdk.Version,
@@ -287,8 +290,8 @@ func runInit(args []string, tidy func(string) error) error {
 }
 
 func cmdRemote(args []string) error {
-	if len(args) != 2 || args[0] != "default" {
-		return errors.New("remote requires: default <name>")
+	if len(args) != 2 || (args[0] != "default" && args[0] != "unbind") {
+		return errors.New("remote requires: default <name> or unbind <name>")
 	}
 	binding, ok, err := loadAgentBinding(".")
 	if err != nil {
@@ -297,13 +300,38 @@ func cmdRemote(args []string) error {
 	if !ok {
 		return errors.New("workspace is not bound to Airlock; deploy or clone it first")
 	}
-	if err := binding.setDefaultRemote(args[1]); err != nil {
-		return err
+	name := args[1]
+	switch args[0] {
+	case "default":
+		if err := binding.setDefaultRemote(name); err != nil {
+			return err
+		}
+		if err := writeAgentBinding(".", binding); err != nil {
+			return err
+		}
+		fmt.Printf("Default remote is now %s\n", name)
+	case "unbind":
+		remote, found := binding.remote(name)
+		if !found {
+			return fmt.Errorf("remote %q is not defined in %s", name, agentBindingPath)
+		}
+		if remote.AgentID == "" {
+			return fmt.Errorf("remote %q is not bound to an agent", name)
+		}
+		agentID, slug := remote.AgentID, remote.Slug
+		remote.AgentID = ""
+		remote.Slug = ""
+		remote.SourceState = ""
+		binding.Remotes[name] = remote
+		if err := writeAgentBinding(".", binding); err != nil {
+			return err
+		}
+		agent := agentID
+		if slug != "" {
+			agent = fmt.Sprintf("%s (%s)", slug, agentID)
+		}
+		fmt.Printf("Remote %q is no longer bound to %s; Airlock URL preserved at %s\n", name, agent, remote.AirlockURL)
 	}
-	if err := writeAgentBinding(".", binding); err != nil {
-		return err
-	}
-	fmt.Printf("Default remote is now %s\n", args[1])
 	return nil
 }
 
