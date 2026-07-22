@@ -307,6 +307,45 @@ func TestCmdRemoteDefault(t *testing.T) {
 	}
 }
 
+func TestCmdRemoteUnbindPreservesURLAndOtherRemotes(t *testing.T) {
+	dir := t.TempDir()
+	b := agentBinding{}
+	b.putRemote("prod", agentRemoteBinding{
+		AirlockURL:  "https://airlock.example.com",
+		AgentID:     "11111111-1111-1111-1111-111111111111",
+		Slug:        "todo",
+		SourceState: "sha256:source",
+	})
+	b.putRemote("dev", agentRemoteBinding{
+		AirlockURL: "https://dev.example.com",
+		AgentID:    "22222222-2222-2222-2222-222222222222",
+		Slug:       "todo-dev",
+	})
+	if err := writeAgentBinding(dir, b); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	if err := cmdRemote([]string{"unbind", "prod"}); err != nil {
+		t.Fatalf("cmdRemote: %v", err)
+	}
+
+	got, _, err := loadAgentBinding(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prod, ok := got.remote("prod")
+	if !ok || prod.AirlockURL != "https://airlock.example.com" || prod.AgentID != "" || prod.Slug != "" || prod.SourceState != "" {
+		t.Fatalf("prod remote = %#v, ok=%v", prod, ok)
+	}
+	dev, ok := got.remote("dev")
+	if !ok || dev.AgentID != "22222222-2222-2222-2222-222222222222" || got.DefaultRemote != "prod" {
+		t.Fatalf("binding = %#v", got)
+	}
+	if err := cmdRemote([]string{"unbind", "prod"}); err == nil || !strings.Contains(err.Error(), "not bound to an agent") {
+		t.Fatalf("second unbind error = %v", err)
+	}
+}
+
 func TestLoadAgentBindingRejectsDuplicateTOML(t *testing.T) {
 	tests := []struct {
 		name string
@@ -489,6 +528,9 @@ func TestParseDeployFlags(t *testing.T) {
 	}
 	if _, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--agent", "todo"}); err == nil {
 		t.Fatal("--create with --agent returned nil error")
+	}
+	if _, err := parseDeployFlags([]string{"--slug", "todo", "-m", "Deploy"}); err == nil || !strings.Contains(err.Error(), "require --create") {
+		t.Fatalf("create-only flag error = %v", err)
 	}
 	if _, err := parseDeployFlags([]string{"--remote", "bad remote"}); err == nil {
 		t.Fatal("invalid --remote returned nil error")
