@@ -329,9 +329,28 @@ type UnsealResponse struct {
 	Plaintext string `json:"plaintext"`
 }
 
+type SessionLoadResponse struct {
+	Messages []session.Message `json:"messages"`
+	Revision string            `json:"revision"`
+}
+
+type SessionAppendRequest struct {
+	Messages []session.Message `json:"messages"`
+	Revision string            `json:"revision"`
+}
+
+type SessionAppendResponse struct {
+	Revision string `json:"revision"`
+}
+
 type SessionCompactRequest struct {
 	Summary     []session.Message `json:"summary"`
 	TokensFreed int               `json:"tokensFreed"`
+	Revision    string            `json:"revision"`
+}
+
+type SessionCompactResponse struct {
+	Revision string `json:"revision"`
 }
 
 type InstructionDef struct {

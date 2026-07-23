@@ -64,6 +64,14 @@ func (s *ndjsonSink) OnPermissionAsked(p bus.PermissionAskedPayload) {
 	})
 }
 
+func (s *ndjsonSink) OnAutomaticCompactionStarted(p bus.AutomaticCompactionStartedPayload) {
+	_ = s.ew.writeLine(ndjsonLine{Type: "compaction_started", Data: p})
+}
+
+func (s *ndjsonSink) OnAutomaticCompactionFinished(p bus.AutomaticCompactionFinishedPayload) {
+	_ = s.ew.writeLine(ndjsonLine{Type: "compaction_finished", Data: p})
+}
+
 // OnSuspension serializes the suspension snapshot for the resume
 // path and, if the suspension is delegated (A2A child gate),
 // synthesizes the leaf confirmation_required so the existing approval
