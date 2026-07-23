@@ -36,6 +36,14 @@ func TestInitBootstrapsSelectedTool(t *testing.T) {
 	}
 }
 
+func TestRewriteInitOutputUsesLauncherDirectory(t *testing.T) {
+	input := "Initialized agent agent-id in .\n  agentsdk: v0.4.0-rc.32\n\nNext steps:\n  cd .\n  go tool air build\n"
+	want := "Initialized agent agent-id in spotify-control\n  agentsdk: v0.4.0-rc.32\n\nNext steps:\n  cd spotify-control\n  go tool air build\n"
+	if got := rewriteInitOutput(input, "spotify-control"); got != want {
+		t.Fatalf("rewriteInitOutput() = %q, want %q", got, want)
+	}
+}
+
 func TestCloneBootstrapsLogsInAndClones(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "agent")
 	var calls []commandCall
@@ -114,7 +122,7 @@ func TestFetchSDKInfo(t *testing.T) {
 
 func stubLauncher(t *testing.T, calls *[]commandCall) {
 	t.Helper()
-	oldExecute, oldLoadInfo := execute, loadInfo
+	oldExecute, oldExecuteOutput, oldLoadInfo := execute, executeOutput, loadInfo
 	loadInfo = func(context.Context, string) (*airlockv1.GetAgentSDKInfoResponse, error) {
 		return &airlockv1.GetAgentSDKInfoResponse{
 			Version:       "0.4.0-rc.32",
@@ -125,8 +133,13 @@ func stubLauncher(t *testing.T, calls *[]commandCall) {
 		*calls = append(*calls, commandCall{dir: dir, name: name, args: append([]string(nil), args...)})
 		return nil
 	}
+	executeOutput = func(dir, name string, args ...string) (string, error) {
+		*calls = append(*calls, commandCall{dir: dir, name: name, args: append([]string(nil), args...)})
+		return "", nil
+	}
 	t.Cleanup(func() {
 		execute = oldExecute
+		executeOutput = oldExecuteOutput
 		loadInfo = oldLoadInfo
 	})
 }

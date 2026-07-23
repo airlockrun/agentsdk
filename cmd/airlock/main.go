@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,9 +26,10 @@ import (
 const sdkInfoPath = "/.well-known/airlock-agent-sdk"
 
 var (
-	httpClient = &http.Client{Timeout: 30 * time.Second}
-	execute    = executeCommand
-	loadInfo   = fetchSDKInfo
+	httpClient    = &http.Client{Timeout: 30 * time.Second}
+	execute       = executeCommand
+	executeOutput = executeCommandOutput
+	loadInfo      = fetchSDKInfo
 )
 
 func main() {
@@ -84,7 +86,14 @@ func cmdInit(args []string) error {
 	if err := prepareTool(dir, baseURL); err != nil {
 		return err
 	}
-	return execute(dir, "go", "tool", "air", "init", ".", "--url", baseURL)
+	output, runErr := executeOutput(dir, "go", "tool", "air", "init", ".", "--url", baseURL)
+	_, outputErr := io.WriteString(os.Stdout, rewriteInitOutput(output, dir))
+	return errors.Join(runErr, outputErr)
+}
+
+func rewriteInitOutput(output, dir string) string {
+	output = strings.Replace(output, " in .\n", " in "+dir+"\n", 1)
+	return strings.Replace(output, "\n  cd .\n", "\n  cd "+dir+"\n", 1)
 }
 
 func cmdClone(args []string) error {
@@ -246,4 +255,15 @@ func executeCommand(dir, name string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func executeCommandOutput(dir, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Stdin = os.Stdin
+	cmd.Stderr = os.Stderr
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	err := cmd.Run()
+	return stdout.String(), err
 }
