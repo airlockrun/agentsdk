@@ -7,7 +7,7 @@ credentials:
 ```bash
 go tool air integrations list
 go tool air connection request spotify --path /v1/me
-go tool air exec run ci-runner -- kick-build --branch main
+go tool air exec run ci_runner -- kick-build --branch main
 go tool air mcp probe https://example.com/mcp
 go tool air mcp tools github
 go tool air mcp call github search_repos --args '{"query":"airlock"}'
@@ -23,7 +23,7 @@ address production and development agents on the same or different instances:
 go tool air deploy --remote dev --url https://airlock.example.com --agent my-agent-dev -m "Configure development integrations"
 go tool air integrations list --remote dev
 go tool air connection request spotify --remote dev --path /v1/me
-go tool air exec run ci-runner --remote dev -- kick-build --branch main
+go tool air exec run ci_runner --remote dev -- kick-build --branch main
 go tool air mcp tools github --remote dev
 ```
 

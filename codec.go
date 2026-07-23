@@ -236,15 +236,25 @@ func optPathArg(vm *goja.Runtime, v goja.Value, name string) string {
 // checkTransformAccess gates a transform's src read and (when given) dst write.
 // An omitted dst targets the framework scratch dir, which the authed gate
 // already covers, so it needs no check.
-func checkTransformAccess(ctx context.Context, agent *Agent, vm *goja.Runtime, name, src, dst string) {
-	if err := agent.CheckFileAccess(ctx, src, OpRead); err != nil {
+func checkTransformAccess(ctx context.Context, agent *Agent, vm *goja.Runtime, name, src, dst string) (string, string) {
+	inPlace := dst != "" && dst == src
+	resolvedSrc, err := agent.resolveFilePath(ctx, src, FileOperationRead)
+	if err != nil {
 		panic(vm.NewGoError(fmt.Errorf("%s: %w", name, err)))
 	}
-	if dst != "" {
-		if err := agent.CheckFileAccess(ctx, dst, OpWrite); err != nil {
-			panic(vm.NewGoError(fmt.Errorf("%s: %w", name, err)))
-		}
+	if dst == "" {
+		return resolvedSrc, ""
 	}
+	op := FileOperationWrite
+	if inPlace {
+		op = FileOperationOverwrite
+		dst = resolvedSrc
+	}
+	resolvedDst, err := agent.resolveFilePath(ctx, dst, op)
+	if err != nil {
+		panic(vm.NewGoError(fmt.Errorf("%s: %w", name, err)))
+	}
+	return resolvedSrc, resolvedDst
 }
 
 // lookupCharset resolves a charset name to its decoder streamFunc (→ UTF-8).

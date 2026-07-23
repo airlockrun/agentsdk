@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/internal/binding"
 )
 
 func TestRenderToolDecls_Empty(t *testing.T) {
@@ -17,6 +19,7 @@ func TestRenderToolDecls_FromRawJSONSchema(t *testing.T) {
 	in := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string","description":"Search text"}},"required":["q"]}`)
 	out := json.RawMessage(`{"type":"object","properties":{"total":{"type":"integer"}}}`)
 	got := RenderToolDecls([]ToolRender{{
+		Path:         binding.Local(binding.Tool, "", "search"),
 		Name:         "search",
 		Description:  "Search.",
 		InputSchema:  in,
@@ -40,6 +43,7 @@ func TestRenderToolDecls_LLMHintInJSDoc(t *testing.T) {
 	in := json.RawMessage(`{"type":"object"}`)
 	out := json.RawMessage(`{"type":"object"}`)
 	got := RenderToolDecls([]ToolRender{{
+		Path:         binding.Local(binding.Tool, "", "search"),
 		Name:         "search",
 		Description:  "Search the web.",
 		LLMHint:      "expensive; cache results before re-calling",
@@ -57,6 +61,7 @@ func TestRenderToolDecls_LLMHintInJSDoc(t *testing.T) {
 // Without an LLMHint the JSDoc stays clean (no empty bracket line).
 func TestRenderToolDecls_OmitsEmptyLLMHint(t *testing.T) {
 	got := RenderToolDecls([]ToolRender{{
+		Path:         binding.Local(binding.Tool, "", "search"),
 		Name:         "search",
 		Description:  "Search the web.",
 		InputSchema:  json.RawMessage(`{"type":"object"}`),
@@ -67,22 +72,25 @@ func TestRenderToolDecls_OmitsEmptyLLMHint(t *testing.T) {
 	}
 }
 
-func TestRenderMCPNamespace_Empty(t *testing.T) {
-	if got := RenderMCPNamespace("mcp_github", nil); got != "" {
+func TestRenderNestedRoot_Empty(t *testing.T) {
+	if got := RenderNestedRoot("mcp", nil); got != "" {
 		t.Errorf("empty tools: want empty string, got %q", got)
 	}
 }
 
-func TestRenderMCPNamespace_Basic(t *testing.T) {
-	got := RenderMCPNamespace("mcp_github", []MCPToolRender{
+func TestRenderNestedRoot_Basic(t *testing.T) {
+	path := binding.Local(binding.MCP, "github", "search_repos")
+	got := RenderNestedRoot("mcp", []NamespaceRender{{Namespace: "github", Tools: []MCPToolRender{
 		{
+			Path:        path,
 			Name:        "search_repos",
 			Description: "Search GitHub repositories.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}`),
 		},
-	})
+	}}})
 	wants := []string{
-		"declare const mcp_github: {",
+		"declare const mcp: {",
+		"github: {",
 		"/** Search GitHub repositories. */",
 		"search_repos(args: {",
 		"query: string;",
@@ -101,25 +109,25 @@ func TestRenderMCPNamespace_Basic(t *testing.T) {
 // full identifier. A sibling namespace declares `agent_<slug>`, which
 // must match the JS binding installed by vm.go (regression: it used to
 // emit `mcp_agent_<slug>`, so the LLM called an undefined symbol).
-func TestRenderMCPNamespace_NoPrefixPrepended(t *testing.T) {
-	got := RenderMCPNamespace("agent_spotify", []MCPToolRender{
-		{Name: "get_current_status", InputSchema: json.RawMessage(`{"type":"object"}`)},
-	})
-	if !strings.Contains(got, "declare const agent_spotify: {") {
-		t.Errorf("want `declare const agent_spotify: {`, got:\n%s", got)
+func TestRenderNestedRootAgent(t *testing.T) {
+	got := RenderNestedRoot("agent", []NamespaceRender{{Namespace: "spotify", Tools: []MCPToolRender{
+		{Path: binding.Local(binding.Agent, "spotify", "get_current_status"), Name: "get_current_status", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}}})
+	if !strings.Contains(got, "declare const agent: {") || !strings.Contains(got, "spotify: {") {
+		t.Errorf("want nested agent.spotify declaration, got:\n%s", got)
 	}
-	if strings.Contains(got, "mcp_agent_spotify") {
-		t.Errorf("must not prepend mcp_ to a caller-supplied namespace:\n%s", got)
+	if strings.Contains(got, "mcp") {
+		t.Errorf("must not render an MCP root:\n%s", got)
 	}
 }
 
-func TestRenderMCPNamespace_SortsTools(t *testing.T) {
+func TestRenderNestedRoot_SortsTools(t *testing.T) {
 	// Input order is intentionally non-alphabetic.
-	got := RenderMCPNamespace("mcp_svc", []MCPToolRender{
-		{Name: "zeta", InputSchema: json.RawMessage(`{"type":"object"}`)},
-		{Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
-		{Name: "mu", InputSchema: json.RawMessage(`{"type":"object"}`)},
-	})
+	got := RenderNestedRoot("mcp", []NamespaceRender{{Namespace: "svc", Tools: []MCPToolRender{
+		{Path: binding.Local(binding.MCP, "svc", "zeta"), Name: "zeta", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Path: binding.Local(binding.MCP, "svc", "alpha"), Name: "alpha", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		{Path: binding.Local(binding.MCP, "svc", "mu"), Name: "mu", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}}})
 	alphaIdx := strings.Index(got, "alpha(")
 	muIdx := strings.Index(got, "mu(")
 	zetaIdx := strings.Index(got, "zeta(")
@@ -131,10 +139,10 @@ func TestRenderMCPNamespace_SortsTools(t *testing.T) {
 	}
 }
 
-func TestRenderMCPNamespace_NoDescription(t *testing.T) {
-	got := RenderMCPNamespace("mcp_svc", []MCPToolRender{
-		{Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
-	})
+func TestRenderNestedRoot_NoDescription(t *testing.T) {
+	got := RenderNestedRoot("mcp", []NamespaceRender{{Namespace: "svc", Tools: []MCPToolRender{
+		{Path: binding.Local(binding.MCP, "svc", "ping"), Name: "ping", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}}})
 	if strings.Contains(got, "/**") {
 		t.Errorf("missing description should not produce JSDoc:\n%s", got)
 	}

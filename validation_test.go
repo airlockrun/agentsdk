@@ -25,6 +25,18 @@ func TestRegistrationValidation(t *testing.T) {
 			call: func(a *Agent) { a.RegisterTool(addTool("bad_access", "Bad access."), Access("member")) },
 		},
 		{
+			name: "tool name is snake case",
+			want: "lowercase snake_case",
+			call: func(a *Agent) { a.RegisterTool(addTool("bad-name", "Bad name."), AccessUser) },
+		},
+		{
+			name: "tool name length",
+			want: "1-58 characters",
+			call: func(a *Agent) {
+				a.RegisterTool(addTool("a"+strings.Repeat("b", maxToolNameLength), "Long name."), AccessUser)
+			},
+		},
+		{
 			name: "webhook verification is explicit",
 			want: "invalid Verify",
 			call: func(a *Agent) {
@@ -35,21 +47,21 @@ func TestRegistrationValidation(t *testing.T) {
 			name: "hmac webhook needs header",
 			want: "Header is required",
 			call: func(a *Agent) {
-				a.RegisterWebhook(&Webhook{Path: "events", Handler: noopWebhook, Verify: "hmac", Description: "Events"})
+				a.RegisterWebhook(&Webhook{Path: "events", Handler: noopWebhook, Verify: WebhookVerificationHMAC, Description: "Events"})
 			},
 		},
 		{
 			name: "webhook path is one segment",
 			want: "one URL-safe path segment",
 			call: func(a *Agent) {
-				a.RegisterWebhook(&Webhook{Path: "events/push", Handler: noopWebhook, Verify: "none", Description: "Events"})
+				a.RegisterWebhook(&Webhook{Path: "events/push", Handler: noopWebhook, Verify: WebhookVerificationNone, Description: "Events"})
 			},
 		},
 		{
 			name: "webhook timeout is not negative",
 			want: "must not be negative",
 			call: func(a *Agent) {
-				a.RegisterWebhook(&Webhook{Path: "events", Handler: noopWebhook, Verify: "none", Timeout: -time.Second, Description: "Events"})
+				a.RegisterWebhook(&Webhook{Path: "events", Handler: noopWebhook, Verify: WebhookVerificationNone, Timeout: -time.Second, Description: "Events"})
 			},
 		},
 		{
@@ -117,6 +129,20 @@ func TestRegistrationValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "binding slug is snake case",
+			want: "lowercase snake_case",
+			call: func(a *Agent) {
+				a.RegisterConnection(&Connection{Slug: "bad__slug", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, Access: AccessUser})
+			},
+		},
+		{
+			name: "binding slug length",
+			want: "1-44 characters",
+			call: func(a *Agent) {
+				a.RegisterExecEndpoint(&ExecEndpoint{Slug: "a" + strings.Repeat("b", maxBindingSlugLength), Description: "Runner", Access: AccessUser})
+			},
+		},
+		{
 			name: "connection auth mode",
 			want: "invalid AuthMode",
 			call: func(a *Agent) {
@@ -167,7 +193,7 @@ func TestRegistrationValidation(t *testing.T) {
 		},
 		{
 			name: "model slug",
-			want: "Slug must start",
+			want: "lowercase snake_case",
 			call: func(a *Agent) {
 				a.RegisterModel(&ModelSlot{Slug: "Bad Slot", Capability: CapText, Description: "Summary"})
 			},
@@ -244,7 +270,7 @@ func TestRegistrationsAreCopied(t *testing.T) {
 func TestHandlerFreezesRegistrationsAndServesPublicRoute(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterWebhook(&Webhook{
-		Path: "anonymous", Verify: "none", Description: "Anonymous events",
+		Path: "anonymous", Verify: WebhookVerificationNone, Description: "Anonymous events",
 		Handler: func(context.Context, []byte, *EventWriter) error { return nil },
 	})
 	a.RegisterRoute(&Route{

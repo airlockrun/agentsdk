@@ -6,8 +6,8 @@ import (
 )
 
 // MigrationExternalStep runs an external migration operation with the Agent
-// attached to ctx. Validation skips the callback because storage, credentials,
-// and third-party services are unavailable in that mode.
+// for the current migration. Validation skips the callback because storage,
+// credentials, and third-party services are unavailable in that mode.
 //
 // Goose does not record completion of a NoTx migration atomically with an
 // external service. Production callbacks have at-least-once execution
@@ -21,7 +21,7 @@ func MigrationExternalStep(ctx context.Context, step func(context.Context, *Agen
 	if isValidatingMigrations() {
 		return nil
 	}
-	return step(ctx, AgentFromMigrationContext(ctx))
+	return step(ctx, agentFromMigrationContext(ctx))
 }
 
 // MoveFile repeat-safely moves an object in agent storage for operational

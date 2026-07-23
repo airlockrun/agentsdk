@@ -52,6 +52,8 @@ scripts/sync-airlock-protos.sh check || {
 }
 echo "agentsdk airlock proto sync: OK"
 
+GOWORK=off scripts/check-api-compat.sh
+
 go run ./internal/cmd/syncskills --check || {
 	echo "ERROR: scaffold skills are out of sync; run go run ./internal/cmd/syncskills" >&2
 	exit 1

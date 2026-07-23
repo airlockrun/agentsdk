@@ -156,14 +156,18 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	run.complete(ctx, "success", "", "", "")
 }
 
-// handleFire serves a scheduler-driven fire of a registered cron or schedule
-// handler. The X-Fire-ID header identifies the fire row so a schedule handler
-// can look up its per-instance data in the agent's own DB (ScheduleFromContext).
+// handleFire serves one scheduler delivery attempt and acknowledges the
+// handler result with a bounded JSON response.
 func (a *Agent) handleFire(w http.ResponseWriter, r *http.Request) {
 	slug := r.PathValue("slug")
 	h, ok := a.scheduleHandlers[slug]
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	var req wire.ScheduleFireRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.ID == "" || req.Slug != slug || req.ScheduledAt.IsZero() || req.Attempt < 1 {
+		http.Error(w, "invalid schedule fire request", http.StatusBadRequest)
 		return
 	}
 
@@ -182,31 +186,39 @@ func (a *Agent) handleFire(w http.ResponseWriter, r *http.Request) {
 
 	run := newRun(a, runID, bridgeID, "", ctx)
 	run.callerAccess = AccessAdmin // a timed fire is a trusted scheduled trigger
-	run.fireID = r.Header.Get("X-Fire-ID")
-	run.fireSlug = slug
 	ctx = contextWithRun(ctx, run)
-	ew := newEventWriter(w)
+	event := ScheduleEvent{ID: req.ID, Slug: req.Slug, ScheduledAt: req.ScheduledAt, Attempt: req.Attempt}
+	writeResult := func(status, message string) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(wire.ScheduleFireResponse{Status: status, Error: message})
+	}
 
 	defer func() {
 		if rec := recover(); rec != nil {
 			trace := string(debug.Stack())
 			errMsg := fmt.Sprintf("%v", rec)
-			ew.WriteError(fmt.Errorf("%s", errMsg))
 			run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, trace)
+			writeResult("error", errMsg)
 			return
 		}
 	}()
 
-	if err := h.handler(ctx, ew); err != nil {
+	if err := h.handler(ctx, event); err != nil {
 		status := "error"
 		if ctx.Err() == context.DeadlineExceeded {
 			status = "timeout"
 		}
-		ew.WriteError(err)
 		run.complete(ctx, status, err.Error(), wire.ErrorKindAgent, "")
+		writeResult(status, err.Error())
+		return
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		run.complete(ctx, "timeout", ctx.Err().Error(), wire.ErrorKindAgent, "")
+		writeResult("timeout", ctx.Err().Error())
 		return
 	}
 	run.complete(ctx, "success", "", "", "")
+	writeResult("success", "")
 }
 
 // handleDirectTool dispatches a user-registered tool by name without
@@ -250,7 +262,7 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	// HTTP routes.
 	//
 	// Scope keys (parentRun/user) ride on headers airlock sets for
-	// A2A and external MCP tool calls; CheckFileAccess consults them
+	// A2A and external MCP tool calls; ResolveFilePath consults them
 	// when gating reads on scoped directories.
 	lazy := &lazyRun{
 		agent:           a,

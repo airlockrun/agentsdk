@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/airlockrun/agentsdk/internal/testcaller"
 	"github.com/airlockrun/agentsdk/wire"
@@ -28,7 +29,7 @@ const reservedTmpPath = "tmp"
 // it directly — args are rewritten at the boundary, so the body
 // receives a path inside this prefix and readFiles it like any other
 // path. Sub-paths carry a scope key (`run-{uuid}` or `conv-{uuid}`);
-// CheckFileAccess gates reads on that scope matching the current run's
+// ResolveFilePath gates reads on that scope matching the current run's
 // caller context, so callers cannot read other callers' uploads even
 // when both are anonymous. Files are auto-cleaned by retention.
 const reservedIncomingPath = "__incoming"
@@ -40,7 +41,7 @@ const reservedIncomingPath = "__incoming"
 // produced. Files are auto-cleaned by retention.
 const reservedSiblingsPath = "siblings"
 
-// ErrNotFound is returned by CheckFileAccess and the storage methods for
+// ErrNotFound is returned by ResolveFilePath and the storage methods for
 // both "directory not registered" and "caller does not have access" — the
 // two cases are deliberately indistinguishable at the public surface so
 // path-guessing leaks no information about what exists.
@@ -57,7 +58,7 @@ var ErrInvalidPath = errors.New("agentsdk: invalid path")
 // webhook, route, subdomain proxy) inject one onto ctx via withCaller.
 // Builder Go code that constructs paths itself does NOT need to set a
 // caller — it calls the trusted file API directly (OpenFile/ReadFile/
-// WriteFile/StatFile/ListDir/DeleteFile) which bypasses CheckFileAccess.
+// WriteFile/StatFile/ListDir/DeleteFile) which bypasses ResolveFilePath.
 type caller struct {
 	Access Access
 	UserID string // optional, for audit
@@ -128,13 +129,21 @@ func normalizePath(p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("%w: path is empty after trimming '/'", ErrInvalidPath)
 	}
-	// Walk segments, reject empty (//), '.', '..'.
+	if !utf8.ValidString(p) || strings.ContainsRune(p, '\x00') || strings.ContainsRune(p, '\\') {
+		return "", fmt.Errorf("%w: path contains invalid characters", ErrInvalidPath)
+	}
+	// Walk segments, reject empty (//), '.', '..', and control characters.
 	for _, seg := range strings.Split(p, "/") {
 		if seg == "" {
 			return "", fmt.Errorf("%w: empty segment ('//' in path)", ErrInvalidPath)
 		}
 		if seg == "." || seg == ".." {
 			return "", fmt.Errorf("%w: '%s' segments are not allowed", ErrInvalidPath, seg)
+		}
+		for _, r := range seg {
+			if r < 0x20 || r == 0x7f {
+				return "", fmt.Errorf("%w: path contains control characters", ErrInvalidPath)
+			}
 		}
 	}
 	return p, nil
@@ -159,8 +168,8 @@ func pathHasPrefix(p, dir string) bool {
 // lookupDirectory finds the registered directory whose path is the
 // longest prefix of `p` (post-normalization). Returns nil if no
 // directory covers `p`. Caller must have already normalized `p`.
-func (a *Agent) lookupDirectory(p string) *Directory {
-	var best *Directory
+func (a *Agent) lookupDirectory(p string) *directory {
+	var best *directory
 	for _, d := range a.directories {
 		if !pathHasPrefix(p, d.Path) {
 			continue
@@ -172,19 +181,16 @@ func (a *Agent) lookupDirectory(p string) *Directory {
 	return best
 }
 
-// dirCap returns the directory's access cap for `op`. Delete folds into
-// Write. Unknown ops fall back to AccessAdmin (deny all but admin) so
-// future op tags fail closed if added without updating this switch.
-func dirCap(d *Directory, op FileOp) Access {
+func dirCap(d *directory, op FileOperation) (Access, bool) {
 	switch op {
-	case OpRead:
-		return d.Read
-	case OpWrite:
-		return d.Write
-	case OpList:
-		return d.List
+	case FileOperationRead:
+		return d.Read, true
+	case FileOperationList:
+		return d.List, true
+	case FileOperationWrite, FileOperationOverwrite, FileOperationDelete:
+		return d.Write, true
 	}
-	return AccessAdmin
+	return "", false
 }
 
 // hasPublicDirCap reports whether at least one registered directory grants
@@ -192,10 +198,10 @@ func dirCap(d *Directory, op FileOp) Access {
 // (fileRead, fileWrite, fileList, etc.) appear in a public-caller's
 // runtime only when there's actually some directory they could touch —
 // keeps the public attack surface tight and avoids dangling bindings
-// that would just throw on every CheckFileAccess.
-func (a *Agent) hasPublicDirCap(op FileOp) bool {
+// that would just throw on every ResolveFilePath.
+func (a *Agent) hasPublicDirCap(op FileOperation) bool {
 	for _, d := range a.directories {
-		if dirCap(d, op) == AccessPublic {
+		if cap, ok := dirCap(d, op); ok && cap == AccessPublic {
 			return true
 		}
 	}
@@ -204,130 +210,136 @@ func (a *Agent) hasPublicDirCap(op FileOp) bool {
 
 // --- Public access gate ---
 
-// CheckFileAccess is the single gate for paths that arrived from
-// untrusted territory: VM run_js code, HTTP requests, tool inputs from
-// the LLM. Builder Go code that constructs paths itself bypasses this
-// check by calling OpenFile/ReadFile/WriteFile/etc. directly.
-//
-// Returns ErrInvalidPath for malformed paths, ErrNotFound for everything
-// else (denied OR no covering directory). The two latter cases are
-// indistinguishable on purpose so path-guessing reveals nothing.
-func (a *Agent) CheckFileAccess(ctx context.Context, path string, op FileOp) error {
+// ResolveFilePath authorizes an untrusted path and returns the exact physical
+// path that storage operations must use. Trusted Go storage methods bypass it.
+func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperation) (FilePath, error) {
+	if _, ok := dirCap(&directory{}, op); !ok {
+		return "", fmt.Errorf("agentsdk: unsupported file operation %q", op)
+	}
 	canon, err := normalizePath(path)
 	if err != nil {
-		return err
+		return "", err
 	}
 	d := a.lookupDirectory(canon)
 	if d == nil {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
-	cap := dirCap(d, op)
 	caller := callerFromContext(ctx)
-	if accessSatisfies(caller.Access, cap) {
-		return nil
+	if caller.Access == AccessAdmin {
+		return FilePath(canon), nil
 	}
-	// Scoped-directory overlay. Lets through ops the base ACL would
-	// reject when the path carries a scope key matching the current
-	// run's identity (user/conv/parent-run). For writes the path is
-	// allowed to be bare — WriteFile injects the scope segment
-	// downstream — provided the run has *some* key to scope by.
-	if d.Scope != ScopeNone {
-		uid, convID, parentRunID := scopeKeysFromContext(ctx)
-		switch op {
-		case OpRead, OpList:
-			if scope := scopePrefixOfPath(canon, d); scope != "" && scopeMatches(scope, uid, convID, parentRunID) {
-				return nil
-			}
-		case OpWrite:
-			// Bare path → injection will produce a scoped path the
-			// writer is the only run that owns. Already-scoped paths
-			// still need to match (so a public caller can't overwrite
-			// another caller's slot by handing us a forged scope key).
-			if scope := scopePrefixOfPath(canon, d); scope != "" {
-				if scopeMatches(scope, uid, convID, parentRunID) {
-					return nil
-				}
-				return ErrNotFound
-			}
-			if pickScopeKey(d.Scope, uid, convID, parentRunID) != "" {
-				return nil
-			}
+	if d.incomingProvenance {
+		return resolveIncomingPath(ctx, d, canon, op)
+	}
+	cap, _ := dirCap(d, op)
+	if !accessSatisfies(caller.Access, cap) {
+		return "", ErrNotFound
+	}
+	if d.Scope == ScopeNone {
+		return FilePath(canon), nil
+	}
+	identity := fileIdentityFromContext(ctx)
+	expected := identity.scopeSegment(d.Scope)
+	if expected == "" {
+		return "", ErrNotFound
+	}
+	if canon == d.Path {
+		if op == FileOperationList {
+			return FilePath(d.Path + "/" + expected), nil
+		}
+		if op == FileOperationWrite {
+			return "", fmt.Errorf("%w: write path must include a filename", ErrInvalidPath)
+		}
+		return "", ErrNotFound
+	}
+	rest := canon[len(d.Path)+1:]
+	segment, _, _ := strings.Cut(rest, "/")
+	if segment == expected {
+		return FilePath(canon), nil
+	}
+	if isScopeSegment(segment) {
+		return "", ErrNotFound
+	}
+	if op == FileOperationWrite || op == FileOperationList {
+		return FilePath(d.Path + "/" + expected + "/" + rest), nil
+	}
+	return "", ErrNotFound
+}
+
+func resolveIncomingPath(ctx context.Context, d *directory, canon string, op FileOperation) (FilePath, error) {
+	if op != FileOperationRead || canon == d.Path {
+		return "", ErrNotFound
+	}
+	rest := canon[len(d.Path)+1:]
+	segment, _, _ := strings.Cut(rest, "/")
+	identity := fileIdentityFromContext(ctx)
+	allowed := []string{}
+	if identity.userID != "" {
+		allowed = append(allowed, "user-"+identity.userID)
+	}
+	if identity.conversationID != "" {
+		allowed = append(allowed, "conv-"+identity.conversationID)
+	}
+	if identity.parentRunID != "" {
+		allowed = append(allowed, "run-"+identity.parentRunID)
+	}
+	for _, expected := range allowed {
+		if segment == expected {
+			return FilePath(canon), nil
 		}
 	}
-	return ErrNotFound
+	return "", ErrNotFound
 }
 
-// scopePrefixOfPath returns the first path segment under the directory
-// prefix (e.g. "user-<uuid>" for "tmp/user-<uuid>/foo.jpg") iff it has
-// the scope-key shape "<kind>-<id>". Returns "" for bare paths so the
-// caller can decide whether absence is acceptable (it is for writes).
-func scopePrefixOfPath(canon string, d *Directory) string {
-	prefix := d.Path + "/"
-	if !strings.HasPrefix(canon, prefix) {
-		return ""
-	}
-	rest := canon[len(prefix):]
-	end := strings.IndexByte(rest, '/')
-	if end <= 0 {
-		return ""
-	}
-	seg := rest[:end]
-	// Must look like "<kind>-<id>"; otherwise it's just a regular
-	// sub-directory and not a scope key.
-	if i := strings.IndexByte(seg, '-'); i > 0 && i < len(seg)-1 {
-		return seg
-	}
-	return ""
+func (a *Agent) resolveFilePath(ctx context.Context, path string, op FileOperation) (string, error) {
+	resolved, err := a.ResolveFilePath(ctx, path, op)
+	return string(resolved), err
 }
 
-// scopeMatches reports whether a "<kind>-<id>" scope segment labels a
-// context one of the supplied run keys identifies.
-func scopeMatches(scope, userID, convID, parentRunID string) bool {
-	switch {
-	case strings.HasPrefix(scope, "user-"):
-		return userID != "" && scope[len("user-"):] == userID
-	case strings.HasPrefix(scope, "conv-"):
-		return convID != "" && scope[len("conv-"):] == convID
-	case strings.HasPrefix(scope, "run-"):
-		return parentRunID != "" && scope[len("run-"):] == parentRunID
-	}
-	return false
+type fileIdentity struct {
+	userID         string
+	conversationID string
+	runID          string
+	parentRunID    string
 }
 
-// pickScopeKey returns the strongest scope key the run has for the
-// given directory scope. Falls back when a stronger identity isn't
-// available: user → conv → run. Empty string means "no scope key
-// available" — writes to scoped dirs are denied in that case so a
-// caller without any anchor (e.g. cron under public-mcp) can't produce
-// orphaned scoped paths.
-func pickScopeKey(scope DirectoryScope, userID, convID, parentRunID string) string {
-	if scope == ScopeUser && userID != "" {
-		return "user-" + userID
-	}
-	if (scope == ScopeUser || scope == ScopeConv) && convID != "" {
-		return "conv-" + convID
-	}
-	if parentRunID != "" {
-		return "run-" + parentRunID
-	}
-	return ""
-}
-
-// scopeKeysFromContext pulls the (userID, conversationID, parentRunID)
-// triple from whichever run-shaped value is on the ctx — a real run or a
-// lazyRun whose .get() hasn't fired yet. Test caller state supplies the user ID
-// when no run context is present; otherwise it returns zero strings.
-func scopeKeysFromContext(ctx context.Context) (userID, convID, parentRunID string) {
+func fileIdentityFromContext(ctx context.Context) fileIdentity {
 	if r := runFromContext(ctx); r != nil {
-		return r.userID, r.conversationID, r.parentRunID
+		return fileIdentity{userID: r.userID, conversationID: r.conversationID, runID: r.id, parentRunID: r.parentRunID}
 	}
 	if l := lazyRunFromContext(ctx); l != nil {
-		return l.userID, l.conversationID, l.parentRunID
+		identity := fileIdentity{userID: l.userID, conversationID: l.conversationID, parentRunID: l.parentRunID}
+		if materialized := l.materialized(); materialized != nil {
+			identity.runID = materialized.id
+		}
+		return identity
 	}
 	if test, ok := testcaller.FromContext(ctx); ok {
-		return test.UserID, "", ""
+		return fileIdentity{userID: test.UserID}
 	}
-	return "", "", ""
+	return fileIdentity{}
+}
+
+func (i fileIdentity) scopeSegment(scope DirectoryScope) string {
+	switch scope {
+	case ScopeUser:
+		if i.userID != "" {
+			return "user-" + i.userID
+		}
+	case ScopeConversation:
+		if i.conversationID != "" {
+			return "conv-" + i.conversationID
+		}
+	case ScopeRun:
+		if i.runID != "" {
+			return "run-" + i.runID
+		}
+	}
+	return ""
+}
+
+func isScopeSegment(segment string) bool {
+	return strings.HasPrefix(segment, "user-") || strings.HasPrefix(segment, "conv-") || strings.HasPrefix(segment, "run-")
 }
 
 // --- Trusted Go file API ---
@@ -390,27 +402,10 @@ func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
 // WriteFile writes data with the given content type. Returns the resulting
 // FileInfo (path/filename/contentType/size/lastModified). Trusted: no
 // access check.
-//
-// For directories registered with a Scope, the destination path is
-// rewritten to include a scope segment derived from the run's identity:
-// "tmp/cat.jpg" with ScopeUser becomes "tmp/user-<id>/cat.jpg". The
-// scoped path travels back via the returned FileInfo.Path; callers use
-// that string from then on (CheckFileAccess parses the same segment to
-// gate reads). Bare paths that already contain a "<kind>-<id>" scope
-// segment are written as-is.
 func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, contentType string) (FileInfo, error) {
 	canon, err := normalizePath(path)
 	if err != nil {
 		return FileInfo{}, err
-	}
-	if d := a.lookupDirectory(canon); d != nil && d.Scope != ScopeNone {
-		if existing := scopePrefixOfPath(canon, d); existing == "" {
-			uid, convID, parentRunID := scopeKeysFromContext(ctx)
-			if scopeKey := pickScopeKey(d.Scope, uid, convID, parentRunID); scopeKey != "" {
-				prefix := d.Path + "/"
-				canon = prefix + scopeKey + "/" + canon[len(prefix):]
-			}
-		}
 	}
 	// Buffer to learn the size; the API path needs Content-Length.
 	var buf bytes.Buffer
@@ -441,6 +436,8 @@ func (a *Agent) StatFile(ctx context.Context, path string) (FileInfo, error) {
 
 // ListOpts controls ListDir.
 type ListOpts struct {
+	noUnkeyedLiterals
+
 	// Recursive walks the entire subtree. Zero value (false) lists only
 	// files directly under the path (one level only, like `ls`).
 	Recursive bool
@@ -490,7 +487,7 @@ func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
 // (1h); the server caps anything over 24h. The URL is signed for the
 // public S3 endpoint when configured, so it works from outside the docker
 // network (browsers, LLM providers, external tools). Trusted: no access
-// check — the JS binding gates LLM-supplied paths via CheckFileAccess.
+// check — the JS binding resolves LLM-supplied paths via ResolveFilePath.
 //
 // Use cases: embedding in markdown ([file](url)), sharing externally,
 // cases where the agent's authenticated /__air/storage subdomain route
@@ -526,13 +523,13 @@ func pathBase(p string) string {
 // Whether the URL succeeds depends on the directory's Read cap and the
 // caller's auth state — see serveStoragePath on the airlock side.
 func (a *Agent) publicURLForPath(path string) string {
-	return a.publicStorageBaseSnapshot() + "/" + path
+	return a.publicStorageBaseSnapshot() + "/" + escapeStoragePath(path)
 }
 
 // --- HTTP client (raw helpers — Trusted Go API wraps these) ---
 
 func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, contentType, originalFilename string) error {
-	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+path, data)
+	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+escapeStoragePath(path), data)
 	if err != nil {
 		return err
 	}
@@ -553,7 +550,7 @@ func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, c
 }
 
 func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, error) {
-	resp, err := a.client.do(ctx, "GET", "/api/agent/storage/"+path, nil)
+	resp, err := a.client.do(ctx, "GET", "/api/agent/storage/"+escapeStoragePath(path), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +568,7 @@ func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, er
 // openFileRangeRaw streams the inclusive byte range [start, end] via a ranged
 // GET. A satisfiable range returns 206; the caller closes resp.Body.
 func (a *Agent) openFileRangeRaw(ctx context.Context, path string, start, end int64) (io.ReadCloser, error) {
-	resp, err := a.client.getRange(ctx, "/api/agent/storage/"+path, start, end)
+	resp, err := a.client.getRange(ctx, "/api/agent/storage/"+escapeStoragePath(path), start, end)
 	if err != nil {
 		return nil, err
 	}
@@ -587,7 +584,7 @@ func (a *Agent) openFileRangeRaw(ctx context.Context, path string, start, end in
 }
 
 func (a *Agent) deleteFileRaw(ctx context.Context, path string) error {
-	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage/"+path, nil)
+	resp, err := a.client.do(ctx, "DELETE", "/api/agent/storage/"+escapeStoragePath(path), nil)
 	if err != nil {
 		return err
 	}
@@ -652,4 +649,12 @@ func (a *Agent) listDirRaw(ctx context.Context, path string, recursive bool) ([]
 		out[i] = fileInfoFromWire(info)
 	}
 	return out, nil
+}
+
+func escapeStoragePath(path string) string {
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+	return strings.Join(segments, "/")
 }

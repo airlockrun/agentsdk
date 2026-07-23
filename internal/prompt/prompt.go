@@ -1,11 +1,5 @@
-// Package prompt renders the agent's system prompt at run time from
-// the agent's live registrations (tools, connections, MCPs, topics,
-// webhooks, crons, routes) plus the small slice of platform data
-// Airlock supplies at sync (dashboard/route URLs, the sibling address
-// book). The same template was previously rendered server-side in
-// airlock/prompt; moving it here lets the per-run caller filter
-// (caller access level, per-user sibling visibility) take effect
-// without exploding the on-wire payload into N variants.
+// Package prompt renders the agent's system prompt from live registrations
+// and caller-specific platform data.
 package prompt
 
 import (
@@ -14,7 +8,8 @@ import (
 	"encoding/json"
 	"text/template"
 
-	"github.com/airlockrun/agentsdk/tsrender"
+	"github.com/airlockrun/agentsdk/internal/binding"
+	"github.com/airlockrun/agentsdk/internal/tsrender"
 	"github.com/google/uuid"
 )
 
@@ -22,9 +17,9 @@ import (
 var agentPromptTmpl string
 
 var agentTmpl = template.Must(template.New("agent").Funcs(template.FuncMap{
-	"renderTools":            renderToolsFunc,
-	"renderMCPNamespace":     renderMCPNamespaceFunc,
-	"renderSiblingNamespace": renderSiblingNamespaceFunc,
+	"renderTools":             renderToolsFunc,
+	"renderMCPNamespaces":     renderMCPNamespacesFunc,
+	"renderSiblingNamespaces": renderSiblingNamespacesFunc,
 }).Parse(agentPromptTmpl))
 
 // AgentData is the template input. Lists are pre-filtered for the
@@ -200,7 +195,7 @@ type DirInfo struct {
 
 // MCPServerStatus carries the per-server status line + (when authorized)
 // the discovered tool schemas the template renders into a typed
-// `declare const mcp_{slug}: {...}` block.
+// nested declaration under the mcp root.
 type MCPServerStatus struct {
 	Slug   string
 	Name   string
@@ -214,7 +209,7 @@ type MCPServerStatus struct {
 
 // SiblingInfo carries one sibling agent record for prompt rendering.
 // ID is the canonical, rename-safe identifier; Slug is the
-// human-readable binding name (`agent_<slug>`). Tools is the
+// human-readable binding name. Tools is the
 // sibling's published tool schemas (synced server-side).
 type SiblingInfo struct {
 	ID          uuid.UUID
@@ -228,6 +223,7 @@ func renderToolsFunc(tools []ToolInfo) string {
 	items := make([]tsrender.ToolRender, len(tools))
 	for i, t := range tools {
 		items[i] = tsrender.ToolRender{
+			Path:         binding.Local(binding.Tool, "", t.Name),
 			Name:         t.Name,
 			Description:  t.Description,
 			LLMHint:      t.LLMHint,
@@ -238,45 +234,58 @@ func renderToolsFunc(tools []ToolInfo) string {
 	return tsrender.RenderToolDecls(items)
 }
 
-func renderMCPNamespaceFunc(server MCPServerStatus) string {
-	if len(server.Tools) == 0 {
-		return ""
-	}
-	tools := make([]tsrender.MCPToolRender, len(server.Tools))
-	for i, t := range server.Tools {
-		tools[i] = tsrender.MCPToolRender{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
+func renderMCPNamespacesFunc(servers []MCPServerStatus) (string, error) {
+	namespaces := make([]tsrender.NamespaceRender, 0, len(servers))
+	for _, server := range servers {
+		names := toolNames(server.Tools)
+		paths, err := binding.External(binding.MCP, server.Slug, server.Slug, names)
+		if err != nil {
+			return "", err
+		}
+		tools := make([]tsrender.MCPToolRender, len(server.Tools))
+		for i, t := range server.Tools {
+			tools[i] = tsrender.MCPToolRender{
+				Path: paths[t.Name], Name: t.Name,
+				Description: t.Description, InputSchema: t.InputSchema,
+			}
+		}
+		if len(tools) > 0 {
+			namespaces = append(namespaces, tsrender.NamespaceRender{Namespace: server.Slug, Tools: tools})
 		}
 	}
-	return tsrender.RenderMCPNamespace("mcp_"+server.Slug, tools)
+	return tsrender.RenderNestedRoot("mcp", namespaces), nil
 }
 
-// renderSiblingNamespaceFunc produces the typed `declare const
-// agent_{slug}: {...}` block. The MCP namespace renderer already
-// emits the right shape — sibling tools and MCP tools are both
-// "named tool with input schema returning JSON" — so we reuse it
-// with the agent_ prefix. The built-in `prompt` meta-tool is added
-// at the end with a hard-coded shape (no schema diff per sibling).
-func renderSiblingNamespaceFunc(s SiblingInfo) string {
-	// Only the sibling's TYPED tools are run_js bindings on
-	// `agent_<slug>`. Open-ended natural-language delegation is the
-	// top-level `promptAgent` tool (a real tool_call, not a run_js
-	// binding) — a suspendable LLM-loop round-trip must be a
-	// first-class pending tool call, so it is NOT declared here.
-	if len(s.Tools) == 0 {
-		return ""
+// renderSiblingNamespacesFunc produces typed declarations under the agent root.
+func renderSiblingNamespacesFunc(siblings []SiblingInfo) (string, error) {
+	namespaces := make([]tsrender.NamespaceRender, 0, len(siblings))
+	for _, sibling := range siblings {
+		paths, err := binding.External(binding.Agent, sibling.ID.String(), binding.SiblingNamespace(sibling.Slug), toolNames(sibling.Tools))
+		if err != nil {
+			return "", err
+		}
+		tools := make([]tsrender.MCPToolRender, len(sibling.Tools))
+		for i, t := range sibling.Tools {
+			tools[i] = tsrender.MCPToolRender{
+				Path: paths[t.Name], Name: t.Name,
+				Description: t.Description, InputSchema: t.InputSchema,
+			}
+		}
+		if len(tools) > 0 {
+			namespaces = append(namespaces, tsrender.NamespaceRender{
+				Namespace: binding.SiblingNamespace(sibling.Slug), Tools: tools,
+			})
+		}
 	}
-	tools := make([]tsrender.MCPToolRender, 0, len(s.Tools))
-	for _, t := range s.Tools {
-		tools = append(tools, tsrender.MCPToolRender{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		})
+	return tsrender.RenderNestedRoot("agent", namespaces), nil
+}
+
+func toolNames(tools []ToolInfo) []string {
+	names := make([]string, len(tools))
+	for i, tool := range tools {
+		names[i] = tool.Name
 	}
-	return tsrender.RenderMCPNamespace("agent_"+s.Slug, tools)
+	return names
 }
 
 // accessRank totally orders the three access levels.

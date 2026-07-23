@@ -10,7 +10,7 @@ wraps calls in domain-specific tools.
 
 ```go
 ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
-    Slug:        "ci-runner",
+    Slug:        "ci_runner",
     Description: "Self-hosted GitHub Actions runner",
     LLMHint:     "use `kick-build --branch <name>` to start a build",
     Access:      agentsdk.AccessAdmin,
@@ -54,7 +54,7 @@ codegen without downloading the SSH key:
 
 ```bash
 go tool air integrations list
-go tool air exec run ci-runner -- kick-build --branch main
+go tool air exec run ci_runner -- kick-build --branch main
 ```
 
 **Access is required.** Exec hands arbitrary commands to a real machine;
@@ -62,13 +62,13 @@ go tool air exec run ci-runner -- kick-build --branch main
 members should run commands. `AccessPublic` panics at registration because exec
 endpoints are never reachable by unauthenticated callers.
 
-**`ExecHandle.Run` is bound into the JS VM as `exec_{slug}.run(command, args?, opts?)`** —
+**`ExecHandle.Run` is bound into the JS VM as `exec.<slug>.run(command, args?, opts?)`** —
 gated at bind time on `Access`. Wrap in typed tools when you want a
 narrower verb than "run an arbitrary command":
 
 ```javascript
 // JS-side (run_js); only available on admin runs by default
-exec_ci.run("kick-build", ["--branch", "main"])
+exec.ci_runner.run("kick-build", ["--branch", "main"])
 // inline (both streams ≤ 8 KiB):
 //   { exitCode, durationMs, stdout: "…", stderr: "…" }
 // spilled (stdout exceeded 8 KiB):
@@ -77,12 +77,12 @@ exec_ci.run("kick-build", ["--branch", "main"])
 //     stdoutSavedTo: "tmp/exec-ci-a3f9c2b1-stdout.bin",
 //     stdoutSize: 50000,
 //     stderr: "…",
-//     note: "stdout (50000 bytes) exceeded inline threshold; saved to … Use fileRead(stdoutSavedTo) to read." }
+//     note: "stdout (50000 bytes) exceeded inline threshold; saved to … Use air.fileRead(stdoutSavedTo) to read." }
 ```
 
 When `stdoutSavedTo` or `stderrSavedTo` is set, the corresponding
 `stdout`/`stderr` field is absent — read the full payload with
-`fileRead(savedTo)`. See **Reading overflowed responses** below.
+`air.fileRead(savedTo)`. See **Reading overflowed responses** below.
 
 **Shell features (pipes, redirection, env expansion) work** because SSH
 hands the full command line to the remote shell. Put pipes in
@@ -137,7 +137,7 @@ return nil
 ```
 
 `RunStream` is **Go-only** — there is no JS binding for it. The
-JS-facing `exec_{slug}.run` streams under the hood and auto-spills
+JS-facing `exec.<slug>.run` streams under the hood and auto-spills
 stdout/stderr above 8 KiB to `tmp/exec-{slug}-{callID}-stdout.bin` /
 `-stderr.bin` (both halves of a call share `callID` so they correlate).
 
@@ -147,7 +147,7 @@ on the result, use `Run`. If it's going to call `agent.WriteFile`, use
 
 ### Reading overflowed responses
 
-`conn_{slug}.request`, `conn_{slug}.requestJSON`, `exec_{slug}.run`, and
+`conn.<slug>.request`, `conn.<slug>.requestJSON`, `exec.<slug>.run`, and
 `httpRequest` all share the same overflow shape: any payload above 8 KiB
 is saved to a `tmp/...` storage path, with `*Preview` holding the first
 ~1 KiB and `*SavedTo` holding the path. Inline and spilled keys are
@@ -155,16 +155,16 @@ mutually exclusive — check the saved-to field and branch:
 
 ```javascript
 // Connection
-const r = conn_x.request("GET", "/big")
-const body = r.bodySavedTo ? fileRead(r.bodySavedTo) : r.body
+var r = conn.x.request("GET", "/big")
+var body = r.bodySavedTo ? air.fileRead(r.bodySavedTo) : r.body
 
 // Connection (JSON)
-const r = conn_x.requestJSON("GET", "/big.json")
-const data = r.bodySavedTo ? JSON.parse(fileRead(r.bodySavedTo)) : r.data
+var r = conn.x.requestJSON("GET", "/big.json")
+var data = r.bodySavedTo ? JSON.parse(air.fileRead(r.bodySavedTo)) : r.data
 
 // Exec
-const r = exec_x.run("dump-state")
-const stdout = r.stdoutSavedTo ? fileRead(r.stdoutSavedTo) : r.stdout
+var r = exec.x.run("dump-state")
+var stdout = r.stdoutSavedTo ? air.fileRead(r.stdoutSavedTo) : r.stdout
 ```
 
 Don't re-read an older `savedTo` after a fresh call to the same binding

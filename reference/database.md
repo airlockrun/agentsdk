@@ -33,8 +33,8 @@ DROP TABLE rooms;
 numeric order.
 
 **Go migrations** for operational work (rename S3 keys, backfill via HTTP, ...):
-create a `.go` file in `db/migrations/`. Get the agent via
-`agentsdk.AgentFromMigrationContext(ctx)`.
+create a `.go` file in `db/migrations/`. Run agent-dependent work through
+`agentsdk.MigrationExternalStep` as shown below.
 
 **Tx vs NoTx:**
 - `goose.AddMigrationContext(up, down)` — wraps in a Postgres transaction.

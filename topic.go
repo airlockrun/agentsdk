@@ -34,9 +34,27 @@ func (h *TopicHandle) PublishToUser(ctx context.Context, userID string, parts []
 }
 
 func (h *TopicHandle) publish(ctx context.Context, userID string, parts []DisplayPart) error {
+	runID := ""
+	untrusted := false
+	if r := runFromContext(ctx); r != nil {
+		runID = r.id
+		untrusted = true
+	} else if lazy := lazyRunFromContext(ctx); lazy != nil {
+		untrusted = true
+		if r := lazy.materialized(); r != nil {
+			runID = r.id
+		}
+	}
 	for i := range parts {
 		resolveDisplayPart(&parts[i])
+		if untrusted && parts[i].Source != "" {
+			resolved, err := h.agent.resolveFilePath(ctx, parts[i].Source, FileOperationRead)
+			if err != nil {
+				return err
+			}
+			parts[i].Source = resolved
+		}
 	}
-	req := wire.PrintRequest{Parts: toWireDisplayParts(parts), Topic: h.slug, UserID: userID}
+	req := wire.PrintRequest{Parts: toWireDisplayParts(parts), Topic: h.slug, UserID: userID, RunID: runID}
 	return h.agent.client.doJSON(ctx, "POST", "/api/agent/print", req, nil)
 }

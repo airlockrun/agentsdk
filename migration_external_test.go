@@ -24,6 +24,37 @@ func TestMigrationExternalStepSkipsValidation(t *testing.T) {
 	}
 }
 
+func TestMigrationExternalStepProvidesAgent(t *testing.T) {
+	a := &Agent{}
+	ctx := a.migrationContext(context.Background())
+	if err := MigrationExternalStep(ctx, func(_ context.Context, got *Agent) error {
+		if got != a {
+			t.Fatalf("Agent = %p, want %p", got, a)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMigrationExternalStepPanicsOutsideMigration(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MigrationExternalStep did not panic")
+		}
+	}()
+	_ = MigrationExternalStep(context.Background(), func(context.Context, *Agent) error { return nil })
+}
+
+func TestMigrationExternalStepPanicsForNilCallback(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("MigrationExternalStep did not panic")
+		}
+	}()
+	_ = MigrationExternalStep(context.Background(), nil)
+}
+
 func TestMoveFileRestartStates(t *testing.T) {
 	tests := []struct {
 		name       string

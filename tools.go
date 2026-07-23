@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/internal/binding"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"github.com/airlockrun/sol/bus"
@@ -47,7 +48,7 @@ func buildSolTools(agent *Agent, run *run) tool.Set {
 	// identically in both modes — the JS/direct split governs the
 	// per-capability surface, not the open-ended delegation primitive.
 	if t, ok := buildPromptAgentTool(agent, run); ok {
-		ts["promptAgent"] = t
+		addDirectBinding(ts, binding.AgentPrompt(), t)
 	}
 
 	// Wrap all tool Execute functions with output truncation.
@@ -341,9 +342,9 @@ func (r *run) checkAttachModality(mimeType string) error {
 		return nil
 	}
 	if len(r.supportedModalities) == 0 {
-		return fmt.Errorf("the current model does not accept file attachments (%s). Use fileRead(path) for text-based files", mimeType)
+		return fmt.Errorf("the current model does not accept file attachments (%s). Use air.fileRead(path) for text-based files", mimeType)
 	}
-	return fmt.Errorf("%s files are not supported by the current model. Supported types: %s. Use fileRead(path) for text-based files",
+	return fmt.Errorf("%s files are not supported by the current model. Supported types: %s. Use air.fileRead(path) for text-based files",
 		mimeType, strings.Join(r.supportedModalities, ", "))
 }
 
@@ -377,8 +378,7 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 		return output
 	}
 
-	// Save full output to the framework-owned /tmp directory. The LLM reads
-	// it back via fileRead(path) inside run_js.
+	// Save full output to the framework-owned /tmp directory.
 	path := reservedTmpPath + "/output-" + randomHex(4) + ".txt"
 	if _, err := run.agent.WriteFile(ctx, path, strings.NewReader(output), "text/plain"); err != nil {
 		// If save fails, just truncate without a path.
@@ -387,10 +387,15 @@ func truncateToolOutput(ctx context.Context, run *run, output string) string {
 			len(output)/1024)
 	}
 
+	if run.directTools {
+		return output[:truncatePreviewLen] + fmt.Sprintf(
+			"\n\n[Output truncated (%dKB → %dKB shown). Full result saved at %q. Read it with air__file_read.]",
+			len(output)/1024, truncatePreviewLen/1024, path)
+	}
 	return output[:truncatePreviewLen] + fmt.Sprintf(
 		"\n\n[Output truncated (%dKB → %dKB shown). Full result saved at %q.\n"+
 			"Process it inside run_js without returning the full content:\n"+
-			"  var data = fileRead(%q)\n"+
+			"  var data = air.fileRead(%q)\n"+
 			"  var parsed = JSON.parse(data) // or process as text\n"+
 			"  parsed.slice(0, 10)           // last expression = return value; only what you need\n"+
 			"]",

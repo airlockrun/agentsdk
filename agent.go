@@ -11,8 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/airlockrun/agentsdk/internal/binding"
+	"github.com/airlockrun/agentsdk/internal/prompt"
 	"github.com/airlockrun/agentsdk/internal/testcaller"
-	"github.com/airlockrun/agentsdk/prompt"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/google/uuid"
 	_ "github.com/lib/pq" // register "postgres" driver for agent.DB()
@@ -21,6 +22,8 @@ import (
 
 // Config holds configuration for creating an Agent.
 type Config struct {
+	noUnkeyedLiterals
+
 	Description string // required — shown to users in the Airlock UI
 	// Emoji is an optional decorative glyph shown next to the agent in
 	// the Airlock UI (agent list, sidebar, header). Purely cosmetic;
@@ -59,7 +62,7 @@ type Agent struct {
 	topics           map[string]*Topic
 	execEndpoints    map[string]*ExecEndpoint
 	staticAssets     map[string]*StaticAsset
-	directories      []*Directory // registration order; longest-prefix wins at lookup
+	directories      []*directory // registration order; longest-prefix wins at lookup
 
 	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
@@ -206,7 +209,7 @@ func New(cfg Config) *Agent {
 	// and generated media. Builders may RegisterDirectory("tmp", ...); the
 	// register helper preserves the framework's caps (the description may
 	// still be supplied) so both sides share the same directory.
-	a.directories = append(a.directories, &Directory{
+	a.directories = append(a.directories, &directory{
 		Path:           reservedTmpPath,
 		Read:           AccessUser,
 		Write:          AccessUser,
@@ -214,36 +217,25 @@ func New(cfg Config) *Agent {
 		Description:    "Ephemeral scratch (auto-managed by the framework — truncated tool output, generated media).",
 		RetentionHours: 72, // sweeper drops files older than 3 days
 	})
-	// A2A inbox: airlock copies file args from sibling callers into
-	// agents/{this}/__a2a/{callerRun}/... before forwarding the tool
-	// call. Tool bodies read it transparently — the path arrives in
-	// the arg, not via any direct fileRead of "__a2a/...". Admin-only
-	// because nobody should be poking at it from JS.
 	// Inbox for files airlock places here on behalf of an external
 	// caller (A2A tool args, prompt-meta files, inline MCP uploads).
-	// Base ACL is locked admin/admin/admin — the scoped-directory
-	// overlay in CheckFileAccess grants read access only to the
-	// specific run / conversation / user that owns the sub-path. This
-	// keeps anonymous and cross-caller traffic isolated even when
-	// both arrive at a public-mcp agent. Scope=ScopeRun picks the
-	// strictest available key when writing (airlock controls writes,
-	// not WriteFile); the read overlay still accepts any of
-	// user-/conv-/run- prefixes the path actually carries.
-	a.directories = append(a.directories, &Directory{
-		Path:           reservedIncomingPath,
-		Read:           AccessAdmin,
-		Write:          AccessAdmin,
-		List:           AccessAdmin,
-		Description:    "Inbound file scratch (framework-managed; per-scope reads, ephemeral).",
-		RetentionHours: 24,
-		Scope:          ScopeRun,
+	// Its private provenance policy accepts exact user, conversation, or parent
+	// run segments without changing the meaning of public directory scopes.
+	a.directories = append(a.directories, &directory{
+		Path:               reservedIncomingPath,
+		Read:               AccessAdmin,
+		Write:              AccessAdmin,
+		List:               AccessAdmin,
+		Description:        "Inbound file scratch (framework-managed; per-scope reads, ephemeral).",
+		RetentionHours:     24,
+		incomingProvenance: true,
 	})
 	// Outbox: airlock copies file results returned from sibling
 	// agents into agents/{this}/siblings/<sibling-slug>/<path>.
-	// Caller's run_js can fileRead() these naturally; longer retention
+	// Caller's run_js can read these through air.fileRead(); longer retention
 	// than the inbox because the caller may want to keep working with
 	// the file across follow-up turns.
-	a.directories = append(a.directories, &Directory{
+	a.directories = append(a.directories, &directory{
 		Path:           reservedSiblingsPath,
 		Read:           AccessUser,
 		Write:          AccessUser,
@@ -388,6 +380,7 @@ func (a *Agent) applySyncResponse(resp wire.SyncResponse) {
 	if resp.PromptData.AgentRouteURL == "" {
 		panic("agentsdk: applySyncResponse: empty promptData.agentRouteUrl; Airlock and agentsdk versions are incompatible")
 	}
+	validateSyncedBindings(resp)
 	a.syncMu.Lock()
 	a.promptData = resp.PromptData
 	a.mcpAuthStatus = resp.MCPAuthStatus
@@ -395,6 +388,61 @@ func (a *Agent) applySyncResponse(resp wire.SyncResponse) {
 	a.publicStorageBase = resp.PublicStorageBase
 	a.syncStateHash = resp.SyncStateHash
 	a.syncMu.Unlock()
+}
+
+func validateSyncedBindings(resp wire.SyncResponse) {
+	seenJS := make(map[string]string)
+	seenDirect := make(map[string]string)
+	check := func(owner string, paths map[string]binding.Path) {
+		for canonical, path := range paths {
+			if js := path.JS(); js != "" {
+				if previous, ok := seenJS[js]; ok {
+					panic(fmt.Sprintf("agentsdk: synced capability collision %q between %s and %s", js, previous, owner))
+				}
+				seenJS[js] = owner + "/" + canonical
+			}
+			direct := path.Direct()
+			if previous, ok := seenDirect[direct]; ok {
+				panic(fmt.Sprintf("agentsdk: synced capability collision %q between %s and %s", direct, previous, owner))
+			}
+			seenDirect[direct] = owner + "/" + canonical
+		}
+	}
+	for slug, schemas := range resp.MCPSchemas {
+		names := make([]string, len(schemas))
+		for i, schema := range schemas {
+			names[i] = schema.Name
+		}
+		paths, err := binding.External(binding.MCP, slug, slug, names)
+		if err != nil {
+			panic(fmt.Sprintf("agentsdk: synced MCP %q: %v", slug, err))
+		}
+		check("mcp "+slug, paths)
+	}
+	seenIDs := make(map[uuid.UUID]struct{}, len(resp.PromptData.Siblings))
+	seenSlugs := make(map[string]struct{}, len(resp.PromptData.Siblings))
+	for _, sibling := range resp.PromptData.Siblings {
+		if sibling.ID == uuid.Nil || sibling.Slug == "" {
+			panic("agentsdk: synced sibling requires ID and slug")
+		}
+		if _, ok := seenIDs[sibling.ID]; ok {
+			panic("agentsdk: duplicate synced sibling ID: " + sibling.ID.String())
+		}
+		if _, ok := seenSlugs[sibling.Slug]; ok {
+			panic("agentsdk: duplicate synced sibling slug: " + sibling.Slug)
+		}
+		seenIDs[sibling.ID] = struct{}{}
+		seenSlugs[sibling.Slug] = struct{}{}
+		names := make([]string, len(sibling.Tools))
+		for i, schema := range sibling.Tools {
+			names[i] = schema.Name
+		}
+		paths, err := binding.External(binding.Agent, sibling.ID.String(), binding.SiblingNamespace(sibling.Slug), names)
+		if err != nil {
+			panic(fmt.Sprintf("agentsdk: synced sibling %q: %v", sibling.Slug, err))
+		}
+		check("agent "+sibling.Slug, paths)
+	}
 }
 
 // syncedStateHash returns airlock's config fingerprint as of the last

@@ -25,6 +25,8 @@ import (
 // Bytes by convention: base64-encode and decode in agent code. Single
 // string per slug — for compound credentials register multiple slugs.
 type EnvVar struct {
+	noUnkeyedLiterals
+
 	// Slug is the unique identifier per agent. Mirrored as the URL
 	// segment in /api/v1/agents/{id}/env-vars/{slug}.
 	Slug string

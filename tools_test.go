@@ -45,16 +45,16 @@ func TestSystemPrompt_BuiltinsAndAdminGate(t *testing.T) {
 	if !strings.Contains(admin, "## Built-in functions") {
 		t.Fatal("admin prompt should include the Built-in functions section")
 	}
-	if !strings.Contains(admin, "fileRead(path)") {
-		t.Fatal("admin prompt should list fileRead")
+	if !strings.Contains(admin, "air.fileRead(path)") {
+		t.Fatal("admin prompt should list air.fileRead")
 	}
-	if !strings.Contains(admin, "queryDB(sql") {
-		t.Fatal("admin prompt should advertise queryDB")
+	if !strings.Contains(admin, "air.queryDB(sql") {
+		t.Fatal("admin prompt should advertise air.queryDB")
 	}
 
 	user := a.renderSystemPrompt(AccessUser, nil, promptEnv{Date: "2026-06-09"}, false)
-	if strings.Contains(user, "queryDB(sql") {
-		t.Fatal("AccessUser prompt must not advertise queryDB")
+	if strings.Contains(user, "air.queryDB(sql") {
+		t.Fatal("AccessUser prompt must not advertise air.queryDB")
 	}
 }
 
@@ -70,7 +70,7 @@ func TestSystemPrompt_TopicIncludesLLMHint(t *testing.T) {
 	})
 
 	prompt := a.renderSystemPrompt(AccessUser, nil, promptEnv{Date: "2026-06-09"}, false)
-	if !strings.Contains(prompt, "topic_build_done") {
+	if !strings.Contains(prompt, "topic.build_done") {
 		t.Errorf("expected topic binding in inventory; got:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "[subscribe only when the user explicitly opts in]") {
@@ -152,7 +152,7 @@ func TestRegisteredToolsRenderToDecls(t *testing.T) {
 		tools = append(tools, tt)
 	}
 	got := renderRegisteredTools(tools)
-	if !strings.Contains(got, "declare function greet(args: {") {
+	if !strings.Contains(got, "declare const tools: {") || !strings.Contains(got, "greet(args: {") {
 		t.Fatalf("declaration not rendered:\n%s", got)
 	}
 }

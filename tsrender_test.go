@@ -1,9 +1,7 @@
 package agentsdk
 
 // These tests verify the integration between agentsdk's RegisterTool path
-// (the goai tool.Typed[In, Out] builder API) and the shared TS renderer in
-// agentsdk/tsrender. Pure renderer tests live in tsrender/render_test.go;
-// here we exercise schema generation from real Go types.
+// and the internal TypeScript renderer using schemas from real Go types.
 
 import (
 	"context"
@@ -12,7 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/airlockrun/agentsdk/tsrender"
+	"github.com/airlockrun/agentsdk/internal/binding"
+	"github.com/airlockrun/agentsdk/internal/tsrender"
 	"github.com/airlockrun/goai/tool"
 )
 
@@ -27,6 +26,7 @@ func renderRegisteredTools(tools []*registeredTool) string {
 			examples[i] = ex.Input
 		}
 		items = append(items, tsrender.ToolRender{
+			Path:          binding.Local(binding.Tool, "", t.Name),
 			Name:          t.Name,
 			Description:   t.Description,
 			InputSchema:   t.InputSchema,
@@ -56,8 +56,9 @@ func TestRenderToolDecls_Primitive(t *testing.T) {
 	}
 	got := renderRegisteredTools([]*registeredTool{reg[in, out]("search", "Search for text.", func(ctx context.Context, v in) (out, error) { return out{}, nil })})
 	want := []string{
-		"/**\n * Search for text.\n */",
-		"declare function search(args: {",
+		"declare const tools: {",
+		"Search for text.",
+		"search(args: {",
 		"q: string;",
 		"}): {",
 		"hit: string;",
@@ -141,7 +142,7 @@ func TestRenderToolDecls_Example(t *testing.T) {
 	}
 	type out struct{}
 	got := renderRegisteredTools([]*registeredTool{reg[in, out]("search", "Search.", func(ctx context.Context, v in) (out, error) { return out{}, nil }, in{Query: "daft punk"})})
-	if !strings.Contains(got, `@example search({"query":"daft punk"})`) {
+	if !strings.Contains(got, `@example tools.search({"query":"daft punk"})`) {
 		t.Errorf("input example not rendered:\n%s", got)
 	}
 }

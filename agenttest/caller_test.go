@@ -104,6 +104,7 @@ func TestCallerContextsInDirectAndHTTPHandlers(t *testing.T) {
 	type observation struct {
 		user      agentsdk.User
 		hasUser   bool
+		path      agentsdk.FilePath
 		accessErr error
 	}
 	var got observation
@@ -119,7 +120,7 @@ func TestCallerContextsInDirectAndHTTPHandlers(t *testing.T) {
 		})
 		handler = func(_ http.ResponseWriter, r *http.Request) error {
 			got.user, got.hasUser = agentsdk.UserFromContext(r.Context())
-			got.accessErr = a.CheckFileAccess(r.Context(), "members/file.txt", agentsdk.OpRead)
+			got.path, got.accessErr = a.ResolveFilePath(r.Context(), "members/file.txt", agentsdk.FileOperationRead)
 			return nil
 		}
 		a.RegisterRoute(&agentsdk.Route{
@@ -171,6 +172,7 @@ func TestCallerContextsInDirectAndHTTPHandlers(t *testing.T) {
 func assertObservation(t *testing.T, got struct {
 	user      agentsdk.User
 	hasUser   bool
+	path      agentsdk.FilePath
 	accessErr error
 }, wantUser agentsdk.User, wantAccess bool) {
 	t.Helper()
@@ -178,9 +180,12 @@ func assertObservation(t *testing.T, got struct {
 		t.Errorf("UserFromContext() = %+v, %t; want %+v, true", got.user, got.hasUser, wantUser)
 	}
 	if wantAccess && got.accessErr != nil {
-		t.Errorf("CheckFileAccess() error = %v, want nil", got.accessErr)
+		t.Errorf("ResolveFilePath() error = %v, want nil", got.accessErr)
+	}
+	if wantAccess && got.path != "members/file.txt" {
+		t.Errorf("ResolveFilePath() = %q, want members/file.txt", got.path)
 	}
 	if !wantAccess && !errors.Is(got.accessErr, agentsdk.ErrNotFound) {
-		t.Errorf("CheckFileAccess() error = %v, want ErrNotFound", got.accessErr)
+		t.Errorf("ResolveFilePath() error = %v, want ErrNotFound", got.accessErr)
 	}
 }

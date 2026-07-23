@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/airlockrun/agentsdk/tsrender"
+	"github.com/airlockrun/agentsdk/internal/binding"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"github.com/google/uuid"
@@ -51,8 +51,10 @@ func addConnectionTools(ts tool.Set, agent *Agent, run *run) {
 		if desc == "" {
 			desc = "Service connection: " + slug
 		}
-		ts["conn_"+slug+"_request"] = buildConnRequestTool("conn_"+slug+"_request", desc+" — raw response (string body).", slugCap, handle, run, false)
-		ts["conn_"+slug+"_request_json"] = buildConnRequestTool("conn_"+slug+"_request_json", desc+" — JSON response (auto-parsed into `data`).", slugCap, handle, run, true)
+		rawPath := binding.Local(binding.Connection, slug, "request")
+		jsonPath := binding.Local(binding.Connection, slug, "request_json")
+		addDirectBinding(ts, rawPath, buildConnRequestTool(rawPath.Direct(), desc+" — raw response (string body).", slugCap, handle, run, false))
+		addDirectBinding(ts, jsonPath, buildConnRequestTool(jsonPath.Direct(), desc+" — JSON response (auto-parsed into `data`).", slugCap, handle, run, true))
 	}
 }
 
@@ -137,7 +139,8 @@ func addExecTools(ts tool.Set, agent *Agent, run *run) {
 			desc = "Run a command on " + slug
 		}
 		desc += " — returns {stdout, stderr, exitCode, durationMs}. Non-zero exitCode is not an error; inspect it yourself. Stdout/stderr over 20 MiB spill to tmp/."
-		ts["exec_"+slug+"_run"] = tool.New("exec_" + slug + "_run").
+		path := binding.Local(binding.Exec, slug, "run")
+		direct := tool.New(path.Direct()).
 			Description(desc).
 			SchemaFromStruct(execRunInput{}).
 			Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
@@ -182,6 +185,7 @@ func addExecTools(ts tool.Set, agent *Agent, run *run) {
 				}
 				return jsonResult(buildExecRunOutput(outR, errR, exit))
 			}).Build()
+		addDirectBinding(ts, path, direct)
 	}
 }
 
@@ -199,22 +203,24 @@ func addTopicTools(ts tool.Set, agent *Agent, run *run) {
 		if desc == "" {
 			desc = "Notification topic: " + slug
 		}
-		ts["topic_"+slug+"_subscribe"] = directTool("topic_"+slug+"_subscribe",
+		subscribePath := binding.Local(binding.Topic, slug, "subscribe")
+		addDirectBinding(ts, subscribePath, directTool(subscribePath.Direct(),
 			desc+" — subscribe the current conversation.",
 			func(ctx context.Context, _ topicEmptyInput) (map[string]bool, error) {
 				if err := run.subscribeTopic(run.ctx, topicSlug); err != nil {
 					return nil, err
 				}
 				return map[string]bool{"subscribed": true}, nil
-			})
-		ts["topic_"+slug+"_unsubscribe"] = directTool("topic_"+slug+"_unsubscribe",
+			}))
+		unsubscribePath := binding.Local(binding.Topic, slug, "unsubscribe")
+		addDirectBinding(ts, unsubscribePath, directTool(unsubscribePath.Direct(),
 			desc+" — unsubscribe the current conversation.",
 			func(ctx context.Context, _ topicEmptyInput) (map[string]bool, error) {
 				if err := run.unsubscribeTopic(run.ctx, topicSlug); err != nil {
 					return nil, err
 				}
 				return map[string]bool{"unsubscribed": true}, nil
-			})
+			}))
 	}
 }
 
@@ -232,11 +238,14 @@ func addMCPTools(ts tool.Set, agent *Agent, run *run) {
 		for i, s := range schemas {
 			names[i] = s.Name
 		}
-		jsNames := tsrender.JSToolNames(names)
+		paths, err := binding.External(binding.MCP, slug, slug, names)
+		if err != nil {
+			panic("agentsdk: RegisterMCP(" + slug + "): " + err.Error())
+		}
 		for _, s := range schemas {
 			toolName := s.Name
-			fullName := "mcp_" + slug + "_" + jsNames[toolName]
-			ts[fullName] = buildMCPTool(fullName, s, handle, toolName, run)
+			path := paths[toolName]
+			addDirectBinding(ts, path, buildMCPTool(path.Direct(), s, handle, toolName, run))
 		}
 	}
 }
@@ -290,12 +299,15 @@ func addSiblingTools(ts tool.Set, agent *Agent, run *run) {
 		for i, t := range s.Tools {
 			names[i] = t.Name
 		}
-		jsNames := tsrender.JSToolNames(names)
 		siblingSlug := s.Slug
+		paths, err := binding.External(binding.Agent, s.ID.String(), binding.SiblingNamespace(siblingSlug), names)
+		if err != nil {
+			panic("agentsdk: sibling " + siblingSlug + ": " + err.Error())
+		}
 		for _, t := range s.Tools {
 			toolName := t.Name
-			fullName := "agent_" + siblingSlug + "_" + jsNames[toolName]
-			ts[fullName] = buildSiblingTool(fullName, t, handle, siblingSlug, toolName, run)
+			path := paths[toolName]
+			addDirectBinding(ts, path, buildSiblingTool(path.Direct(), t, handle, siblingSlug, toolName, run))
 		}
 	}
 }

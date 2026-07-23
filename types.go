@@ -14,6 +14,8 @@ import (
 // defaultTimeout is the default execution timeout for webhooks and crons.
 const defaultTimeout = 2 * time.Minute
 
+type noUnkeyedLiterals struct{}
+
 // User identifies the human a run is acting for, exposed to handler code via
 // UserFromContext and to run_js as the `user` global. ID is the stable
 // internal-user uuid (the key to scope agent-owned data by); Email/DisplayName
@@ -31,10 +33,10 @@ type User struct {
 // agent.X(ctx, ...) call the body makes.
 type WebhookHandlerFunc func(ctx context.Context, data []byte, ew *EventWriter) error
 
-// ScheduleHandlerFunc handles a timed fire of a registered cron or schedule.
-// It carries no payload — per-instance data lives in the agent's own DB,
-// keyed by the fire id (see ScheduleFromContext).
-type ScheduleHandlerFunc func(ctx context.Context, ew *EventWriter) error
+// ScheduleHandlerFunc handles one immutable cron or one-shot occurrence.
+// Handlers commit effects idempotently using event.ID because delivery is at
+// least once.
+type ScheduleHandlerFunc func(ctx context.Context, event ScheduleEvent) error
 
 // RouteHandlerFunc handles custom HTTP routes registered via RegisterRoute.
 // Handler code uses r.Context() for agent calls and returns execution errors to
@@ -47,13 +49,26 @@ type RouteHandlerFunc func(w http.ResponseWriter, r *http.Request) error
 // Webhook is the self-contained declaration registered via agent.RegisterWebhook.
 // Agents serve incoming HTTP at /webhook/{Path} on their container.
 type Webhook struct {
-	Path        string             // unique per agent
-	Handler     WebhookHandlerFunc // required
-	Verify      string             // required: "none" | "hmac" | "token" | "bearer" | "ed25519"
-	Header      string             // signature header (required for hmac, optional for ed25519)
-	Timeout     time.Duration      // max execution time (default: 2 min)
-	Description string             // required: shown to users and the LLM
+	noUnkeyedLiterals
+
+	Path        string              // unique per agent
+	Handler     WebhookHandlerFunc  // required
+	Verify      WebhookVerification // required
+	Header      string              // signature header (required for hmac, optional for ed25519)
+	Timeout     time.Duration       // max execution time (default: 2 min)
+	Description string              // required: shown to users and the LLM
 }
+
+// WebhookVerification selects how an incoming webhook is authenticated.
+type WebhookVerification string
+
+const (
+	WebhookVerificationNone    WebhookVerification = "none"
+	WebhookVerificationHMAC    WebhookVerification = "hmac"
+	WebhookVerificationToken   WebhookVerification = "token"
+	WebhookVerificationBearer  WebhookVerification = "bearer"
+	WebhookVerificationEd25519 WebhookVerification = "ed25519"
+)
 
 // --- Cron ---
 
@@ -61,6 +76,8 @@ type Webhook struct {
 // It fires by schedule, never by user action — no Access field. The slug shares
 // one namespace with RegisterSchedule (unique per agent).
 type Cron struct {
+	noUnkeyedLiterals
+
 	Slug        string              // unique per agent (across crons + schedules)
 	Schedule    string              // standard cron expression, e.g. "0 9 * * *"
 	Handler     ScheduleHandlerFunc // required
@@ -70,9 +87,11 @@ type Cron struct {
 
 // Schedule is a code-declared handler for runtime-armed one-shot fires
 // registered via agent.RegisterSchedule. Arm an instance with agent.ScheduleAt;
-// per-instance data lives in the agent's own DB (keyed by the returned fire id),
+// per-instance data lives in the agent's own DB (keyed by the caller-owned ID),
 // not in the platform. No Access field — fires are trusted/system.
 type Schedule struct {
+	noUnkeyedLiterals
+
 	Slug        string              // unique per agent (across crons + schedules)
 	Handler     ScheduleHandlerFunc // required
 	Timeout     time.Duration       // max execution time (default: 2 min)
@@ -85,6 +104,8 @@ type Schedule struct {
 // Custom HTTP routes served by the agent and proxied by Airlock via subdomain
 // routing. The (Method, Path) pair must be unique per agent.
 type Route struct {
+	noUnkeyedLiterals
+
 	Method      string           // "GET", "POST", ...
 	Path        string           // e.g. "/spotify"
 	Handler     RouteHandlerFunc // required
@@ -98,6 +119,8 @@ type Route struct {
 // agent.RegisterConnection — an outgoing service Airlock proxies for the agent
 // with credentials it manages.
 type Connection struct {
+	noUnkeyedLiterals
+
 	Slug        string         // unique per agent; binds as conn_{slug} in run_js
 	Name        string         // required
 	Description string         // required: shown to users and the LLM
@@ -160,6 +183,8 @@ type ConnectionResponse struct {
 //	    Headers: map[string]string{"If-None-Match": etag},
 //	})
 type RequestOpts struct {
+	noUnkeyedLiterals
+
 	// Method is the HTTP verb. Empty defaults to "GET" (the majority
 	// of calls).
 	Method string
@@ -181,6 +206,8 @@ type RequestOpts struct {
 //   - query_param:    query-string key (default "token")
 //   - bearer / path_prefix: ignored
 type AuthInjection struct {
+	noUnkeyedLiterals
+
 	Type AuthInjectionType `json:"type"`
 	Name string            `json:"name,omitempty"`
 }
@@ -212,6 +239,8 @@ const (
 // endpoint-binary later) and credentials are operator-configured via the
 // Airlock UI; the agent's main() only declares slug + description + access.
 type ExecEndpoint struct {
+	noUnkeyedLiterals
+
 	Slug        string // unique per agent; binds as exec_{slug} in run_js
 	Description string
 	LLMHint     string // appended to the endpoint block in the system prompt
@@ -229,6 +258,8 @@ type ExecEndpoint struct {
 // Use Args for safe multi-arg commands; put any shell features (pipes,
 // redirection) in Command and leave Args empty.
 type ExecCommand struct {
+	noUnkeyedLiterals
+
 	Command string        `json:"command"`
 	Args    []string      `json:"args,omitempty"`
 	Stdin   []byte        `json:"-"` // marshalled separately as base64
@@ -275,11 +306,21 @@ type ExecStream struct {
 // ran) from runtime failures (the command ran and reported a non-zero
 // exit code, which is just an ExecResult with a non-zero ExitCode).
 type ExecError struct {
-	Kind    string // "transport" | "timeout" | "config" | "denied"
+	Kind    ExecErrorKind
 	Message string
 }
 
-func (e *ExecError) Error() string { return "exec " + e.Kind + ": " + e.Message }
+// ExecErrorKind classifies failures that prevent a command from completing.
+type ExecErrorKind string
+
+const (
+	ExecErrorKindTransport ExecErrorKind = "transport"
+	ExecErrorKindTimeout   ExecErrorKind = "timeout"
+	ExecErrorKindConfig    ExecErrorKind = "config"
+	ExecErrorKindDenied    ExecErrorKind = "denied"
+)
+
+func (e *ExecError) Error() string { return "exec " + string(e.Kind) + ": " + e.Message }
 
 // ErrOutputTooLarge is returned by Run / Request when the response exceeds
 // the 20 MiB buffered cap. The error message points the caller at the
@@ -325,8 +366,7 @@ func IsAuthRequired(err error) (*AuthRequiredError, bool) {
 
 // --- Directories ---
 
-// Directory is the self-contained declaration registered via
-// agent.RegisterDirectory. Each directory owns an S3 prefix
+// A directory declaration owns an S3 prefix
 // ("agents/{agentID}/{Path}") and gates access through three independent
 // caps.
 //
@@ -336,7 +376,7 @@ func IsAuthRequired(err error) (*AuthRequiredError, bool) {
 //
 // Read, Write, and List are independent. delete folds into Write (write
 // on the parent governs unlink), so DeleteFile requires Write access.
-type Directory struct {
+type directory struct {
 	Path        string // S3-style path with no leading '/', e.g. "reports"; no '..' or '//'; no trailing slash
 	Read        Access // gates ReadFile / OpenFile / StatFile + the public read route
 	Write       Access // gates WriteFile / DeleteFile + the public write route
@@ -371,53 +411,53 @@ type Directory struct {
 	// passes it around, and access just works for the caller who wrote
 	// it. Default ScopeNone preserves today's behaviour.
 	Scope DirectoryScope
+
+	incomingProvenance bool
 }
 
 // DirectoryOpts is the option struct accepted by RegisterDirectory.
 type DirectoryOpts struct {
+	noUnkeyedLiterals
+
 	Read        Access // required
 	Write       Access // required
 	List        Access // required
 	Description string // required: shown to the LLM
 
-	// LLMHint: see Directory.LLMHint. Optional model-facing guidance.
+	// LLMHint is optional model-facing guidance.
 	LLMHint string
 
-	// RetentionHours: see Directory.RetentionHours. Zero = no sweep.
+	// RetentionHours opts files into age-based cleanup. Zero disables cleanup.
 	RetentionHours int
 
-	// Scope: see Directory.Scope. Default ScopeNone (no scoping).
+	// Scope controls identity partitioning. ScopeNone disables partitioning.
 	Scope DirectoryScope
 }
 
-// DirectoryScope opts a directory into per-context path scoping. See
-// Directory.Scope. Empty string ("" / ScopeNone) keeps the legacy
-// unscoped behaviour: base ACL is the only access gate.
+// DirectoryScope opts a directory into identity-partitioned path scoping.
+// Empty string ("" / ScopeNone) leaves the directory unpartitioned.
 //
-// The three values map to the three identities a run is naturally
-// anchored against: the calling user, the current conversation, and
-// this single call. WriteFile picks the strongest available key from
-// the run when scoping a path (user → conv → run); CheckFileAccess
-// accepts any of the three on read, so a path written at user-scope
-// remains readable from any run serving the same user.
+// Each value selects exactly one identity: the originating user, current
+// conversation, or current run. ResolveFilePath fails when that identity is
+// absent and never falls back to another scope kind.
 type DirectoryScope string
 
 const (
-	ScopeNone DirectoryScope = ""
-	ScopeRun  DirectoryScope = "run"
-	ScopeConv DirectoryScope = "conv"
-	ScopeUser DirectoryScope = "user"
+	ScopeNone         DirectoryScope = ""
+	ScopeRun          DirectoryScope = "run"
+	ScopeConversation DirectoryScope = "conv"
+	ScopeUser         DirectoryScope = "user"
 )
 
-// FileOp tags an operation passed to CheckFileAccess. Delete folds into
-// OpWrite (write on the parent governs unlink); there is no separate
-// OpDelete.
-type FileOp string
+// FileOperation identifies an untrusted storage operation for ResolveFilePath.
+type FileOperation string
 
 const (
-	OpRead  FileOp = "read"
-	OpWrite FileOp = "write"
-	OpList  FileOp = "list"
+	FileOperationRead      FileOperation = "read"
+	FileOperationList      FileOperation = "list"
+	FileOperationWrite     FileOperation = "write"
+	FileOperationOverwrite FileOperation = "overwrite"
+	FileOperationDelete    FileOperation = "delete"
 )
 
 // --- Topic ---
@@ -426,9 +466,11 @@ const (
 // Conversations subscribe to a topic via topic_{slug}.subscribe() in run_js;
 // builders publish via the *TopicHandle returned by RegisterTopic.
 type Topic struct {
+	noUnkeyedLiterals
+
 	Slug        string
 	Description string
-	LLMHint     string // optional model-only guidance — see Directory.LLMHint
+	LLMHint     string // optional model-only guidance
 	Access      Access // required: who may subscribe via topic_{slug}.subscribe()
 	// PerUser forbids broadcast: Publish panics, only PublishToUser delivers
 	// (to the named user's subscribed conversations). Use for personal feeds
@@ -443,16 +485,29 @@ type Topic struct {
 // (image/file/audio/video); TopicHandle.Publish accepts text too,
 // since Go builder code has no separate prose channel to use instead.
 type DisplayPart struct {
-	Type     string  `json:"type"`             // "text", "image", "file", "audio", "video"
-	Text     string  `json:"text,omitempty"`   // body text, or caption for media types
-	Source   string  `json:"source,omitempty"` // S3 key
-	URL      string  `json:"url,omitempty"`    // external URL
-	Data     []byte  `json:"data,omitempty"`   // raw bytes (base64 in JSON)
-	Filename string  `json:"filename,omitempty"`
-	MimeType string  `json:"mimeType,omitempty"`
-	Alt      string  `json:"alt,omitempty"`      // accessibility text for images
-	Duration float64 `json:"duration,omitempty"` // seconds, audio/video
+	noUnkeyedLiterals
+
+	Type     DisplayPartType `json:"type"`
+	Text     string          `json:"text,omitempty"`   // body text, or caption for media types
+	Source   string          `json:"source,omitempty"` // S3 key
+	URL      string          `json:"url,omitempty"`    // external URL
+	Data     []byte          `json:"data,omitempty"`   // raw bytes (base64 in JSON)
+	Filename string          `json:"filename,omitempty"`
+	MimeType string          `json:"mimeType,omitempty"`
+	Alt      string          `json:"alt,omitempty"`      // accessibility text for images
+	Duration float64         `json:"duration,omitempty"` // seconds, audio/video
 }
+
+// DisplayPartType identifies a user-facing content block.
+type DisplayPartType string
+
+const (
+	DisplayPartTypeText  DisplayPartType = "text"
+	DisplayPartTypeImage DisplayPartType = "image"
+	DisplayPartTypeFile  DisplayPartType = "file"
+	DisplayPartTypeAudio DisplayPartType = "audio"
+	DisplayPartTypeVideo DisplayPartType = "video"
+)
 
 // resolveDisplayPart infers missing fields on a DisplayPart from available data.
 // 1. If Data is set but MimeType is empty → detect from bytes.
@@ -468,19 +523,19 @@ func resolveDisplayPart(p *DisplayPart) {
 	if p.Type == "" && p.MimeType != "" {
 		switch {
 		case strings.HasPrefix(p.MimeType, "image/"):
-			p.Type = "image"
+			p.Type = DisplayPartTypeImage
 		case strings.HasPrefix(p.MimeType, "audio/"):
-			p.Type = "audio"
+			p.Type = DisplayPartTypeAudio
 		case strings.HasPrefix(p.MimeType, "video/"):
-			p.Type = "video"
+			p.Type = DisplayPartTypeVideo
 		default:
-			p.Type = "file"
+			p.Type = DisplayPartTypeFile
 		}
 	}
 
 	// Default type for text-only parts.
 	if p.Type == "" && p.Text != "" {
-		p.Type = "text"
+		p.Type = DisplayPartTypeText
 	}
 
 	// Generate filename for media parts without one. Priority:
@@ -503,7 +558,7 @@ func resolveDisplayPart(p *DisplayPart) {
 		case p.URL != "":
 			p.Filename = filenameFromPath(p.URL)
 		default:
-			p.Filename = p.Type + extForMimeOrType(p.MimeType, p.Type)
+			p.Filename = string(p.Type) + extForMimeOrType(p.MimeType, string(p.Type))
 		}
 	}
 }
@@ -621,6 +676,8 @@ const (
 // Slug binds as mcp_{slug} in run_js; the builder uses the returned *MCPHandle
 // to call tools from Go.
 type MCP struct {
+	noUnkeyedLiterals
+
 	Slug     string  // unique per agent; binds as mcp_{slug} in run_js
 	Name     string  // required
 	URL      string  // required: absolute HTTP(S) URL
@@ -659,40 +716,66 @@ type MCPContent struct {
 // access matches one of the listed Access levels. Empty Access slice means
 // "applies to every access level."
 type Instruction struct {
+	noUnkeyedLiterals
+
 	Text   string
 	Access []Access
 }
 
 // ModelSlot is the self-contained declaration registered via agent.RegisterModel.
 type ModelSlot struct {
+	noUnkeyedLiterals
+
 	Slug        string
 	Capability  ModelCapability // required: CapText, CapVision, CapImage, CapSpeech, CapTranscription, CapEmbedding, or CapSearch
 	Description string          // required: human-readable hint shown in the admin UI
 }
 
-// ScheduleAtRequest arms a one-shot fire of a registered handler. Body of
-// POST /api/agent/schedules; the response carries the new fire id.
-type ScheduleAtRequest struct {
+// ScheduleRequest arms one idempotent occurrence of a registered one-shot
+// handler. ID must be a canonical UUID generated before domain data is stored.
+type ScheduleRequest struct {
+	noUnkeyedLiterals
+
+	ID     string    `json:"id"`
 	Slug   string    `json:"slug"`
 	FireAt time.Time `json:"fireAt"`
 }
 
-// ScheduledFire is one pending/recorded fire row, returned by ListSchedules.
-type ScheduledFire struct {
-	ID         string    `json:"id"`
-	Slug       string    `json:"slug"`
-	Kind       string    `json:"kind"` // "cron" | "schedule"
-	FireAt     time.Time `json:"fireAt"`
-	Status     string    `json:"status"` // pending|fired|error|orphaned|cancelled
-	Recurrence string    `json:"recurrence,omitempty"`
+// ScheduleEvent identifies one at-least-once delivery attempt.
+type ScheduleEvent struct {
+	ID          string
+	Slug        string
+	ScheduledAt time.Time
+	Attempt     int
 }
 
-// ScheduledFireRef identifies the fire that triggered the current handler run.
-// Read it with ScheduleFromContext to look up the per-instance data the agent
-// stored in its own DB at ScheduleAt time.
-type ScheduledFireRef struct {
-	FireID string
-	Slug   string
+type ScheduleKind string
+
+const (
+	ScheduleKindCron    ScheduleKind = "cron"
+	ScheduleKindOneShot ScheduleKind = "schedule"
+	ScheduleKindManual  ScheduleKind = "manual"
+)
+
+type ScheduleStatus string
+
+const (
+	ScheduleStatusPending   ScheduleStatus = "pending"
+	ScheduleStatusLeased    ScheduleStatus = "leased"
+	ScheduleStatusSucceeded ScheduleStatus = "succeeded"
+	ScheduleStatusFailed    ScheduleStatus = "failed"
+	ScheduleStatusOrphaned  ScheduleStatus = "orphaned"
+	ScheduleStatusCancelled ScheduleStatus = "cancelled"
+)
+
+// ScheduledFire is one pending/recorded fire row, returned by ListSchedules.
+type ScheduledFire struct {
+	ID         string         `json:"id"`
+	Slug       string         `json:"slug"`
+	Kind       ScheduleKind   `json:"kind"`
+	FireAt     time.Time      `json:"fireAt"`
+	Status     ScheduleStatus `json:"status"`
+	Recurrence string         `json:"recurrence,omitempty"`
 }
 
 // ShareFileResponse is returned by POST /api/agent/storage/share.

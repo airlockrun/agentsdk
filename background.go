@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/airlockrun/agentsdk/internal/testcaller"
 	"github.com/airlockrun/agentsdk/wire"
 )
 
@@ -116,7 +117,24 @@ func (a *Agent) runForCall(ctx context.Context) *run {
 // (trigger_type="background").
 func (a *Agent) newRunFromAirlock(ctx context.Context, triggerType, triggerRef string) *run {
 	var resp wire.CreateRunResponse
-	req := wire.CreateRunRequest{TriggerType: triggerType, TriggerRef: triggerRef}
+	caller := callerFromContext(ctx)
+	identity := fileIdentity{}
+	if run := runFromContext(ctx); run != nil {
+		identity.userID = run.userID
+		identity.conversationID = run.conversationID
+	} else if lazy := lazyRunFromContext(ctx); lazy != nil {
+		identity.userID = lazy.userID
+		identity.conversationID = lazy.conversationID
+	} else if test, ok := testcaller.FromContext(ctx); ok {
+		identity.userID = test.UserID
+	}
+	req := wire.CreateRunRequest{
+		TriggerType:    triggerType,
+		TriggerRef:     triggerRef,
+		UserID:         identity.userID,
+		ConversationID: identity.conversationID,
+		CallerAccess:   wire.Access(caller.Access),
+	}
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/run/create", req, &resp); err != nil {
 		// Fail loud: background/lazy runs are observability; if we can't
 		// create one, returning a disconnected run would silently lose
