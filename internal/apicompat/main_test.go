@@ -4,11 +4,13 @@ import "testing"
 
 func TestSelectBaseline(t *testing.T) {
 	tests := []struct {
-		name         string
-		tags         []string
-		current      string
-		wantBaseline string
-		wantBreaking bool
+		name          string
+		tags          []string
+		current       string
+		currentTagged bool
+		wantBaseline  string
+		wantBreaking  bool
+		wantErr       bool
 	}{
 		{
 			name:         "pre-1.0 prerelease allows breaking change",
@@ -36,10 +38,30 @@ func TestSelectBaseline(t *testing.T) {
 			current:      "v2.1.0",
 			wantBaseline: "v2.0.0",
 		},
+		{
+			name:          "tagged release compares with previous tag",
+			tags:          []string{"v0.4.0-rc.31", "v0.4.0-rc.32"},
+			current:       "v0.4.0-rc.32",
+			currentTagged: true,
+			wantBaseline:  "v0.4.0-rc.31",
+			wantBreaking:  true,
+		},
+		{
+			name:    "untagged commit rejects published version",
+			tags:    []string{"v0.4.0-rc.31", "v0.4.0-rc.32"},
+			current: "v0.4.0-rc.32",
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			baseline, breaking, err := selectBaseline(tt.tags, tt.current)
+			baseline, breaking, err := selectBaseline(tt.tags, tt.current, tt.currentTagged)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("selectBaseline succeeded, want error")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

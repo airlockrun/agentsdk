@@ -56,7 +56,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	baseline, breaking, err := selectBaseline(strings.Fields(tagsOutput), "v"+current)
+	currentTag := "v" + current
+	tagsAtHead, err := commandOutput(root, "git", "tag", "--points-at", "HEAD", "--list", currentTag)
+	if err != nil {
+		return err
+	}
+	baseline, breaking, err := selectBaseline(strings.Fields(tagsOutput), currentTag, strings.TrimSpace(tagsAtHead) == currentTag)
 	if err != nil {
 		return err
 	}
@@ -143,13 +148,13 @@ func packageVersion(path string) (string, error) {
 	return "", errors.New("Version constant not found")
 }
 
-func selectBaseline(tags []string, current string) (baseline string, breaking bool, err error) {
+func selectBaseline(tags []string, current string, currentTagged bool) (baseline string, breaking bool, err error) {
 	if !semver.IsValid(current) {
 		return "", false, fmt.Errorf("invalid current version %q", current)
 	}
 	valid := make([]string, 0, len(tags))
 	for _, tag := range tags {
-		if semver.IsValid(tag) {
+		if semver.IsValid(tag) && (!currentTagged || tag != current) {
 			valid = append(valid, tag)
 		}
 	}
