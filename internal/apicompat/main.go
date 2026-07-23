@@ -74,14 +74,19 @@ func run() error {
 	if err := extractTag(root, baseline, oldRoot); err != nil {
 		return err
 	}
+	currentGoWork := "off"
+	workspace := filepath.Join(filepath.Dir(root), "go.work")
+	if _, err := os.Stat(workspace); err == nil {
+		currentGoWork = workspace
+	}
 
 	var incompatible []string
 	for _, path := range publicPackages {
-		oldPkg, err := loadPackage(oldRoot, path)
+		oldPkg, err := loadPackage(oldRoot, path, "off")
 		if err != nil {
 			return fmt.Errorf("load %s from %s: %w", path, baseline, err)
 		}
-		newPkg, err := loadPackage(root, path)
+		newPkg, err := loadPackage(root, path, currentGoWork)
 		if err != nil {
 			return fmt.Errorf("load current %s: %w", path, err)
 		}
@@ -240,12 +245,12 @@ func extractTag(root, tag, destination string) error {
 	}
 }
 
-func loadPackage(dir, path string) (*packages.Package, error) {
+func loadPackage(dir, path, goWork string) (*packages.Package, error) {
 	config := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 			packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedTypesInfo,
 		Dir: dir,
-		Env: append(os.Environ(), "GOWORK=off"),
+		Env: append(os.Environ(), "GOWORK="+goWork),
 	}
 	loaded, err := packages.Load(config, path)
 	if err != nil {
