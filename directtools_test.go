@@ -26,9 +26,9 @@ func TestDirectTools_RegisteredToolSurface_AccessGated(t *testing.T) {
 		mustHave    []string
 		mustNotHave []string
 	}{
-		{AccessPublic, []string{"pub_hello"}, []string{"user_hello", "admin_hello", "run_js", "httpRequest", "queryDB"}},
-		{AccessUser, []string{"pub_hello", "user_hello", "httpRequest"}, []string{"admin_hello", "run_js", "queryDB"}},
-		{AccessAdmin, []string{"pub_hello", "user_hello", "admin_hello", "httpRequest", "queryDB"}, []string{"run_js"}},
+		{AccessPublic, []string{"tool__pub_hello"}, []string{"tool__user_hello", "tool__admin_hello", "run_js", "air__http_request", "air__query_db"}},
+		{AccessUser, []string{"tool__pub_hello", "tool__user_hello", "air__http_request"}, []string{"tool__admin_hello", "run_js", "air__query_db"}},
+		{AccessAdmin, []string{"tool__pub_hello", "tool__user_hello", "tool__admin_hello", "air__http_request", "air__query_db"}, []string{"run_js"}},
 	}
 	for _, c := range cases {
 		t.Run(string(c.access), func(t *testing.T) {
@@ -74,8 +74,8 @@ func TestDirectTools_JSPathUnchanged(t *testing.T) {
 	if _, ok := ts["run_js"]; !ok {
 		t.Fatalf("JS path must expose run_js; got tools: %v", keys(ts))
 	}
-	if _, ok := ts["fileRead"]; ok {
-		t.Fatalf("JS path must NOT expose fileRead as a top-level tool; got tools: %v", keys(ts))
+	if _, ok := ts["air__file_read"]; ok {
+		t.Fatalf("JS path must NOT expose air__file_read as a top-level tool; got tools: %v", keys(ts))
 	}
 }
 
@@ -93,9 +93,9 @@ func TestDirectTools_RegisteredToolExecutes(t *testing.T) {
 	run.callerAccess = AccessPublic
 
 	ts := buildSolTools(a, run)
-	t1, ok := ts["echo_name"]
+	t1, ok := ts["tool__echo_name"]
 	if !ok {
-		t.Fatalf("echo_name should be exposed; got %v", keys(ts))
+		t.Fatalf("tool__echo_name should be exposed; got %v", keys(ts))
 	}
 	res, err := t1.Execute(context.Background(), json.RawMessage(`{"name":"Sol"}`), tool.CallOptions{})
 	if err != nil {
@@ -106,15 +106,9 @@ func TestDirectTools_RegisteredToolExecutes(t *testing.T) {
 	}
 }
 
-// TestDirectTools_BuiltinShadowsRegistered confirms that a registered
-// tool with a name that collides with a built-in (e.g. `fileRead`) is
-// silently overwritten by the built-in in direct mode — matching what
-// the JS VM does today via vm.Set last-write. The author's intent is
-// preserved at registration (no panic), but at the LLM surface the
-// built-in wins. Symmetric behaviour across both modes.
-func TestDirectTools_BuiltinShadowsRegistered(t *testing.T) {
+func TestDirectTools_RegisteredAndBuiltinNamespacesDoNotCollide(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterTool(greetTool("fileRead", "Author-shadowed fileRead.",
+	a.RegisterTool(greetTool("output", "Author output tool.",
 		func(ctx context.Context, in greetIn) (greetOut, error) {
 			return greetOut{Greeting: "AUTHOR"}, nil
 		}), AccessUser)
@@ -122,15 +116,19 @@ func TestDirectTools_BuiltinShadowsRegistered(t *testing.T) {
 	run.directTools = true
 	run.callerAccess = AccessUser
 	ts := buildSolTools(a, run)
-	got, ok := ts["fileRead"]
+	author, ok := ts["tool__output"]
 	if !ok {
-		t.Fatalf("fileRead should be present in tool set")
+		t.Fatal("tool__output should be present")
 	}
-	if strings.Contains(got.Description, "Author-shadowed") {
-		t.Errorf("expected built-in fileRead to shadow the registered tool; got author description %q", got.Description)
+	if !strings.Contains(author.Description, "Author output") {
+		t.Fatalf("registered description = %q", author.Description)
 	}
-	if !strings.Contains(strings.ToLower(got.Description), "stored file") {
-		t.Errorf("expected built-in description to win; got %q", got.Description)
+	builtin, ok := ts["air__output"]
+	if !ok {
+		t.Fatal("air__output should be present")
+	}
+	if strings.Contains(builtin.Description, "Author output") {
+		t.Fatalf("builtin description = %q", builtin.Description)
 	}
 }
 

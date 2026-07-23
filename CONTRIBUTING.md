@@ -24,7 +24,10 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 agentsdk is the public Go SDK that user-built agents import. We treat its public API as a stability commitment: changes to exported types, functions, or runtime behavior must be backwards-compatible. Older built agents must continue to work against newer agentsdk releases.
 
-PRs that break backwards compatibility — even for cleanup or "better" API designs — will be rejected unless there is a strong reason and a clear deprecation path. Internal/unexported code can be refactored freely.
+Incompatible changes require an approved API Discussion, a clear migration plan,
+and a new compatibility series (`v0.Y` before v1, or a new Go major module path
+after v1). The API compatibility check reports every incompatible change and
+rejects it within an established series. Internal code can be refactored freely.
 
 If you have an API improvement in mind, please open a Discussion before writing code so we can talk through compatibility implications first.
 
@@ -60,6 +63,10 @@ Build:
 Test:
 
     go test ./...
+
+Check the author-facing API against the latest published compatibility baseline:
+
+    GOWORK=off ./scripts/check-api-compat.sh
 
 The version-matched UI references under `scaffold/skills/` are checked-in
 generated assets. After changing the templ, DaisyUI, or htmx version, refresh

@@ -93,7 +93,7 @@ func TestVMBinding_ConnRequest_InlineUnderThreshold(t *testing.T) {
 	f := newFakeAirlock(t, body, "text/plain")
 	_, r := setupConnAgent(t, f, "x")
 
-	out, err := executeJS(r.vmRuntime(), `JSON.stringify(conn_x.request("GET", "/whatever"))`)
+	out, err := executeJS(r.vmRuntime(), `JSON.stringify(conn.x.request("GET", "/whatever"))`)
 	if err != nil {
 		t.Fatalf("executeJS: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestVMBinding_ConnRequest_SpillsAboveThreshold(t *testing.T) {
 	f := newFakeAirlock(t, body, "application/octet-stream")
 	_, r := setupConnAgent(t, f, "x")
 
-	out, err := executeJS(r.vmRuntime(), `JSON.stringify(conn_x.request("GET", "/big"))`)
+	out, err := executeJS(r.vmRuntime(), `JSON.stringify(conn.x.request("GET", "/big"))`)
 	if err != nil {
 		t.Fatalf("executeJS: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestVMBinding_ConnRequestJSON_InlineParsedToData(t *testing.T) {
 	_, r := setupConnAgent(t, f, "x")
 
 	out, err := executeJS(r.vmRuntime(),
-		`var r = conn_x.requestJSON("GET", "/j"); JSON.stringify({data: r.data, status: r.status})`)
+		`var r = conn.x.requestJSON("GET", "/j"); JSON.stringify({data: r.data, status: r.status})`)
 	if err != nil {
 		t.Fatalf("executeJS: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestVMBinding_ConnRequestJSON_OverflowOmitsData(t *testing.T) {
 	_, r := setupConnAgent(t, f, "x")
 
 	out, err := executeJS(r.vmRuntime(),
-		`JSON.stringify(conn_x.requestJSON("GET", "/big"))`)
+		`JSON.stringify(conn.x.requestJSON("GET", "/big"))`)
 	if err != nil {
 		t.Fatalf("executeJS: %v", err)
 	}
@@ -193,8 +193,8 @@ func TestVMBinding_ConnRequestJSON_OverflowOmitsData(t *testing.T) {
 		t.Fatalf("bodySavedTo missing; envelope=%v", env)
 	}
 	note, _ := env["note"].(string)
-	if !strings.Contains(note, "JSON.parse(fileRead") {
-		t.Errorf("requestJSON overflow note must point at JSON.parse(fileRead); got %q", note)
+	if !strings.Contains(note, "JSON.parse(air.fileRead") {
+		t.Errorf("requestJSON overflow note must point at JSON.parse(air.fileRead); got %q", note)
 	}
 }
 

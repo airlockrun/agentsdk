@@ -45,8 +45,6 @@ type run struct {
 	platform            string              // channel for the <env> block (web/telegram/discord/a2a); set explicitly per dispatch
 	userDisplayName     string              // originating user's display name for <env> (empty when none)
 	userEmail           string              // originating user's email for <env> (empty when none)
-	fireID              string              // scheduler fire row id (X-Fire-ID); set only on /fire runs — see ScheduleFromContext
-	fireSlug            string              // the cron/schedule slug that fired
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {
@@ -72,8 +70,8 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 // checkedCtx returns r.ctx with both the run pointer and the caller
 // attached. VM bindings that reach untrusted territory (storage paths,
 // etc.) call this and then pass the resulting ctx to
-// agent.CheckFileAccess. User-registered tools dispatched from the VM
-// also receive this ctx so their bodies can call CheckFileAccess
+// agent.ResolveFilePath. User-registered tools dispatched from the VM
+// also receive this ctx so their bodies can call ResolveFilePath
 // without losing the caller's access level. Builder Go code that calls
 // the trusted file API directly (agent.OpenFile/ReadFile/...) does not
 // need this — those methods skip the access check.
@@ -141,6 +139,13 @@ func (r *run) runLogger() *zap.Logger {
 func (r *run) output(ctx context.Context, parts []DisplayPart, topic string) error {
 	for i := range parts {
 		resolveDisplayPart(&parts[i])
+		if parts[i].Source != "" {
+			resolved, err := r.agent.resolveFilePath(r.checkedCtx(), parts[i].Source, FileOperationRead)
+			if err != nil {
+				return err
+			}
+			parts[i].Source = resolved
+		}
 	}
 	req := wire.PrintRequest{
 		Parts:          toWireDisplayParts(parts),

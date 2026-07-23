@@ -214,7 +214,7 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 // gated by independent Read / Write / List caps. Inside run_js the flat
 // verbs (fileRead, fileWrite, fileList, fileDelete, fileStat, fileReadBytes,
 // fileExists) check the calling run's access against the directory's
-// caps via CheckFileAccess.
+// caps via ResolveFilePath.
 //
 // Path is S3-style: no leading '/', no trailing '/', e.g. "uploads" or
 // "reports/q1". A leading slash is rejected — the LLM and builders share
@@ -223,10 +223,10 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 //
 // Builder Go code reads and writes the directory through the trusted
 // file API (agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir /
-// DeleteFile) — these methods do NOT call CheckFileAccess, on the
+// DeleteFile) — these methods do NOT call ResolveFilePath, on the
 // principle that builder code that constructs paths itself is trusted.
 // When a builder tool accepts a path from the LLM (typed as `string` on
-// an Input struct), the builder must call agent.CheckFileAccess
+// an Input struct), the builder must call agent.ResolveFilePath
 // explicitly before passing the path anywhere.
 //
 // The framework reserves "tmp" for its own scratch (truncated tool
@@ -261,7 +261,7 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 			panic("agentsdk: duplicate RegisterDirectory: " + canon)
 		}
 	}
-	d := &Directory{
+	d := &directory{
 		Path:           canon,
 		Read:           opts.Read,
 		Write:          opts.Write,
@@ -281,7 +281,7 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 // access. Returns an *ExecHandle for compile-time-bound calls:
 //
 //	ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
-//	    Slug:        "ci-runner",
+//	    Slug:        "ci_runner",
 //	    Description: "Self-hosted GitHub Actions runner",
 //	    Access:      agentsdk.AccessAdmin,
 //	})

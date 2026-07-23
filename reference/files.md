@@ -11,7 +11,7 @@ code share one canonical form).
 **Hard rule for tool authors: tool inputs and outputs are *storage* paths,
 never container paths.** A `Source agentsdk.FilePath` field on a tool's `In`
 struct is a storage path the LLM (or a sibling agent over A2A) passed in;
-convert with `string(in.Source)` and pass it through `CheckFileAccess` /
+convert with `string(in.Source)` and pass it through `ResolveFilePath` /
 `agent.OpenFile`. A `Result agentsdk.FilePath` you return is a storage path
 the LLM, chat, or calling sibling will follow back through the same storage
 namespace. Returning `os.CreateTemp` paths or `localOut.Name()` to the LLM
@@ -49,7 +49,7 @@ from the LLM while keeping it reachable from your Go code, set the caps to
 `AccessAdmin` and add an `LLMHint` like
 `"internal cache; do not read, write, or list"` — the hint is purely
 model-facing guidance surfaced in the system prompt, while the trusted Go file
-API (`agent.OpenFile`/`ReadFile`/...) bypasses `CheckFileAccess` entirely so
+API (`agent.OpenFile`/`ReadFile`/...) bypasses `ResolveFilePath` entirely so
 your code can use the directory freely.
 
 **`RetentionHours`** opts the directory into Airlock's storage sweeper: any
@@ -71,7 +71,7 @@ across conversations.
 
 When you do need it: `Scope` opts the directory into per-context path
 isolation. WriteFile inserts a scope segment (`user-<id>` / `conv-<id>` /
-`run-<id>`) under the directory prefix; CheckFileAccess accepts the matching
+`run-<id>`) under the directory prefix; ResolveFilePath accepts the matching
 segment on reads. The author's code is unchanged —
 `agent.WriteFile(ctx, "gen/cat.jpg", ...)` returns the scoped path, the LLM
 passes it around, and reads just work for the caller who wrote it. Use this
@@ -112,7 +112,7 @@ err := agent.CopyFile(ctx, "uploads/in.csv", "reports/copy.csv")
 share, err := agent.ShareFileURL(ctx, "reports/q1.csv", time.Hour) // {URL, ExpiresAtMs}
 ```
 
-These do **not** call `CheckFileAccess` — agent Go is trusted with paths it
+These do **not** call `ResolveFilePath` — agent Go is trusted with paths it
 constructs itself. Use freely from cron/webhook handlers, internal caches,
 anywhere.
 
@@ -127,7 +127,7 @@ handles it.
 
 If a tool input declares a path field, the path is **untrusted**. The LLM can
 pass any string, including paths under internal directories or with `..`
-segments. **Call `agent.CheckFileAccess` before using the path anywhere** —
+segments. **Call `agent.ResolveFilePath` before using the path anywhere** —
 even before passing it to an external API.
 
 ```go
@@ -143,7 +143,8 @@ agent.RegisterTool(tool.Typed[CropIn, CropOut]("crop_image").
     Description("Crop a stored image and save the result.").
     Execute(func(ctx context.Context, in CropIn) (CropOut, error) {
         src := string(in.Image) // FilePath → string for the file API
-        if err := agent.CheckFileAccess(ctx, src, agentsdk.OpRead); err != nil {
+        resolved, err := agent.ResolveFilePath(ctx, src, agentsdk.FileOperationRead)
+        if err != nil {
             return CropOut{}, err
         }
         r, err := agent.OpenFile(ctx, src)
@@ -162,7 +163,7 @@ agent.RegisterTool(tool.Typed[CropIn, CropOut]("crop_image").
     Build(), agentsdk.AccessUser)
 ```
 
-`CheckFileAccess` returns `agentsdk.ErrNotFound` for both "denied" and "no
+`ResolveFilePath` returns `agentsdk.ErrNotFound` for both "denied" and "no
 covering directory" — the indistinguishable response prevents path-guessing
 from leaking what exists.
 
@@ -184,7 +185,8 @@ type TranscodeOut struct {
 
 Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
     srcPath := string(in.Source) // FilePath → string for the file API
-    if err := agent.CheckFileAccess(ctx, srcPath, agentsdk.OpRead); err != nil {
+    resolved, err := agent.ResolveFilePath(ctx, srcPath, agentsdk.FileOperationRead)
+    if err != nil {
         return TranscodeOut{}, err
     }
 

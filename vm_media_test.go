@@ -16,7 +16,7 @@ func TestTranscribeAudioBinding(t *testing.T) {
 	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `transcribeAudio("uploads/voice.ogg", { language: "en", prompt: "meeting" })`)
+	out, err := executeJS(run.vmRuntime(), `air.transcribeAudio("uploads/voice.ogg", { language: "en", prompt: "meeting" })`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestGenerateImageBinding(t *testing.T) {
 	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `generateImage("a sunset", { saveAs: "uploads/out.png", size: "1024x1024" })`)
+	out, err := executeJS(run.vmRuntime(), `air.generateImage("a sunset", { saveAs: "uploads/out.png", size: "1024x1024" })`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestGenerateImageAutoKey(t *testing.T) {
 	a, mock := testAgent(t)
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `generateImage("a cat")`)
+	out, err := executeJS(run.vmRuntime(), `air.generateImage("a cat")`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestSpeakBinding(t *testing.T) {
 	a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `speak("hello world", { saveAs: "uploads/voice.mp3", voice: "alloy" })`)
+	out, err := executeJS(run.vmRuntime(), `air.speak("hello world", { saveAs: "uploads/voice.mp3", voice: "alloy" })`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestEmbedBinding(t *testing.T) {
 	a, mock := testAgent(t)
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	out, err := executeJS(run.vmRuntime(), `embed(["hello", "world"])`)
+	out, err := executeJS(run.vmRuntime(), `air.embed(["hello", "world"])`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestEmbedAcceptsString(t *testing.T) {
 	a, mock := testAgent(t)
 	run := newRun(a, "run-1", "", "", context.Background())
 
-	if _, err := executeJS(run.vmRuntime(), `embed("just one")`); err != nil {
+	if _, err := executeJS(run.vmRuntime(), `air.embed("just one")`); err != nil {
 		t.Fatal(err)
 	}
 	reqs := mock.RequestsByPath("/api/agent/llm/embedding")

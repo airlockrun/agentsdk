@@ -61,7 +61,7 @@ func TestVM_ToolReturnSizeCap(t *testing.T) {
 	run := newRun(a, "run-1", "", "", context.Background())
 
 	t.Run("under cap succeeds", func(t *testing.T) {
-		out, err := executeJS(run.vmRuntime(), `make_blob({n: 1024}).blob.length`)
+		out, err := executeJS(run.vmRuntime(), `tools.make_blob({n: 1024}).blob.length`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestVM_ToolReturnSizeCap(t *testing.T) {
 
 	t.Run("over cap fails fast with size error", func(t *testing.T) {
 		_, err := executeJS(run.vmRuntime(),
-			`make_blob({n: `+itoa(maxJSValueBytes+1)+`}).blob.length`)
+			`tools.make_blob({n: `+itoa(maxJSValueBytes+1)+`}).blob.length`)
 		if err == nil {
 			t.Fatal("expected a size-cap error, got nil")
 		}

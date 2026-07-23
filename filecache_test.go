@@ -149,7 +149,7 @@ func storageAgent(t *testing.T) (*Agent, *storageMock, *run) {
 		token:      "test-token",
 		httpClient: &http.Client{},
 	}
-	a.directories = append(a.directories, &Directory{
+	a.directories = append(a.directories, &directory{
 		Path: reservedTmpPath, Read: AccessUser, Write: AccessUser, List: AccessUser,
 	})
 	a.client = newAirlockClient(mock.server.URL, "test-token", a.httpClient)

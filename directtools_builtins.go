@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/internal/binding"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/tool"
@@ -28,55 +29,59 @@ import (
 // or admin tools on a public run) leave a quieter surface than vm.go
 // would have produced.
 func addBuiltinTools(ts tool.Set, agent *Agent, run *run) {
-	publicReadOK := agent.hasPublicDirCap(OpRead)
-	publicWriteOK := agent.hasPublicDirCap(OpWrite)
-	publicListOK := agent.hasPublicDirCap(OpList)
+	publicReadOK := agent.hasPublicDirCap(FileOperationRead)
+	publicWriteOK := agent.hasPublicDirCap(FileOperationWrite)
+	publicListOK := agent.hasPublicDirCap(FileOperationList)
 	authedFile := accessSatisfies(run.callerAccess, AccessUser)
 
 	if authedFile || publicReadOK {
-		ts["fileRead"] = wrapFileRead(agent, run)
-		ts["fileReadBytes"] = wrapFileReadBytes(agent, run)
-		ts["fileReadRangeBytes"] = wrapFileReadRangeBytes(agent, run)
-		ts["fileGrep"] = wrapFileGrep(agent, run)
-		ts["fileHead"] = wrapFileHead(agent, run)
-		ts["fileTail"] = wrapFileTail(agent, run)
-		ts["fileLines"] = wrapFileLines(agent, run)
-		ts["fileStat"] = wrapFileStat(agent, run)
-		ts["fileExists"] = wrapFileExists(agent, run)
-		ts["fileShareURL"] = wrapFileShareURL(agent, run)
+		addAirBinding(ts, "file_read", wrapFileRead(agent, run))
+		addAirBinding(ts, "file_read_bytes", wrapFileReadBytes(agent, run))
+		addAirBinding(ts, "file_read_range_bytes", wrapFileReadRangeBytes(agent, run))
+		addAirBinding(ts, "file_grep", wrapFileGrep(agent, run))
+		addAirBinding(ts, "file_head", wrapFileHead(agent, run))
+		addAirBinding(ts, "file_tail", wrapFileTail(agent, run))
+		addAirBinding(ts, "file_lines", wrapFileLines(agent, run))
+		addAirBinding(ts, "file_stat", wrapFileStat(agent, run))
+		addAirBinding(ts, "file_exists", wrapFileExists(agent, run))
+		addAirBinding(ts, "file_share_url", wrapFileShareURL(agent, run))
 	}
 	if authedFile {
-		ts["fileEncode"] = wrapFileEncode(agent, run)
-		ts["fileDecode"] = wrapFileDecode(agent, run)
-		ts["fileDecodeText"] = wrapFileDecodeText(agent, run)
-		ts["fileEditLines"] = wrapFileEditLines(agent, run)
-		ts["fileSed"] = wrapFileSed(agent, run)
+		addAirBinding(ts, "file_encode", wrapFileEncode(agent, run))
+		addAirBinding(ts, "file_decode", wrapFileDecode(agent, run))
+		addAirBinding(ts, "file_decode_text", wrapFileDecodeText(agent, run))
+		addAirBinding(ts, "file_edit_lines", wrapFileEditLines(agent, run))
+		addAirBinding(ts, "file_sed", wrapFileSed(agent, run))
 	}
 	if authedFile || publicWriteOK {
-		ts["fileWrite"] = wrapFileWrite(agent, run)
-		ts["fileDelete"] = wrapFileDelete(agent, run)
+		addAirBinding(ts, "file_write", wrapFileWrite(agent, run))
+		addAirBinding(ts, "file_delete", wrapFileDelete(agent, run))
 	}
 	if authedFile || publicListOK {
-		ts["fileList"] = wrapFileList(agent, run)
+		addAirBinding(ts, "file_list", wrapFileList(agent, run))
 	}
 
-	ts["output"] = wrapOutput(agent, run)
+	addAirBinding(ts, "output", wrapOutput(agent, run))
 
 	if accessSatisfies(run.callerAccess, AccessUser) {
-		ts["httpRequest"] = wrapHTTPRequest(agent, run)
-		ts["webSearch"] = wrapWebSearch(agent, run)
-		ts["attachToContext"] = wrapAttachToContext(agent, run)
-		ts["analyzeImage"] = wrapAnalyzeImage(agent, run)
-		ts["transcribeAudio"] = wrapTranscribeAudio(agent, run)
-		ts["generateImage"] = wrapGenerateImage(agent, run)
-		ts["speak"] = wrapSpeak(agent, run)
-		ts["embed"] = wrapEmbed(agent, run)
+		addAirBinding(ts, "http_request", wrapHTTPRequest(agent, run))
+		addAirBinding(ts, "web_search", wrapWebSearch(agent, run))
+		addAirBinding(ts, "attach_to_context", wrapAttachToContext(agent, run))
+		addAirBinding(ts, "analyze_image", wrapAnalyzeImage(agent, run))
+		addAirBinding(ts, "transcribe_audio", wrapTranscribeAudio(agent, run))
+		addAirBinding(ts, "generate_image", wrapGenerateImage(agent, run))
+		addAirBinding(ts, "speak", wrapSpeak(agent, run))
+		addAirBinding(ts, "embed", wrapEmbed(agent, run))
 	}
 
 	if accessSatisfies(run.callerAccess, AccessAdmin) {
-		ts["queryDB"] = wrapQueryDB(agent, run)
-		ts["requestUpgrade"] = wrapRequestUpgrade(agent, run)
+		addAirBinding(ts, "query_db", wrapQueryDB(agent, run))
+		addAirBinding(ts, "request_upgrade", wrapRequestUpgrade(agent, run))
 	}
+}
+
+func addAirBinding(ts tool.Set, operation string, t tool.Tool) {
+	addDirectBinding(ts, binding.Local(binding.Air, "", operation), t)
 }
 
 // --- file reads ---
@@ -95,7 +100,9 @@ func wrapFileRead(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			rc, err := run.openCached(ctx, in.Path)
@@ -125,7 +132,9 @@ func wrapFileReadBytes(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			rc, err := run.openCached(ctx, in.Path)
@@ -156,7 +165,9 @@ func wrapFileReadRangeBytes(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			b, err := run.readRange(ctx, in.Path, in.Start, in.Length)
@@ -189,7 +200,9 @@ func wrapFileGrep(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, errors.New("pattern is required")
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			out, err := run.grepFile(ctx, in.Path, in.Pattern, grepOpts{
@@ -220,7 +233,9 @@ func wrapFileHead(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			out, err := run.headLines(ctx, in.Path, in.N)
@@ -241,7 +256,9 @@ func wrapFileTail(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			out, err := run.tailLines(ctx, in.Path, in.N)
@@ -268,7 +285,9 @@ func wrapFileLines(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			out, err := run.readLineWindow(ctx, in.Path, in.Start, in.Count)
@@ -289,7 +308,9 @@ func wrapFileStat(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			info, err := agent.StatFile(ctx, in.Path)
@@ -316,10 +337,14 @@ func wrapFileExists(agent *Agent, run *run) tool.Tool {
 			ctx = run.checkedCtx()
 			// Indistinguishable from "not found" by design: access denial
 			// must not leak whether the file exists.
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
-				return jsonResult(fileExistsOutput{Exists: false})
+			resolved, err := agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
+				if errors.Is(err, ErrNotFound) {
+					return jsonResult(fileExistsOutput{Exists: false})
+				}
+				return tool.Result{}, err
 			}
-			_, err := agent.StatFile(ctx, in.Path)
+			_, err = agent.StatFile(ctx, resolved)
 			return jsonResult(fileExistsOutput{Exists: err == nil})
 		}).Build()
 }
@@ -339,7 +364,9 @@ func wrapFileShareURL(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			ttl := time.Duration(in.ExpiresInMinutes) * time.Minute
@@ -373,7 +400,9 @@ func wrapFileEncode(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, fmt.Errorf("unknown codec %q (base64, base64url, hex, gzip)", in.Codec)
 			}
 			ctx = run.checkedCtx()
-			if err := checkTransformAccessDirect(ctx, agent, in.Src, in.Dst); err != nil {
+			var err error
+			in.Src, in.Dst, err = checkTransformAccessDirect(ctx, agent, in.Src, in.Dst)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			res, err := run.transformFile(ctx, in.Src, in.Codec, in.Dst, encodeContentType(in.Codec), codecSuffix[in.Codec], textCodecs[in.Codec], fn)
@@ -398,7 +427,9 @@ func wrapFileDecode(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, fmt.Errorf("unknown codec %q (base64, base64url, hex, gzip)", in.Codec)
 			}
 			ctx = run.checkedCtx()
-			if err := checkTransformAccessDirect(ctx, agent, in.Src, in.Dst); err != nil {
+			var err error
+			in.Src, in.Dst, err = checkTransformAccessDirect(ctx, agent, in.Src, in.Dst)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			res, err := run.transformFile(ctx, in.Src, in.Codec, in.Dst, "application/octet-stream", ".bin", false, fn)
@@ -423,7 +454,8 @@ func wrapFileDecodeText(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := checkTransformAccessDirect(ctx, agent, in.Src, in.Dst); err != nil {
+			in.Src, in.Dst, err = checkTransformAccessDirect(ctx, agent, in.Src, in.Dst)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			res, err := run.transformFile(ctx, in.Src, in.Codec, in.Dst, "text/plain; charset=utf-8", ".txt", true, fn)
@@ -461,7 +493,8 @@ func wrapFileEditLines(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := checkTransformAccessDirect(ctx, agent, in.Src, in.Dst); err != nil {
+			in.Src, in.Dst, err = checkTransformAccessDirect(ctx, agent, in.Src, in.Dst)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			res, err := run.editLines(ctx, in.Src, in.Dst, edits)
@@ -491,7 +524,9 @@ func wrapFileSed(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, errors.New("script is required")
 			}
 			ctx = run.checkedCtx()
-			if err := checkTransformAccessDirect(ctx, agent, in.Src, in.Dst); err != nil {
+			var err error
+			in.Src, in.Dst, err = checkTransformAccessDirect(ctx, agent, in.Src, in.Dst)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			res, err := run.sed(ctx, in.Src, in.Script, in.Dst)
@@ -534,7 +569,9 @@ func wrapFileWrite(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, errors.New("data or base64 is required")
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpWrite); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationWrite)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			info, err := agent.WriteFile(ctx, in.Path, strings.NewReader(string(body)), in.ContentType)
@@ -556,7 +593,9 @@ func wrapFileDelete(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpWrite); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationDelete)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			if err := agent.DeleteFile(ctx, in.Path); err != nil {
@@ -582,11 +621,9 @@ func wrapFileList(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			checkPath := strings.TrimRight(in.Path, "/")
-			if checkPath == "" {
-				checkPath = in.Path
-			}
-			if err := agent.CheckFileAccess(ctx, checkPath, OpList); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationList)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			files, err := agent.ListDir(ctx, in.Path, ListOpts{Recursive: in.Recursive})
@@ -659,11 +696,14 @@ func wrapHTTPRequest(agent *Agent, run *run) tool.Tool {
 				Headers:    in.Headers,
 				Body:       in.Body,
 				Timeout:    in.Timeout,
+				RunID:      run.id,
 				Raw:        in.Raw,
 				AllHeaders: in.AllHeaders,
 			}
 			if in.SaveAs != "" {
-				if err := agent.CheckFileAccess(run.checkedCtx(), in.SaveAs, OpWrite); err != nil {
+				var err error
+				in.SaveAs, err = agent.resolveFilePath(run.checkedCtx(), in.SaveAs, FileOperationWrite)
+				if err != nil {
 					return tool.Result{}, fmt.Errorf("saveAs: %w", err)
 				}
 				req.SaveAs = in.SaveAs
@@ -716,7 +756,9 @@ func wrapAttachToContext(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			run.mu.Lock()
@@ -767,7 +809,9 @@ func wrapAnalyzeImage(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			text, err := run.analyzeImage(ctx, in.Path, in.Question)
@@ -794,7 +838,9 @@ func wrapTranscribeAudio(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			ctx = run.checkedCtx()
-			if err := agent.CheckFileAccess(ctx, in.Path, OpRead); err != nil {
+			var err error
+			in.Path, err = agent.resolveFilePath(ctx, in.Path, FileOperationRead)
+			if err != nil {
 				return tool.Result{}, err
 			}
 			res, err := run.transcribeAudio(ctx, in.Path, model.TranscribeCallOptions{
@@ -837,7 +883,9 @@ func wrapGenerateImage(agent *Agent, run *run) tool.Tool {
 			}
 			ctx = run.checkedCtx()
 			if in.SaveAs != "" {
-				if err := agent.CheckFileAccess(ctx, in.SaveAs, OpWrite); err != nil {
+				var err error
+				in.SaveAs, err = agent.resolveFilePath(ctx, in.SaveAs, FileOperationWrite)
+				if err != nil {
 					return tool.Result{}, fmt.Errorf("saveAs: %w", err)
 				}
 			}
@@ -875,7 +923,9 @@ func wrapSpeak(agent *Agent, run *run) tool.Tool {
 			}
 			ctx = run.checkedCtx()
 			if in.SaveAs != "" {
-				if err := agent.CheckFileAccess(ctx, in.SaveAs, OpWrite); err != nil {
+				var err error
+				in.SaveAs, err = agent.resolveFilePath(ctx, in.SaveAs, FileOperationWrite)
+				if err != nil {
 					return tool.Result{}, fmt.Errorf("saveAs: %w", err)
 				}
 			}
@@ -989,18 +1039,25 @@ func jsonResult(v any) (tool.Result, error) {
 // vm.go::checkTransformAccess — same gate (Read on src, Write on dst
 // when set), without the goja error envelope. dst="" means an auto
 // scratch path under tmp/, which inherits write cap from the tmp dir.
-func checkTransformAccessDirect(ctx context.Context, agent *Agent, src, dst string) error {
-	if err := agent.CheckFileAccess(ctx, src, OpRead); err != nil {
-		return err
+func checkTransformAccessDirect(ctx context.Context, agent *Agent, src, dst string) (string, string, error) {
+	inPlace := dst != "" && dst == src
+	resolvedSrc, err := agent.resolveFilePath(ctx, src, FileOperationRead)
+	if err != nil {
+		return "", "", err
 	}
 	if dst == "" {
-		return nil
+		return resolvedSrc, "", nil
 	}
-	if dst == src {
-		// In-place edit: write cap on src covers it.
-		return agent.CheckFileAccess(ctx, src, OpWrite)
+	op := FileOperationWrite
+	if inPlace {
+		op = FileOperationOverwrite
+		dst = resolvedSrc
 	}
-	return agent.CheckFileAccess(ctx, dst, OpWrite)
+	resolvedDst, err := agent.resolveFilePath(ctx, dst, op)
+	if err != nil {
+		return "", "", err
+	}
+	return resolvedSrc, resolvedDst, nil
 }
 
 // convertLineEdits turns the direct-mode lineEditInput slice into the

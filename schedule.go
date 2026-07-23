@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
+	"github.com/google/uuid"
 )
 
 // scheduleHandler is a registered cron or schedule handler. The slug is unique
@@ -20,25 +21,26 @@ type scheduleHandler struct {
 	description string
 }
 
-// ScheduleAt arms a one-shot fire of a registered handler at fireAt and returns
-// the fire id. Store that id with your per-instance data in the agent's own DB;
-// the fire handler recovers it via ScheduleFromContext. The slug must name a
-// registered cron or schedule.
-func (a *Agent) ScheduleAt(ctx context.Context, req ScheduleAtRequest) (string, error) {
-	if _, ok := a.scheduleHandlers[req.Slug]; !ok {
-		return "", fmt.Errorf("agentsdk: ScheduleAt: no registered handler %q", req.Slug)
+// ScheduleAt idempotently arms a caller-identified one-shot occurrence. Store
+// domain data under ID before calling this method; retry the identical request
+// after uncertainty.
+func (a *Agent) ScheduleAt(ctx context.Context, req ScheduleRequest) error {
+	handler, ok := a.scheduleHandlers[req.Slug]
+	if !ok {
+		return fmt.Errorf("agentsdk: ScheduleAt: no registered handler %q", req.Slug)
+	}
+	if handler.kind != "schedule" {
+		return fmt.Errorf("agentsdk: ScheduleAt(%q): handler is not a one-shot schedule", req.Slug)
+	}
+	id, err := uuid.Parse(req.ID)
+	if err != nil || id == uuid.Nil || id.String() != req.ID {
+		return fmt.Errorf("agentsdk: ScheduleAt(%q): ID must be a canonical non-nil UUID", req.Slug)
 	}
 	if req.FireAt.IsZero() {
-		return "", fmt.Errorf("agentsdk: ScheduleAt(%q): FireAt is required", req.Slug)
+		return fmt.Errorf("agentsdk: ScheduleAt(%q): FireAt is required", req.Slug)
 	}
-	var resp struct {
-		ID string `json:"id"`
-	}
-	body := wire.ScheduleAtRequest{Slug: req.Slug, FireAt: req.FireAt}
-	if err := a.client.doJSON(ctx, "POST", "/api/agent/schedules", body, &resp); err != nil {
-		return "", err
-	}
-	return resp.ID, nil
+	body := wire.ScheduleRequest{ID: req.ID, Slug: req.Slug, FireAt: req.FireAt.UTC().Truncate(time.Microsecond)}
+	return a.client.doJSON(ctx, "POST", "/api/agent/schedules", body, nil)
 }
 
 // CancelSchedule removes a pending fire by id. It is a no-op if the fire already
@@ -50,6 +52,8 @@ func (a *Agent) CancelSchedule(ctx context.Context, id string) error {
 // ListSchedulesFilter narrows ListSchedules. An empty Slug lists every pending
 // fire for the agent.
 type ListSchedulesFilter struct {
+	noUnkeyedLiterals
+
 	Slug string
 }
 
@@ -68,19 +72,9 @@ func (a *Agent) ListSchedules(ctx context.Context, f ListSchedulesFilter) ([]Sch
 	fires := make([]ScheduledFire, len(resp.Fires))
 	for i, fire := range resp.Fires {
 		fires[i] = ScheduledFire{
-			ID: fire.ID, Slug: fire.Slug, Kind: fire.Kind, FireAt: fire.FireAt,
-			Status: fire.Status, Recurrence: fire.Recurrence,
+			ID: fire.ID, Slug: fire.Slug, Kind: ScheduleKind(fire.Kind), FireAt: fire.FireAt,
+			Status: ScheduleStatus(fire.Status), Recurrence: fire.Recurrence,
 		}
 	}
 	return fires, nil
-}
-
-// ScheduleFromContext returns the fire that triggered the current handler run.
-// The second return is false outside a /fire handler (a normal prompt/webhook
-// run). Use FireID to look up the per-instance data stored at ScheduleAt time.
-func ScheduleFromContext(ctx context.Context) (ScheduledFireRef, bool) {
-	if r := runFromContext(ctx); r != nil && r.fireSlug != "" {
-		return ScheduledFireRef{FireID: r.fireID, Slug: r.fireSlug}, true
-	}
-	return ScheduledFireRef{}, false
 }

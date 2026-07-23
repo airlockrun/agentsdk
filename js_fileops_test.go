@@ -11,17 +11,17 @@ func TestJSFileOps(t *testing.T) {
 	_, _, r := storageAgent(t)
 	vm := r.vmRuntime()
 
-	if _, err := executeJS(vm, `fileWrite("tmp/data.txt", "alpha\nbeta\ngamma\n")`); err != nil {
+	if _, err := executeJS(vm, `air.fileWrite("tmp/data.txt", "alpha\nbeta\ngamma\n")`); err != nil {
 		t.Fatalf("writeFile: %v", err)
 	}
 
 	cases := []struct{ name, code, want string }{
-		{"readFile", `fileRead("tmp/data.txt")`, "alpha\nbeta\ngamma\n"},
-		{"grep", `fileGrep("tmp/data.txt", "gamma")`, "gamma\n"},
-		{"head", `fileHead("tmp/data.txt", 1)`, "alpha\n"},
-		{"tail", `fileTail("tmp/data.txt", 1)`, "gamma\n"},
-		{"readLines", `fileLines("tmp/data.txt", 2, 1)`, "beta\n"},
-		{"encodeFile inline", `fileEncode("tmp/data.txt", "base64").content`, "YWxwaGEKYmV0YQpnYW1tYQo="},
+		{"readFile", `air.fileRead("tmp/data.txt")`, "alpha\nbeta\ngamma\n"},
+		{"grep", `air.fileGrep("tmp/data.txt", "gamma")`, "gamma\n"},
+		{"head", `air.fileHead("tmp/data.txt", 1)`, "alpha\n"},
+		{"tail", `air.fileTail("tmp/data.txt", 1)`, "gamma\n"},
+		{"readLines", `air.fileLines("tmp/data.txt", 2, 1)`, "beta\n"},
+		{"encodeFile inline", `air.fileEncode("tmp/data.txt", "base64").content`, "YWxwaGEKYmV0YQpnYW1tYQo="},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -44,7 +44,7 @@ func TestJSEditors(t *testing.T) {
 	vm := r.vmRuntime()
 
 	// fileEditLines, single object, explicit dst.
-	if _, err := executeJS(vm, `fileEditLines("tmp/e.txt", {from:2, count:1, text:"B\n"}, "tmp/e2.txt")`); err != nil {
+	if _, err := executeJS(vm, `air.fileEditLines("tmp/e.txt", {from:2, count:1, text:"B\n"}, "tmp/e2.txt")`); err != nil {
 		t.Fatalf("fileEditLines object: %v", err)
 	}
 	if got := mockFile(mock, "tmp/e2.txt"); got != "a\nB\nc\n" {
@@ -52,7 +52,7 @@ func TestJSEditors(t *testing.T) {
 	}
 
 	// fileEditLines, array of edits.
-	if _, err := executeJS(vm, `fileEditLines("tmp/e.txt", [{from:1,count:0,text:"top\n"},{append:"end\n"}], "tmp/e3.txt")`); err != nil {
+	if _, err := executeJS(vm, `air.fileEditLines("tmp/e.txt", [{from:1,count:0,text:"top\n"},{append:"end\n"}], "tmp/e3.txt")`); err != nil {
 		t.Fatalf("fileEditLines array: %v", err)
 	}
 	if got := mockFile(mock, "tmp/e3.txt"); got != "top\na\nb\nc\nend\n" {
@@ -60,7 +60,7 @@ func TestJSEditors(t *testing.T) {
 	}
 
 	// fileSed in place (dst === src).
-	if _, err := executeJS(vm, `fileSed("tmp/e.txt", "s/a/A/", "tmp/e.txt")`); err != nil {
+	if _, err := executeJS(vm, `air.fileSed("tmp/e.txt", "s/a/A/", "tmp/e.txt")`); err != nil {
 		t.Fatalf("fileSed in-place: %v", err)
 	}
 	if got := mockFile(mock, "tmp/e.txt"); got != "A\nb\nc\n" {
@@ -68,7 +68,7 @@ func TestJSEditors(t *testing.T) {
 	}
 
 	// fileSed to scratch, small result returns inline content.
-	out, err := executeJS(vm, `fileSed("tmp/e.txt", "/b/d").content`)
+	out, err := executeJS(vm, `air.fileSed("tmp/e.txt", "/b/d").content`)
 	if err != nil {
 		t.Fatalf("fileSed scratch: %v", err)
 	}
@@ -90,10 +90,10 @@ func TestJSMultibyteRoundTrip(t *testing.T) {
 	_, _, r := storageAgent(t)
 	vm := r.vmRuntime()
 
-	if _, err := executeJS(vm, `fileWrite("tmp/m.txt", "héllo 世界 🎉\n")`); err != nil {
+	if _, err := executeJS(vm, `air.fileWrite("tmp/m.txt", "héllo 世界 🎉\n")`); err != nil {
 		t.Fatalf("fileWrite: %v", err)
 	}
-	got, err := executeJS(vm, `fileRead("tmp/m.txt")`)
+	got, err := executeJS(vm, `air.fileRead("tmp/m.txt")`)
 	if err != nil {
 		t.Fatalf("fileRead: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestJSMultibyteRoundTrip(t *testing.T) {
 
 	// 🎉 (U+1F389 = F0 9F 8E 89) starts right after "héllo 世界 ".
 	off := len("héllo 世界 ")
-	code := fmt.Sprintf(`(function(){var u=fileReadRangeBytes("tmp/m.txt",%d,4);return [u[0],u[1],u[2],u[3]].join(",");})()`, off)
+	code := fmt.Sprintf(`(function(){var u=air.fileReadRangeBytes("tmp/m.txt",%d,4);return [u[0],u[1],u[2],u[3]].join(",");})()`, off)
 	got, err = executeJS(vm, code)
 	if err != nil {
 		t.Fatalf("fileReadRangeBytes: %v", err)
@@ -113,7 +113,7 @@ func TestJSMultibyteRoundTrip(t *testing.T) {
 	}
 
 	// A sed substitution touching multibyte content round-trips too.
-	out, err := executeJS(vm, `fileSed("tmp/m.txt", "s/世界/🌏/").content`)
+	out, err := executeJS(vm, `air.fileSed("tmp/m.txt", "s/世界/🌏/").content`)
 	if err != nil {
 		t.Fatalf("fileSed: %v", err)
 	}
@@ -125,11 +125,11 @@ func TestJSMultibyteRoundTrip(t *testing.T) {
 func TestJSReadRangeBytesIsTypedArray(t *testing.T) {
 	_, _, r := storageAgent(t)
 	vm := r.vmRuntime()
-	if _, err := executeJS(vm, `fileWrite("tmp/b.bin", "ABCDEF")`); err != nil {
+	if _, err := executeJS(vm, `air.fileWrite("tmp/b.bin", "ABCDEF")`); err != nil {
 		t.Fatalf("writeFile: %v", err)
 	}
 	// fileReadRangeBytes(...) must behave like a Uint8Array.
-	got, err := executeJS(vm, `(function(){ var u = fileReadRangeBytes("tmp/b.bin", 1, 3); return u.length + ":" + u[0]; })()`)
+	got, err := executeJS(vm, `(function(){ var u = air.fileReadRangeBytes("tmp/b.bin", 1, 3); return u.length + ":" + u[0]; })()`)
 	if err != nil {
 		t.Fatalf("readRangeBytes: %v", err)
 	}

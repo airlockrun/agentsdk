@@ -205,11 +205,11 @@ func (r *run) storeMediaResult(ctx context.Context, category, saveAs string, dat
 	if saveAs == "" {
 		saveAs = reservedTmpPath + "/generated/" + category + "-" + randomHex(4) + extForMime(mimeType, category)
 	}
-	if _, err := r.agent.WriteFile(ctx, saveAs, bytes.NewReader(data), mimeType); err != nil {
+	info, err := r.agent.WriteFile(ctx, saveAs, bytes.NewReader(data), mimeType)
+	if err != nil {
 		return nil, fmt.Errorf("store %s: %w", saveAs, err)
 	}
-	canonical, _ := normalizePath(saveAs)
-	return &mediaResult{Path: canonical, MimeType: mimeType, Size: len(data)}, nil
+	return &mediaResult{Path: string(info.Path), MimeType: mimeType, Size: len(data)}, nil
 }
 
 func defaultMimeForCategory(category string) string {

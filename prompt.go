@@ -55,7 +55,7 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 		}
 		bridgeID := r.Header.Get("X-Bridge-ID")
 		// X-Parent-Run-ID / X-User-ID are set by airlock for A2A and
-		// external-MCP prompt calls. CheckFileAccess uses them to gate
+		// external-MCP prompt calls. ResolveFilePath uses them to gate
 		// reads on scoped directories (run-<parent>/, user-<id>/, etc.)
 		// to the originating call context.
 		parentRunID := r.Header.Get("X-Parent-Run-ID")

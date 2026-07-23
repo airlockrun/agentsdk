@@ -29,6 +29,11 @@ type Mock struct {
 
 // New creates a mock Airlock server and returns it with its base URL.
 func New() (*Mock, string) {
+	return NewWithLLMResponse(nil)
+}
+
+// NewWithLLMResponse creates a mock whose model response is supplied per call.
+func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 	m := &Mock{}
 	mux := http.NewServeMux()
 
@@ -82,8 +87,12 @@ func New() (*Mock, string) {
 	mux.HandleFunc("POST /api/agent/llm/stream", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/x-ndjson")
-		if m.LLMResponse != nil {
-			_, _ = w.Write(m.LLMResponse)
+		llmResponse := m.LLMResponse
+		if response != nil {
+			llmResponse = response()
+		}
+		if llmResponse != nil {
+			_, _ = w.Write(llmResponse)
 			return
 		}
 		_, _ = w.Write([]byte("{\"type\":\"start\",\"data\":{}}\n"))
@@ -133,6 +142,10 @@ func New() (*Mock, string) {
 	mux.HandleFunc("POST /api/agent/run/complete", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /api/agent/schedules", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("PUT /api/agent/connections/{slug}", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)

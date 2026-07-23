@@ -411,9 +411,22 @@ type ScheduleHandlerDef struct {
 	Description string `json:"description,omitempty"`
 }
 
-type ScheduleAtRequest struct {
+type ScheduleRequest struct {
+	ID     string    `json:"id"`
 	Slug   string    `json:"slug"`
 	FireAt time.Time `json:"fireAt"`
+}
+
+type ScheduleFireRequest struct {
+	ID          string    `json:"id"`
+	Slug        string    `json:"slug"`
+	ScheduledAt time.Time `json:"scheduledAt"`
+	Attempt     int       `json:"attempt"`
+}
+
+type ScheduleFireResponse struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 type ScheduledFire struct {
@@ -432,6 +445,7 @@ type HTTPRequest struct {
 	Body       string            `json:"body,omitempty"`
 	Timeout    int               `json:"timeout,omitempty"`
 	SaveAs     string            `json:"saveAs,omitempty"`
+	RunID      string            `json:"runId,omitempty"`
 	Raw        bool              `json:"raw,omitempty"`
 	AllHeaders bool              `json:"allHeaders,omitempty"`
 }
@@ -477,8 +491,11 @@ type ModelProxyRequest struct {
 }
 
 type CreateRunRequest struct {
-	TriggerType string `json:"triggerType"`
-	TriggerRef  string `json:"triggerRef"`
+	TriggerType    string `json:"triggerType"`
+	TriggerRef     string `json:"triggerRef"`
+	UserID         string `json:"userId,omitempty"`
+	ConversationID string `json:"conversationId,omitempty"`
+	CallerAccess   Access `json:"callerAccess"`
 }
 
 type CreateRunResponse struct {

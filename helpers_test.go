@@ -56,7 +56,7 @@ func testAgent(t *testing.T) (*Agent, *mockairlock.Mock) {
 	t.Cleanup(func() { _ = db.Close() })
 	// Auto-register the framework's /tmp directory the same way New does,
 	// so tests have somewhere to read/write without setting it up by hand.
-	a.directories = append(a.directories, &Directory{
+	a.directories = append(a.directories, &directory{
 		Path: reservedTmpPath, Read: AccessUser, Write: AccessUser, List: AccessUser,
 		Description: "Framework scratch directory",
 	})

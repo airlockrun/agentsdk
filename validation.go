@@ -16,10 +16,16 @@ import (
 )
 
 var (
-	declarationSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+	localIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$`)
 	webhookPathPattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	staticAssetNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	cronParser             = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+)
+
+const (
+	maxToolNameLength    = 58
+	maxBindingSlugLength = 44
+	maxLocalSlugLength   = 63
 )
 
 var frameworkRoutePatterns = []string{
@@ -107,6 +113,7 @@ func validateRegisteredTool(t *registeredTool) {
 	if t == nil || strings.TrimSpace(t.Name) == "" {
 		panic("agentsdk: RegisterTool: tool Name is required")
 	}
+	validateLocalIdentifier("RegisterTool", "Name", t.Name, maxToolNameLength)
 	if strings.TrimSpace(t.Description) == "" {
 		panic(fmt.Sprintf("agentsdk: RegisterTool(%q): tool Description is required", t.Name))
 	}
@@ -135,13 +142,13 @@ func validateWebhook(w *Webhook) {
 		panic(fmt.Sprintf("agentsdk: RegisterWebhook(%q): Description is required", w.Path))
 	}
 	switch w.Verify {
-	case "none", "token", "bearer":
+	case WebhookVerificationNone, WebhookVerificationToken, WebhookVerificationBearer:
 		if w.Header != "" {
 			panic(fmt.Sprintf("agentsdk: RegisterWebhook(%q): Header is not used with Verify %q", w.Path, w.Verify))
 		}
-	case "hmac":
+	case WebhookVerificationHMAC:
 		validateHeaderName(fmt.Sprintf("RegisterWebhook(%q).Header", w.Path), w.Header, true)
-	case "ed25519":
+	case WebhookVerificationEd25519:
 		validateHeaderName(fmt.Sprintf("RegisterWebhook(%q).Header", w.Path), w.Header, false)
 	default:
 		panic(fmt.Sprintf("agentsdk: RegisterWebhook(%q): invalid Verify %q", w.Path, w.Verify))
@@ -153,7 +160,7 @@ func validateScheduleHandler(h *scheduleHandler) {
 	if h == nil {
 		panic("agentsdk: schedule handler is nil")
 	}
-	validateSlug("schedule", h.slug)
+	validateLocalSlug("schedule", h.slug)
 	if h.handler == nil {
 		panic(fmt.Sprintf("agentsdk: schedule handler %q: Handler is required", h.slug))
 	}
@@ -261,7 +268,7 @@ func validateTopic(t *Topic) {
 	if t == nil {
 		panic("agentsdk: RegisterTopic: nil *Topic")
 	}
-	validateSlug("RegisterTopic", t.Slug)
+	validateBindingSlug("RegisterTopic", t.Slug)
 	if strings.TrimSpace(t.Description) == "" {
 		panic(fmt.Sprintf("agentsdk: RegisterTopic(%q): Description is required", t.Slug))
 	}
@@ -272,7 +279,7 @@ func validateConnection(c *Connection) {
 	if c == nil {
 		panic("agentsdk: RegisterConnection: nil *Connection")
 	}
-	validateSlug("RegisterConnection", c.Slug)
+	validateBindingSlug("RegisterConnection", c.Slug)
 	if strings.TrimSpace(c.Name) == "" {
 		panic(fmt.Sprintf("agentsdk: RegisterConnection(%q): Name is required", c.Slug))
 	}
@@ -310,7 +317,7 @@ func validateEnvVar(e *EnvVar) {
 	if e == nil {
 		panic("agentsdk: RegisterEnvVar: nil *EnvVar")
 	}
-	validateSlug("RegisterEnvVar", e.Slug)
+	validateLocalSlug("RegisterEnvVar", e.Slug)
 	if strings.TrimSpace(e.Description) == "" {
 		panic(fmt.Sprintf("agentsdk: RegisterEnvVar(%q): Description is required", e.Slug))
 	}
@@ -328,7 +335,7 @@ func validateEnvVar(e *EnvVar) {
 	}
 }
 
-func validateDirectory(d *Directory) {
+func validateDirectory(d *directory) {
 	if d == nil {
 		panic("agentsdk: directory declaration is nil")
 	}
@@ -345,7 +352,7 @@ func validateDirectory(d *Directory) {
 		panic(fmt.Sprintf("agentsdk: RegisterDirectory(%q): RetentionHours must not be negative", d.Path))
 	}
 	switch d.Scope {
-	case ScopeNone, ScopeRun, ScopeConv, ScopeUser:
+	case ScopeNone, ScopeRun, ScopeConversation, ScopeUser:
 	default:
 		panic(fmt.Sprintf("agentsdk: RegisterDirectory(%q): invalid Scope %q", d.Path, d.Scope))
 	}
@@ -355,7 +362,7 @@ func validateExecEndpoint(e *ExecEndpoint) {
 	if e == nil {
 		panic("agentsdk: RegisterExecEndpoint: nil *ExecEndpoint")
 	}
-	validateSlug("RegisterExecEndpoint", e.Slug)
+	validateBindingSlug("RegisterExecEndpoint", e.Slug)
 	if strings.TrimSpace(e.Description) == "" {
 		panic("agentsdk: RegisterExecEndpoint(" + e.Slug + "): Description is required")
 	}
@@ -369,7 +376,7 @@ func validateMCP(m *MCP) {
 	if m == nil {
 		panic("agentsdk: RegisterMCP: nil *MCP")
 	}
-	validateSlug("RegisterMCP", m.Slug)
+	validateBindingSlug("RegisterMCP", m.Slug)
 	if strings.TrimSpace(m.Name) == "" {
 		panic(fmt.Sprintf("agentsdk: RegisterMCP(%q): Name is required", m.Slug))
 	}
@@ -409,7 +416,7 @@ func validateModelSlot(slot *ModelSlot) {
 	if slot == nil {
 		panic("agentsdk: RegisterModel: nil *ModelSlot")
 	}
-	validateSlug("RegisterModel", slot.Slug)
+	validateLocalSlug("RegisterModel", slot.Slug)
 	switch slot.Capability {
 	case CapText, CapVision, CapEmbedding, CapImage, CapSpeech, CapTranscription, CapSearch:
 	default:
@@ -432,9 +439,17 @@ func validateAccess(context string, access Access) {
 	}
 }
 
-func validateSlug(context, slug string) {
-	if !declarationSlugPattern.MatchString(slug) {
-		panic(fmt.Sprintf("agentsdk: %s(%q): Slug must start with a lowercase letter and contain only lowercase letters, digits, underscores, or dashes", context, slug))
+func validateLocalSlug(context, slug string) {
+	validateLocalIdentifier(context, "Slug", slug, maxLocalSlugLength)
+}
+
+func validateBindingSlug(context, slug string) {
+	validateLocalIdentifier(context, "Slug", slug, maxBindingSlugLength)
+}
+
+func validateLocalIdentifier(context, field, value string, maxLength int) {
+	if len(value) > maxLength || !localIdentifierPattern.MatchString(value) {
+		panic(fmt.Sprintf("agentsdk: %s(%q): %s must be 1-%d characters of lowercase snake_case", context, value, field, maxLength))
 	}
 }
 

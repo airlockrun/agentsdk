@@ -46,7 +46,7 @@ Read the relevant companion at its build-container path:
 
 - **[Object storage](reference/files.md)** (`/libs/agentsdk/reference/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
-  `CheckFileAccess`, shelling out to CLIs over storage, presigned URLs.
+  `ResolveFilePath`, shelling out to CLIs over storage, presigned URLs.
 - **[Remote execution](reference/exec.md)** (`/libs/agentsdk/reference/exec.md`) — `RegisterExecEndpoint`: running commands
   on a remote machine over SSH, plus the shared overflow-response shape
   (`*SavedTo` + `fileRead`) used by connections, exec, and `httpRequest`.
@@ -398,24 +398,22 @@ required; zero `Timeout` means two minutes and negative values are rejected.
 ## RegisterCron / RegisterSchedule — timed handlers
 
 Crons (recurring) and schedules (runtime-armed one-shots) share one handler type
-`func(ctx, *EventWriter) error`, one `/fire/{slug}` dispatch, and one slug
-namespace (unique per agent). Handlers carry **no payload** — they fire by
-schedule and survive container suspension, so anything they need (which user,
-what reminder) lives in the **agent's own DB**, keyed by the fire id.
+`func(context.Context, ScheduleEvent) error` and one slug namespace. Delivery is
+at least once, so handlers use the occurrence ID as an idempotency key. Domain
+data lives in the agent's own DB and survives container suspension.
 
 ```go
 agent.RegisterCron(&agentsdk.Cron{
-    Slug:     "daily-report",
+    Slug:     "daily_report",
     Schedule: "0 9 * * *", // standard cron expression
-    Handler:  func(ctx context.Context, ew *agentsdk.EventWriter) error { return nil },
+    Handler:  func(ctx context.Context, event agentsdk.ScheduleEvent) error { return nil },
     Description: "Generate and send the daily report",
 })
 
 agent.RegisterSchedule(&agentsdk.Schedule{
     Slug:    "remind",
-    Handler: func(ctx context.Context, ew *agentsdk.EventWriter) error {
-        ref, _ := agentsdk.ScheduleFromContext(ctx) // ref.FireID
-        // look up the reminder row your tool stored under ref.FireID, then deliver
+    Handler: func(ctx context.Context, event agentsdk.ScheduleEvent) error {
+        // Load and complete the reminder idempotently under event.ID.
         return nil
     },
     Description: "Fire one user reminder",
@@ -428,12 +426,14 @@ drives scheduling — schedules have no built-in user surface:
 ```go
 // in a setReminder tool handler:
 u, _ := agentsdk.UserFromContext(ctx)
-id, _ := agent.ScheduleAt(ctx, agentsdk.ScheduleAtRequest{Slug: "remind", FireAt: when})
-// store (id → u.ID, text) in the agent's own DB
+id := uuid.NewString()
+// First store (id -> u.ID, text) in the agent's own DB.
+err := agent.ScheduleAt(ctx, agentsdk.ScheduleRequest{ID: id, Slug: "remind", FireAt: when})
+// Retry the identical ScheduleAt request if the outcome is uncertain.
 ```
 
-On fire, the `remind` handler reads `ScheduleFromContext`, looks up the row, and
-delivers via a `PerUser` topic's `PublishToUser(ctx, u.ID, parts)`. Cancel/list
+On fire, the `remind` handler looks up `event.ID`, commits completion
+idempotently, and delivers via a `PerUser` topic's `PublishToUser`. Cancel/list
 are your own tools over `agent.CancelSchedule(id)` / `agent.ListSchedules(...)`,
 scoped against your DB. Never use an in-process timer — the container suspends
 and the timer dies.
@@ -566,11 +566,11 @@ request:
 non-obvious conventions (path prefixes, special headers).
 
 **JS bindings.** Each registered connection appears in the JS VM as
-`conn_{slug}.request(method, path, body?, headers?)` and
-`conn_{slug}.requestJSON(...)`. Both return an envelope: small responses
+`conn.<slug>.request(method, path, body?, headers?)` and
+`conn.<slug>.requestJSON(...)`. Both return an envelope: small responses
 (≤ 8 KiB) come back inline (`body` / `data`); larger ones auto-spill to
 `tmp/conn-{slug}-{callID}.bin` with `bodyPreview` + `bodySavedTo` set
-(no `body`/`data`). Read the spilled payload with `fileRead(bodySavedTo)` —
+(no `body`/`data`). Read the spilled payload with `air.fileRead(bodySavedTo)` —
 see the shared overflow shape in **`/libs/agentsdk/reference/exec.md`**.
 
 ## RegisterMCP
@@ -626,7 +626,7 @@ required and must be `AccessAdmin` or `AccessUser`; `AccessPublic` is rejected.
 
 ```go
 ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
-    Slug:        "ci-runner",
+    Slug:        "ci_runner",
     Description: "Self-hosted GitHub Actions runner",
     LLMHint:     "use `kick-build --branch <name>` to start a build",
     Access:      agentsdk.AccessAdmin,
@@ -634,7 +634,7 @@ ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
 res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build", Args: []string{"--branch", "main"}})
 ```
 
-→ Full API (Run vs RunStream, the `exec_{slug}.run` JS binding, shell features,
+→ Full API (Run vs RunStream, the `exec.<slug>.run` JS binding, shell features,
 errors, and the shared `*SavedTo` overflow handling): **`/libs/agentsdk/reference/exec.md`**.
 
 Live connection, exec, and MCP validation CLI: **`/libs/agentsdk/reference/integrations.md`**.
@@ -779,7 +779,7 @@ alerts.Publish(ctx, []agentsdk.DisplayPart{
 ```
 
 The runtime LLM subscribes the current conversation via
-`topic_{slug}.subscribe()`.
+`topic.<slug>.subscribe()`.
 `Description` and `Access` are required.
 
 ## RegisterDirectory — file storage
@@ -801,7 +801,7 @@ agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
 The **trusted Go file API** (`agent.ReadFile` / `WriteFile` / `OpenFile` /
 `StatFile` / `ListDir` / `DeleteFile` / `CopyFile`) bypasses access checks — it's
 your code. A path that arrives **from the LLM or any untrusted source** must be
-gated first with `agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead)`.
+resolved first with `agent.ResolveFilePath(ctx, llmPath, agentsdk.FileOperationRead)`.
 
 → Full directory ACL model, the complete file API, untrusted-path gating,
 shelling out to a CLI over storage, and presigned URLs:
@@ -831,9 +831,9 @@ log := agent.Logger(ctx)
 log.Info("imported rows", zap.Int("count", 42))
 // Levels: Debug, Info, Warn, Error. import "go.uber.org/zap"
 
-// Storage — trusted; no CheckFileAccess. See /libs/agentsdk/reference/files.md.
+// Storage — trusted; no ResolveFilePath. See /libs/agentsdk/reference/files.md.
 agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir / DeleteFile / CopyFile
-agent.CheckFileAccess(ctx, llmPath, agentsdk.OpRead) // gate paths from untrusted sources
+resolved, err := agent.ResolveFilePath(ctx, llmPath, agentsdk.FileOperationRead)
 agent.DB() // required *AgentDB pool — pass to sqlc-generated New()
 ```
 
@@ -1042,28 +1042,22 @@ func Digest(ctx context.Context, in DigestIn) (DigestOut, error) {
 (Grok/Gemini/Kimi) and otherwise a bulleted list of the results — so you don't
 have to branch on `found.Synthesis` or format `found.Results` by hand.
 
-## Built-in VM bindings (don't shadow them)
+## Capability namespaces
 
-The runtime system prompt fully documents the bindings the LLM can use. The
-practical rule for an agent author: **don't name a `RegisterTool` the same as a
-built-in or you'll silently lose it.** `RegisterTool` doesn't panic on a
-collision — both modes (JS sandbox via `run_js`, direct-tool mode for public
-callers) bind built-ins *after* registered tools, so the built-in wins and your
-tool becomes unreachable. The behaviour is identical across modes.
+Every capability has a permanent namespace. Registered tools can use names such
+as `output` without colliding with framework operations.
 
-Built-in names are **camelCase**. Registered handles auto-bind with a
-**`{prefix}_`** name — avoid `RegisterTool` names starting with one of these, or
-you shadow your own binding:
-
-| Prefix / name | Source |
+| Namespace | Source |
 |---|---|
-| `conn_` | `RegisterConnection` |
-| `exec_` | `RegisterExecEndpoint` |
-| `topic_` | `RegisterTopic` |
-| `mcp_` | `RegisterMCP` |
-| `agent_` | A2A sibling tools (synced, not registered by you) |
+| `air.*` / `air__*` | framework operations |
+| `tools.*` / `tool__*` | `RegisterTool` |
+| `conn.*` / `conn__*` | `RegisterConnection` |
+| `exec.*` / `exec__*` | `RegisterExecEndpoint` |
+| `topic.*` / `topic__*` | `RegisterTopic` |
+| `mcp.*` / `mcp__*` | `RegisterMCP` |
+| `agent.*` / `agent__*` | A2A sibling capabilities |
 | `run_js` (reserved) | the JS sandbox entry point |
-| `promptAgent` (reserved) | open-ended A2A delegation |
+| `agent__prompt` | open-ended A2A delegation |
 
 Framework primitives (the runtime prompt describes each in detail).
 **Availability**: *all* = every run; *authed* = non-public runs only; *admin* =
@@ -1072,22 +1066,22 @@ matching capability:
 
 | Binding(s) | Purpose | Availability |
 |---|---|---|
-| `fileRead` `fileReadBytes` `fileWrite` `fileStat` `fileList` `fileDelete` `fileExists` `fileShareURL` | object storage; slashless paths; reads cap 16 MiB | per-dir |
-| `fileReadRangeBytes` `fileGrep` `fileHead` `fileTail` `fileLines` | large-file reads (exact byte window / line-addressed; cache to local disk) | authed (read verbs also per-dir for public) |
-| `fileEncode` `fileDecode` `fileDecodeText` | file→file codec transforms (base64/hex/gzip/charset) | authed |
-| `fileEditLines` `fileSed` | streamed line / sed edits | authed |
-| `analyzeImage` `transcribeAudio` `generateImage` `speak` `embed` | AI/media (capability-default model) | authed |
-| `printToUser` | user-facing output | all |
-| `attachToContext` | attach a file to the conversation | authed |
-| `httpRequest` `webSearch` | web | authed |
-| `log` `console.log/warn/error` | logging | all |
-| `queryDB` | read-only SQL (runs in a read-only tx; writes rejected) | admin |
-| `requestUpgrade` | self-rebuild | admin |
+| `air.fileRead` `air.fileReadBytes` `air.fileWrite` `air.fileStat` `air.fileList` `air.fileDelete` `air.fileExists` `air.fileShareURL` | object storage; slashless paths; reads cap 16 MiB | per-dir |
+| `air.fileReadRangeBytes` `air.fileGrep` `air.fileHead` `air.fileTail` `air.fileLines` | large-file reads | authed (read verbs also per-dir for public) |
+| `air.fileEncode` `air.fileDecode` `air.fileDecodeText` | file transforms | authed |
+| `air.fileEditLines` `air.fileSed` | streamed edits | authed |
+| `air.analyzeImage` `air.transcribeAudio` `air.generateImage` `air.speak` `air.embed` | AI/media | authed |
+| `air.output` | user-facing media output | all |
+| `air.attachToContext` | attach a file to the conversation | authed |
+| `air.httpRequest` `air.webSearch` | web | authed |
+| `air.log` `console.log/warn/error` | logging | all |
+| `air.queryDB` | read-only SQL | admin |
+| `air.requestUpgrade` | self-rebuild | admin |
 
 **Public-caller surface is much narrower.** A run triggered by an
-`AccessPublic` caller only sees: `printToUser`, `log`/`console`; the file API
+`AccessPublic` caller only sees: `air.output`, `air.log`/`console`; the file API
 verbs only where a registered directory grants `AccessPublic` for the matching
-cap (no public dirs → no file API); and the `conn_`/`mcp_`/`topic_`/registered
+cap (no public dirs → no file API); and the `conn`/`mcp`/`topic`/registered
 tools explicitly marked `Access: AccessPublic`. Everything in the *authed* /
 *admin* rows above is bind-time-gated *out* — it doesn't exist in the JS runtime
 for public runs, so prompt injection can't summon it.
@@ -1099,7 +1093,7 @@ the verb you expose. E.g. for a public "AI image" feature, don't register a
 public `generated/` dir and hope the LLM stitches `generateImage` + `fileWrite`
 + `fileShareURL` — register one `generate_public_image({prompt})` tool
 (`Access: AccessPublic`) that generates internally, writes to an admin-only dir
-(trusted Go bypasses `CheckFileAccess`), and returns only a presigned
+(trusted Go bypasses `ResolveFilePath`), and returns only a presigned
 `ShareFileURL`. Shrink the verbs, control the side effects, surface the URL.
 
 ---
@@ -1163,8 +1157,8 @@ go func() { _ = agent.SyncDown(context.Background(), "state/bin/", "/var/agent/b
 
 // A cron self-updates, then pushes the new binary up.
 agent.RegisterCron(&agentsdk.Cron{
-    Slug: "bun-refresh", Schedule: "0 3 * * 0",
-    Handler: func(ctx context.Context, _ *agentsdk.EventWriter) error {
+    Slug: "bun_refresh", Schedule: "0 3 * * 0",
+    Handler: func(ctx context.Context, _ agentsdk.ScheduleEvent) error {
         if err := exec.CommandContext(ctx, "/var/agent/bin/bun", "upgrade").Run(); err != nil {
             return err
         }

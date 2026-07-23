@@ -52,18 +52,15 @@ func isTransientConnError(err error) bool {
 
 type agentCtxKey struct{}
 
-// AgentFromMigrationContext returns the Agent associated with a migration
-// context. Panics if called outside a migration.
-func AgentFromMigrationContext(ctx context.Context) *Agent {
+func agentFromMigrationContext(ctx context.Context) *Agent {
 	a, ok := ctx.Value(agentCtxKey{}).(*Agent)
 	if !ok {
-		panic("agentsdk: AgentFromMigrationContext called outside a migration context")
+		panic("agentsdk: MigrationExternalStep called outside an SDK-managed migration")
 	}
 	return a
 }
 
-// MigrationContext returns ctx with this agent attached for Go migrations.
-func (a *Agent) MigrationContext(ctx context.Context) context.Context {
+func (a *Agent) migrationContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, agentCtxKey{}, a)
 }
 
@@ -117,7 +114,7 @@ func (a *Agent) autoMigrate() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(a.MigrationContext(context.Background()), migrationTimeout)
+	ctx, cancel := context.WithTimeout(a.migrationContext(context.Background()), migrationTimeout)
 	defer cancel()
 	if err := a.runMigrationPass(ctx, dir, mode, downTo); err != nil {
 		panic("agentsdk: run migrations: " + err.Error())

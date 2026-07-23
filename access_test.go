@@ -8,174 +8,172 @@ import (
 	"github.com/airlockrun/agentsdk/internal/testcaller"
 )
 
-// TestNormalizePath covers the path-normalization rules — slashless
-// canonical form, no .., no //, no trailing slash, no empty.
 func TestNormalizePath(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string // empty when an error is expected
+	tests := []struct {
+		name string
+		path string
+		want string
 	}{
-		{"reports/q1.csv", "reports/q1.csv"},
-		{"reports/q1.csv/", "reports/q1.csv"}, // trailing slash stripped
-		{"reports", "reports"},                // bare directory is fine
-		{"", ""},                              // empty rejected
-		{"/", ""},                             // root-only rejected
-		{"/reports/q1.csv", ""},               // leading slash rejected
-		{"reports/../etc/passwd", ""},         // .. segment
-		{"reports//q1.csv", ""},               // empty segment
-		{"reports/.", ""},                     // . segment
+		{name: "canonical", path: "reports/q1.csv", want: "reports/q1.csv"},
+		{name: "trailing slash", path: "reports/q1.csv/", want: "reports/q1.csv"},
+		{name: "bare directory", path: "reports", want: "reports"},
+		{name: "empty"},
+		{name: "root", path: "/"},
+		{name: "leading slash", path: "/reports/q1.csv"},
+		{name: "traversal", path: "reports/../etc/passwd"},
+		{name: "empty segment", path: "reports//q1.csv"},
+		{name: "dot segment", path: "reports/."},
+		{name: "nul", path: "reports/a\x00b"},
+		{name: "backslash", path: `reports\file`},
+		{name: "control", path: "reports/a\nb"},
+		{name: "invalid UTF-8", path: string([]byte{'a', '/', 0xff})},
 	}
-	for _, tc := range cases {
-		t.Run(tc.in, func(t *testing.T) {
-			got, err := normalizePath(tc.in)
-			if tc.want == "" {
-				if err == nil {
-					t.Fatalf("expected error for %q, got %q", tc.in, got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizePath(tt.path)
+			if tt.want == "" {
+				if !errors.Is(err, ErrInvalidPath) {
+					t.Fatalf("normalizePath(%q) error = %v, want ErrInvalidPath", tt.path, err)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("normalizePath(%q): %v", tc.in, err)
-			}
-			if got != tc.want {
-				t.Fatalf("normalizePath(%q) = %q, want %q", tc.in, got, tc.want)
+			if err != nil || got != tt.want {
+				t.Fatalf("normalizePath(%q) = %q, %v; want %q", tt.path, got, err, tt.want)
 			}
 		})
 	}
 }
 
-// TestCheckFileAccess_UnregisteredPath ensures unknown top segments
-// return ErrNotFound (never distinguishing "denied" from "not found").
-func TestCheckFileAccess_UnregisteredPath(t *testing.T) {
+func TestResolveFilePathBasicPolicy(t *testing.T) {
 	a, _ := testAgent(t)
-	ctx := withCaller(context.Background(), caller{Access: AccessAdmin})
-	if err := a.CheckFileAccess(ctx, "nowhere/foo", OpRead); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected ErrNotFound, got %v", err)
+	a.RegisterDirectory("reports", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Reports"})
+	a.RegisterDirectory("reports/public", DirectoryOpts{Read: AccessPublic, Write: AccessAdmin, List: AccessPublic, Description: "Public reports"})
+
+	public := withCaller(context.Background(), caller{Access: AccessPublic})
+	user := withCaller(context.Background(), caller{Access: AccessUser})
+	admin := withCaller(context.Background(), caller{Access: AccessAdmin})
+
+	tests := []struct {
+		name string
+		ctx  context.Context
+		path string
+		op   FileOperation
+		want string
+		err  error
+	}{
+		{name: "longest prefix", ctx: public, path: "reports/public/q1.csv", op: FileOperationRead, want: "reports/public/q1.csv"},
+		{name: "outer directory denied", ctx: public, path: "reports/private/q1.csv", op: FileOperationRead, err: ErrNotFound},
+		{name: "user read", ctx: user, path: "reports/q1.csv", op: FileOperationRead, want: "reports/q1.csv"},
+		{name: "delete uses write cap", ctx: user, path: "reports/q1.csv", op: FileOperationDelete, want: "reports/q1.csv"},
+		{name: "independent list cap", ctx: public, path: "reports", op: FileOperationList, err: ErrNotFound},
+		{name: "admin registered path", ctx: admin, path: "reports/private/q1.csv", op: FileOperationRead, want: "reports/private/q1.csv"},
+		{name: "uncovered", ctx: admin, path: "nowhere/file", op: FileOperationRead, err: ErrNotFound},
+		{name: "malformed", ctx: admin, path: "../secret", op: FileOperationRead, err: ErrInvalidPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := a.ResolveFilePath(tt.ctx, tt.path, tt.op)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("ResolveFilePath() error = %v, want %v", err, tt.err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("ResolveFilePath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+	if _, err := a.ResolveFilePath(admin, "reports/q1.csv", FileOperation("future")); err == nil {
+		t.Fatal("unknown operation accepted")
 	}
 }
 
-// TestCheckFileAccess_InvalidPath surfaces malformed paths as
-// ErrInvalidPath rather than ErrNotFound — different category, useful
-// for callers debugging input.
-func TestCheckFileAccess_InvalidPath(t *testing.T) {
+func TestResolveFilePathExactScopes(t *testing.T) {
 	a, _ := testAgent(t)
-	ctx := withCaller(context.Background(), caller{Access: AccessAdmin})
-	if err := a.CheckFileAccess(ctx, "../etc/passwd", OpRead); !errors.Is(err, ErrInvalidPath) {
-		t.Fatalf("expected ErrInvalidPath, got %v", err)
+	for path, scope := range map[string]DirectoryScope{
+		"users":         ScopeUser,
+		"conversations": ScopeConversation,
+		"runs":          ScopeRun,
+	} {
+		a.RegisterDirectory(path, DirectoryOpts{
+			Read: AccessPublic, Write: AccessPublic, List: AccessPublic,
+			Scope: scope, Description: path,
+		})
+	}
+	r := newRun(a, "run-current", "", "conv-current", context.Background())
+	r.callerAccess = AccessPublic
+	r.userID = "user-current"
+	ctx := r.checkedCtx()
+
+	tests := []struct {
+		name string
+		path string
+		op   FileOperation
+		want string
+		err  error
+	}{
+		{name: "user write insertion", path: "users/file.txt", op: FileOperationWrite, want: "users/user-user-current/file.txt"},
+		{name: "user list root insertion", path: "users", op: FileOperationList, want: "users/user-user-current"},
+		{name: "conversation nested list insertion", path: "conversations/archive", op: FileOperationList, want: "conversations/conv-conv-current/archive"},
+		{name: "run write insertion", path: "runs/file.txt", op: FileOperationWrite, want: "runs/run-run-current/file.txt"},
+		{name: "matching read", path: "users/user-user-current/file.txt", op: FileOperationRead, want: "users/user-user-current/file.txt"},
+		{name: "matching overwrite", path: "users/user-user-current/file.txt", op: FileOperationOverwrite, want: "users/user-user-current/file.txt"},
+		{name: "matching delete", path: "users/user-user-current/file.txt", op: FileOperationDelete, want: "users/user-user-current/file.txt"},
+		{name: "bare read denied", path: "users/file.txt", op: FileOperationRead, err: ErrNotFound},
+		{name: "bare overwrite denied", path: "users/file.txt", op: FileOperationOverwrite, err: ErrNotFound},
+		{name: "bare delete denied", path: "users/file.txt", op: FileOperationDelete, err: ErrNotFound},
+		{name: "cross user denied", path: "users/user-other/file.txt", op: FileOperationRead, err: ErrNotFound},
+		{name: "wrong scope kind denied", path: "users/conv-conv-current/file.txt", op: FileOperationWrite, err: ErrNotFound},
+		{name: "hyphenated ordinary path", path: "users/draft-2026/file.txt", op: FileOperationWrite, want: "users/user-user-current/draft-2026/file.txt"},
+		{name: "write root invalid", path: "users", op: FileOperationWrite, err: ErrInvalidPath},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := a.ResolveFilePath(ctx, tt.path, tt.op)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("ResolveFilePath() error = %v, want %v", err, tt.err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("ResolveFilePath() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-// TestCheckFileAccess_LongestPrefix verifies nested directory
-// registrations: the most-specific path covering the request wins.
-func TestCheckFileAccess_LongestPrefix(t *testing.T) {
+func TestResolveFilePathDoesNotFallbackIdentity(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("reports", DirectoryOpts{
-		Read: AccessUser, Write: AccessAdmin, List: AccessUser,
-		Description: "Reports",
+	a.RegisterDirectory("private", DirectoryOpts{
+		Read: AccessPublic, Write: AccessPublic, List: AccessPublic,
+		Scope: ScopeUser, Description: "Private",
 	})
-	a.RegisterDirectory("reports/public", DirectoryOpts{
-		Read: AccessPublic, Write: AccessAdmin, List: AccessPublic,
-		Description: "Public reports",
-	})
-
-	publicCtx := withCaller(context.Background(), caller{Access: AccessPublic})
-
-	// Path under the more-specific public dir — public read allowed.
-	if err := a.CheckFileAccess(publicCtx, "reports/public/foo.csv", OpRead); err != nil {
-		t.Fatalf("expected reports/public read to succeed for public, got %v", err)
-	}
-	// Path under the less-specific dir — public read denied.
-	if err := a.CheckFileAccess(publicCtx, "reports/private/foo.csv", OpRead); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected reports private read to deny public, got %v", err)
+	r := newRun(a, "run-current", "", "conv-current", context.Background())
+	r.callerAccess = AccessPublic
+	if _, err := a.ResolveFilePath(r.checkedCtx(), "private/file.txt", FileOperationWrite); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing user identity error = %v, want ErrNotFound", err)
 	}
 }
 
-// TestCheckFileAccess_FailClosed confirms the default ctx (no caller
-// attached) is treated as AccessPublic and denies anything user-or-above.
-func TestCheckFileAccess_FailClosed(t *testing.T) {
+func TestResolveFilePathTestCallerUser(t *testing.T) {
 	a, _ := testAgent(t)
-	a.RegisterDirectory("reports", DirectoryOpts{
-		Read: AccessUser, Write: AccessUser, List: AccessUser,
-		Description: "Reports",
+	a.RegisterDirectory("private", DirectoryOpts{
+		Read: AccessPublic, Write: AccessPublic, List: AccessPublic,
+		Scope: ScopeUser, Description: "Private",
 	})
-	if err := a.CheckFileAccess(context.Background(), "reports/x", OpRead); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("expected fail-closed deny on plain ctx, got %v", err)
+	ctx := testcaller.With(context.Background(), testcaller.Caller{UserID: "test-user", Access: string(AccessPublic)})
+	got, err := a.ResolveFilePath(ctx, "private/user-test-user/file.txt", FileOperationRead)
+	if err != nil || got != "private/user-test-user/file.txt" {
+		t.Fatalf("ResolveFilePath() = %q, %v", got, err)
 	}
 }
 
 func TestCallerFromContextFrameworkStatePrecedesTestCaller(t *testing.T) {
 	a, _ := testAgent(t)
 	testCtx := testcaller.With(context.Background(), testcaller.Caller{Access: string(AccessPublic)})
-
 	r := newRun(a, "run-1", "", "", context.Background())
 	r.callerAccess = AccessAdmin
 	if got := callerFromContext(contextWithRun(testCtx, r)).Access; got != AccessAdmin {
 		t.Errorf("run caller access = %q, want %q", got, AccessAdmin)
 	}
-
 	lazy := &lazyRun{agent: a, callerAccess: AccessUser}
 	if got := callerFromContext(contextWithLazyRun(testCtx, lazy)).Access; got != AccessUser {
 		t.Errorf("lazy-run caller access = %q, want %q", got, AccessUser)
-	}
-}
-
-func TestTestCallerProvidesUserScope(t *testing.T) {
-	a, _ := testAgent(t)
-	a.RegisterDirectory("private", DirectoryOpts{
-		Read:        AccessAdmin,
-		Write:       AccessAdmin,
-		List:        AccessAdmin,
-		Scope:       ScopeUser,
-		Description: "Private files",
-	})
-	ctx := testcaller.With(context.Background(), testcaller.Caller{
-		UserID: "test-user",
-		Access: string(AccessPublic),
-	})
-	if err := a.CheckFileAccess(ctx, "private/user-test-user/file.txt", OpRead); err != nil {
-		t.Fatalf("CheckFileAccess() error = %v, want nil", err)
-	}
-}
-
-// TestCheckFileAccess_DeleteFoldsIntoWrite verifies that delete folds
-// into the Write cap: a caller with Write can call fileDelete (there is
-// no separate delete cap).
-func TestCheckFileAccess_DeleteFoldsIntoWrite(t *testing.T) {
-	a, _ := testAgent(t)
-	a.RegisterDirectory("uploads", DirectoryOpts{
-		Read: AccessUser, Write: AccessUser, List: AccessUser,
-		Description: "Uploads",
-	})
-	ctx := withCaller(context.Background(), caller{Access: AccessUser})
-	// OpWrite is the operation tag for deletes. The agent.DeleteFile
-	// path bypasses CheckFileAccess (trusted), but the VM binding for
-	// fileDelete() goes through CheckFileAccess(OpWrite) — verify the
-	// gate accepts a user-level caller.
-	if err := a.CheckFileAccess(ctx, "uploads/foo", OpWrite); err != nil {
-		t.Fatalf("expected user write to succeed, got %v", err)
-	}
-}
-
-// TestCheckFileAccess_CapsAreIndependent verifies a directory can grant
-// list while denying read (browsable but contents-protected) and the
-// gate enforces each cap separately.
-func TestCheckFileAccess_CapsAreIndependent(t *testing.T) {
-	a, _ := testAgent(t)
-	a.RegisterDirectory("inbox", DirectoryOpts{
-		Read:        AccessAdmin, // contents are admin-only
-		Write:       AccessUser,  // anyone signed-in can drop a file
-		List:        AccessUser,  // anyone can see filenames
-		Description: "Inbox",
-	})
-	userCtx := withCaller(context.Background(), caller{Access: AccessUser})
-
-	if err := a.CheckFileAccess(userCtx, "inbox/foo", OpRead); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("user should not have read access to admin-read dir, got %v", err)
-	}
-	if err := a.CheckFileAccess(userCtx, "inbox/foo", OpList); err != nil {
-		t.Fatalf("user should have list access, got %v", err)
-	}
-	if err := a.CheckFileAccess(userCtx, "inbox/foo", OpWrite); err != nil {
-		t.Fatalf("user should have write access, got %v", err)
 	}
 }

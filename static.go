@@ -6,6 +6,8 @@ import "net/http"
 // /static/{Name}. Name should include a content hash when the bytes can change
 // because browsers cache successful responses for one year.
 type StaticAsset struct {
+	noUnkeyedLiterals
+
 	Name        string
 	ContentType string
 	Data        []byte

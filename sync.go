@@ -74,7 +74,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		}
 		webhooks = append(webhooks, wire.WebhookDef{
 			Path:        w.Path,
-			Verify:      w.Verify,
+			Verify:      string(w.Verify),
 			Header:      w.Header,
 			TimeoutMs:   timeout.Milliseconds(),
 			Description: w.Description,

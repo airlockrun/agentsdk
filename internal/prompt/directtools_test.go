@@ -50,10 +50,10 @@ func TestRender_DirectTools_Shape(t *testing.T) {
 		"declare const",
 		"declare type FilePath",
 		"`var` for top-level names",
-		"conn_slack.requestJSON",
-		"mcp_github.search_repos",
-		"exec_ci.run",
-		"topic_build_done.subscribe()",
+		"conn.slack.requestJSON",
+		"mcp.github.search_repos",
+		"exec.ci.run",
+		"topic.build_done.subscribe()",
 	}
 	for _, s := range mustNotContain {
 		if strings.Contains(out, s) {
@@ -78,8 +78,7 @@ func TestRender_DirectTools_Shape(t *testing.T) {
 }
 
 // TestRender_DirectTools_SiblingShort confirms that the sibling
-// section in direct mode advertises promptAgent but skips the typed
-// agent_{slug}.<tool>() namespace prose (that belongs to JS mode).
+// section in direct mode advertises agent__prompt but skips typed JS bindings.
 func TestRender_DirectTools_SiblingShort(t *testing.T) {
 	data := AgentData{
 		DirectTools: true,
@@ -97,14 +96,14 @@ func TestRender_DirectTools_SiblingShort(t *testing.T) {
 	if !strings.Contains(out, "## Sibling agents") {
 		t.Fatal("sibling section should appear in direct mode")
 	}
-	if !strings.Contains(out, "promptAgent") {
-		t.Fatal("sibling section should mention promptAgent in direct mode")
+	if !strings.Contains(out, "agent__prompt") {
+		t.Fatal("sibling section should mention agent__prompt in direct mode")
 	}
-	if strings.Contains(out, "declare const agent_spotify") {
+	if strings.Contains(out, "declare const agent:") {
 		t.Fatal("direct mode must not emit TS declarations for siblings")
 	}
-	if strings.Contains(out, "agent_{slug}` namespace") {
-		t.Fatal("direct mode must not mention the JS agent_{slug} namespace")
+	if strings.Contains(out, "agent.<slug>") {
+		t.Fatal("direct mode must not mention the JS agent namespace")
 	}
 }
 

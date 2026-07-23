@@ -25,70 +25,70 @@ func TestResolveDisplayPart(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    DisplayPart
-		wantType string
+		wantType DisplayPartType
 		wantMime string
 		wantFile string
 	}{
 		{
 			name:     "png bytes infers image/png",
 			input:    DisplayPart{Data: pngHeader},
-			wantType: "image",
+			wantType: DisplayPartTypeImage,
 			wantMime: "image/png",
 			wantFile: "image.png",
 		},
 		{
 			name:     "unknown bytes default to octet-stream file",
 			input:    DisplayPart{Data: []byte{0x00, 0x01, 0x02}},
-			wantType: "file",
+			wantType: DisplayPartTypeFile,
 			wantMime: "application/octet-stream",
 			wantFile: "file.bin",
 		},
 		{
 			name:     "explicit mimeType infers type",
 			input:    DisplayPart{MimeType: "audio/mpeg"},
-			wantType: "audio",
+			wantType: DisplayPartTypeAudio,
 			wantMime: "audio/mpeg",
 			wantFile: "audio.mp3",
 		},
 		{
 			name:     "explicit mimeType video",
 			input:    DisplayPart{MimeType: "video/mp4"},
-			wantType: "video",
+			wantType: DisplayPartTypeVideo,
 			wantMime: "video/mp4",
 			wantFile: "video.f4v", // mime.ExtensionsByType returns alphabetically
 		},
 		{
 			name:     "text-only part gets type text",
 			input:    DisplayPart{Text: "hello"},
-			wantType: "text",
+			wantType: DisplayPartTypeText,
 			wantMime: "",
 			wantFile: "",
 		},
 		{
 			name:     "explicit type and filename unchanged",
-			input:    DisplayPart{Type: "file", Filename: "report.pdf", MimeType: "application/pdf"},
-			wantType: "file",
+			input:    DisplayPart{Type: DisplayPartTypeFile, Filename: "report.pdf", MimeType: "application/pdf"},
+			wantType: DisplayPartTypeFile,
 			wantMime: "application/pdf",
 			wantFile: "report.pdf",
 		},
 		{
 			name:     "source-based part preserves the original filename",
-			input:    DisplayPart{Type: "image", Source: "charts/rev.png", MimeType: "image/png"},
-			wantType: "image",
+			input:    DisplayPart{Type: DisplayPartTypeImage, Source: "charts/rev.png", MimeType: "image/png"},
+			wantType: DisplayPartTypeImage,
 			wantMime: "image/png",
 			wantFile: "rev.png",
 		},
 		{
 			name:     "url-based part preserves the URL's last segment",
-			input:    DisplayPart{Type: "image", URL: "https://example.com/path/cat.jpg?token=abc", MimeType: "image/jpeg"},
-			wantType: "image",
+			input:    DisplayPart{Type: DisplayPartTypeImage, URL: "https://example.com/path/cat.jpg?token=abc", MimeType: "image/jpeg"},
+			wantType: DisplayPartTypeImage,
 			wantMime: "image/jpeg",
 			wantFile: "cat.jpg",
 		},
 		{
 			name:     "data with explicit mimeType skips detection",
 			input:    DisplayPart{Data: []byte("not really png"), MimeType: "image/png"},
-			wantType: "image",
+			wantType: DisplayPartTypeImage,
 			wantMime: "image/png",
 			wantFile: "image.png",
 		},

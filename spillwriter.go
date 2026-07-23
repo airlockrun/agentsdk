@@ -104,10 +104,10 @@ func spillFor(ctx context.Context, agent *Agent, r io.Reader, dstPath string) sp
 func execOverflowNote(outR, errR spillFields) string {
 	switch {
 	case outR.savedTo != "" && errR.savedTo != "":
-		return fmt.Sprintf("stdout (%d bytes) and stderr (%d bytes) exceeded inline threshold; saved to %s and %s. Use fileRead to read.", outR.size, errR.size, outR.savedTo, errR.savedTo)
+		return fmt.Sprintf("stdout (%d bytes) and stderr (%d bytes) exceeded inline threshold; saved to %s and %s. Use air.fileRead to read.", outR.size, errR.size, outR.savedTo, errR.savedTo)
 	case outR.savedTo != "":
-		return fmt.Sprintf("stdout (%d bytes) exceeded inline threshold; saved to %s. Use fileRead(stdoutSavedTo) to read.", outR.size, outR.savedTo)
+		return fmt.Sprintf("stdout (%d bytes) exceeded inline threshold; saved to %s. Use air.fileRead(stdoutSavedTo) to read.", outR.size, outR.savedTo)
 	default:
-		return fmt.Sprintf("stderr (%d bytes) exceeded inline threshold; saved to %s. Use fileRead(stderrSavedTo) to read.", errR.size, errR.savedTo)
+		return fmt.Sprintf("stderr (%d bytes) exceeded inline threshold; saved to %s. Use air.fileRead(stderrSavedTo) to read.", errR.size, errR.savedTo)
 	}
 }

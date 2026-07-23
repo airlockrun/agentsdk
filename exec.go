@@ -92,7 +92,7 @@ type recordedExecResponse struct {
 //	defer s.Stderr.Close()
 func (h *ExecHandle) RunStream(ctx context.Context, cmd ExecCommand) (*ExecStream, error) {
 	if cmd.Command == "" {
-		return nil, &ExecError{Kind: "config", Message: "Command is required"}
+		return nil, &ExecError{Kind: ExecErrorKindConfig, Message: "Command is required"}
 	}
 
 	reqBody := wire.ExecRequest{
@@ -110,7 +110,7 @@ func (h *ExecHandle) RunStream(ctx context.Context, cmd ExecCommand) (*ExecStrea
 
 	resp, err := h.agent.client.do(ctx, "POST", "/api/agent/exec/"+h.slug, bytes.NewReader(wire))
 	if err != nil {
-		return nil, &ExecError{Kind: "transport", Message: err.Error()}
+		return nil, &ExecError{Kind: ExecErrorKindTransport, Message: err.Error()}
 	}
 
 	// Pre-stream errors come back as standard HTTP status codes (404 for
@@ -150,18 +150,18 @@ func (h *ExecHandle) RunStream(ctx context.Context, cmd ExecCommand) (*ExecStrea
 // preStreamErrorKind classifies pre-stream HTTP status codes into the
 // ExecError.Kind taxonomy. Mid-stream errors carry their own kind from
 // the "error" envelope.
-func preStreamErrorKind(status int) string {
+func preStreamErrorKind(status int) ExecErrorKind {
 	switch status {
 	case http.StatusNotFound:
-		return "config" // endpoint slug not configured by operator
+		return ExecErrorKindConfig // endpoint slug not configured by operator
 	case http.StatusNotImplemented:
-		return "config" // transport not supported (e.g. telnet in v1)
+		return ExecErrorKindConfig // transport not supported (e.g. telnet in v1)
 	case http.StatusRequestTimeout:
-		return "timeout"
+		return ExecErrorKindTimeout
 	case http.StatusGatewayTimeout:
-		return "timeout"
+		return ExecErrorKindTimeout
 	default:
-		return "transport"
+		return ExecErrorKindTransport
 	}
 }
 
@@ -185,14 +185,14 @@ func demuxExecStream(resp *http.Response, stdoutW, stderrW *io.PipeWriter, exitC
 	for scanner.Scan() {
 		var env execEnvelope
 		if err := json.Unmarshal(scanner.Bytes(), &env); err != nil {
-			closeErr(&ExecError{Kind: "transport", Message: "malformed exec envelope: " + err.Error()})
+			closeErr(&ExecError{Kind: ExecErrorKindTransport, Message: "malformed exec envelope: " + err.Error()})
 			return
 		}
 		switch env.Type {
 		case "stdout":
 			data, err := base64.StdEncoding.DecodeString(env.Data)
 			if err != nil {
-				closeErr(&ExecError{Kind: "transport", Message: "stdout decode: " + err.Error()})
+				closeErr(&ExecError{Kind: ExecErrorKindTransport, Message: "stdout decode: " + err.Error()})
 				return
 			}
 			if _, err := stdoutW.Write(data); err != nil {
@@ -206,7 +206,7 @@ func demuxExecStream(resp *http.Response, stdoutW, stderrW *io.PipeWriter, exitC
 		case "stderr":
 			data, err := base64.StdEncoding.DecodeString(env.Data)
 			if err != nil {
-				closeErr(&ExecError{Kind: "transport", Message: "stderr decode: " + err.Error()})
+				closeErr(&ExecError{Kind: ExecErrorKindTransport, Message: "stderr decode: " + err.Error()})
 				return
 			}
 			if _, err := stderrW.Write(data); err != nil {
@@ -219,7 +219,7 @@ func demuxExecStream(resp *http.Response, stdoutW, stderrW *io.PipeWriter, exitC
 			exitCh <- ExecExit{ExitCode: env.Code, DurationMs: env.DurationMs}
 			return
 		case "error":
-			closeErr(&ExecError{Kind: nonEmpty(env.Kind, "transport"), Message: env.Message})
+			closeErr(&ExecError{Kind: ExecErrorKind(nonEmpty(env.Kind, string(ExecErrorKindTransport))), Message: env.Message})
 			return
 		default:
 			// Forward-compat: ignore unknown envelope types so a future
@@ -228,11 +228,11 @@ func demuxExecStream(resp *http.Response, stdoutW, stderrW *io.PipeWriter, exitC
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		closeErr(&ExecError{Kind: "transport", Message: "stream read: " + err.Error()})
+		closeErr(&ExecError{Kind: ExecErrorKindTransport, Message: "stream read: " + err.Error()})
 		return
 	}
 	// Stream ended without an exit envelope — treat as transport failure.
-	closeErr(&ExecError{Kind: "transport", Message: "exec stream ended without exit envelope"})
+	closeErr(&ExecError{Kind: ExecErrorKindTransport, Message: "exec stream ended without exit envelope"})
 }
 
 // drainExecStream is called when one of the pipe writers fails (the
@@ -244,7 +244,7 @@ func drainExecStream(scanner *bufio.Scanner, otherW *io.PipeWriter, exitCh chan<
 	for scanner.Scan() {
 		var env execEnvelope
 		if err := json.Unmarshal(scanner.Bytes(), &env); err != nil {
-			errCh <- &ExecError{Kind: "transport", Message: "malformed exec envelope (draining): " + err.Error()}
+			errCh <- &ExecError{Kind: ExecErrorKindTransport, Message: "malformed exec envelope (draining): " + err.Error()}
 			return
 		}
 		switch env.Type {
@@ -252,15 +252,15 @@ func drainExecStream(scanner *bufio.Scanner, otherW *io.PipeWriter, exitCh chan<
 			exitCh <- ExecExit{ExitCode: env.Code, DurationMs: env.DurationMs}
 			return
 		case "error":
-			errCh <- &ExecError{Kind: nonEmpty(env.Kind, "transport"), Message: env.Message}
+			errCh <- &ExecError{Kind: ExecErrorKind(nonEmpty(env.Kind, string(ExecErrorKindTransport))), Message: env.Message}
 			return
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		errCh <- &ExecError{Kind: "transport", Message: "stream read (draining): " + err.Error()}
+		errCh <- &ExecError{Kind: ExecErrorKindTransport, Message: "stream read (draining): " + err.Error()}
 		return
 	}
-	errCh <- &ExecError{Kind: "transport", Message: "exec stream ended without exit envelope (draining)"}
+	errCh <- &ExecError{Kind: ExecErrorKindTransport, Message: "exec stream ended without exit envelope (draining)"}
 }
 
 func nonEmpty(a, fallback string) string {

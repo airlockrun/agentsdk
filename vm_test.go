@@ -36,7 +36,7 @@ func TestVM(t *testing.T) {
 			}).Build(), AccessUser)
 
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), "double({x: 21}).result")
+		result, err := executeJS(run.vmRuntime(), "tools.double({x: 21}).result")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +60,7 @@ func TestVM(t *testing.T) {
 			}).Build(), AccessUser)
 
 		run := newRun(a, "run-42", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), "get_run_id().id")
+		result, err := executeJS(run.vmRuntime(), "tools.get_run_id().id")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,33 +74,37 @@ func TestVM(t *testing.T) {
 
 	// Regression: user-registered tools dispatched from the VM must
 	// receive a ctx with the caller attached, so their own
-	// CheckFileAccess calls see the run's resolved access level instead
+	// ResolveFilePath calls see the run's resolved access level instead
 	// of the AccessPublic zero-value (which would deny every write).
 	t.Run("user tool gets caller in ctx", func(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("downloads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Downloads"})
 		var checkErr error
+		var resolved FilePath
 		a.RegisterTool(tool.Typed[runIDIn, runIDOut]("probe_write").
 			Description("Probes write access on downloads/.").
 			Execute(func(ctx context.Context, in runIDIn) (runIDOut, error) {
-				checkErr = a.CheckFileAccess(ctx, "downloads/x.bin", OpWrite)
+				resolved, checkErr = a.ResolveFilePath(ctx, "downloads/x.bin", FileOperationWrite)
 				return runIDOut{}, nil
 			}).Build(), AccessUser)
 
 		run := newRun(a, "run-1", "", "", context.Background())
 		run.callerAccess = AccessUser
-		if _, err := executeJS(run.vmRuntime(), "probe_write()"); err != nil {
+		if _, err := executeJS(run.vmRuntime(), "tools.probe_write()"); err != nil {
 			t.Fatal(err)
 		}
 		if checkErr != nil {
-			t.Fatalf("CheckFileAccess from user tool: %v", checkErr)
+			t.Fatalf("ResolveFilePath from user tool: %v", checkErr)
+		}
+		if resolved != "downloads/x.bin" {
+			t.Fatalf("ResolveFilePath = %q", resolved)
 		}
 	})
 
 	t.Run("log binding", func(t *testing.T) {
 		a, _ := testAgent(t)
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `log("hello from JS")`)
+		_, err := executeJS(run.vmRuntime(), `air.log("hello from JS")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -113,7 +117,7 @@ func TestVM(t *testing.T) {
 		a, mock := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `fileDelete("uploads/a.txt")`)
+		_, err := executeJS(run.vmRuntime(), `air.fileDelete("uploads/a.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -130,7 +134,7 @@ func TestVM(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `JSON.stringify(fileList("uploads/"))`)
+		result, err := executeJS(run.vmRuntime(), `JSON.stringify(air.fileList("uploads/"))`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +147,7 @@ func TestVM(t *testing.T) {
 		a, mock := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
-		_, err := executeJS(run.vmRuntime(), `fileWrite("uploads/test.txt", "hello", "text/plain")`)
+		_, err := executeJS(run.vmRuntime(), `air.fileWrite("uploads/test.txt", "hello", "text/plain")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -157,7 +161,7 @@ func TestVM(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `fileRead("uploads/test.txt")`)
+		result, err := executeJS(run.vmRuntime(), `air.fileRead("uploads/test.txt")`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -181,7 +185,7 @@ func TestVM(t *testing.T) {
 		// .slice returns a typed array with the right bytes, and
 		// Array.from materializes a real number array.
 		result, err := executeJS(run.vmRuntime(), `
-			var b = fileReadBytes("uploads/test.txt");
+			var b = air.fileReadBytes("uploads/test.txt");
 			JSON.stringify({
 				ctor: b.constructor.name,
 				length: b.length,
@@ -230,7 +234,7 @@ func TestVM(t *testing.T) {
 	t.Run("output calls backend", func(t *testing.T) {
 		a, mock := testAgent(t)
 		run := newRun(a, "run-1", "", "conv-1", context.Background())
-		_, err := executeJS(run.vmRuntime(), `output({type: "image", source: "img.png"})`)
+		_, err := executeJS(run.vmRuntime(), `air.output({type: "image", source: "tmp/img.png"})`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -243,7 +247,7 @@ func TestVM(t *testing.T) {
 	t.Run("output accepts array of media", func(t *testing.T) {
 		a, mock := testAgent(t)
 		run := newRun(a, "run-1", "", "conv-1", context.Background())
-		_, err := executeJS(run.vmRuntime(), `output([{type: "file", source: "a.pdf"}, {type: "image", source: "img.png"}])`)
+		_, err := executeJS(run.vmRuntime(), `air.output([{type: "file", source: "tmp/a.pdf"}, {type: "image", source: "tmp/img.png"}])`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -256,7 +260,7 @@ func TestVM(t *testing.T) {
 	t.Run("output rejects text", func(t *testing.T) {
 		a, mock := testAgent(t)
 		run := newRun(a, "run-1", "", "conv-1", context.Background())
-		_, err := executeJS(run.vmRuntime(), `output({type: "text", text: "hello"})`)
+		_, err := executeJS(run.vmRuntime(), `air.output({type: "text", text: "hello"})`)
 		if err == nil {
 			t.Fatal("expected error for type=text, got nil")
 		}
@@ -272,7 +276,7 @@ func TestVM(t *testing.T) {
 		a, _ := testAgent(t)
 		a.RegisterDirectory("uploads", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads"})
 		run := newRun(a, "run-1", "", "", context.Background())
-		result, err := executeJS(run.vmRuntime(), `var fi = fileStat("uploads/test.txt"); fi.path + ":" + fi.size`)
+		result, err := executeJS(run.vmRuntime(), `var fi = air.fileStat("uploads/test.txt"); fi.path + ":" + fi.size`)
 		if err != nil {
 			t.Fatal(err)
 		}

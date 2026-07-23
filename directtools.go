@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/airlockrun/agentsdk/internal/binding"
 	"github.com/airlockrun/goai/tool"
 )
 
@@ -66,9 +67,7 @@ func directToolRaw[I any](name, desc string, fn func(context.Context, I) (string
 
 // buildDirectTools builds the tool.Set served when run.directTools is true.
 // Each capability the goja VM exposes as a JS binding becomes its own typed
-// LLM tool here, filtered by the run's caller access. Names mirror the
-// JS forms but flatten dotted namespaces to underscores so the LLM sees
-// deterministic strings (e.g. `conn_slack.requestJSON` → `conn_slack_request_json`).
+// LLM tool here, filtered by the run's caller access.
 //
 // The Execute bodies invoke the same Go helpers the JS bindings call —
 // no logic duplication. Schemas come from per-binding input structs
@@ -79,15 +78,6 @@ func directToolRaw[I any](name, desc string, fn func(context.Context, I) (string
 // assembled so the open-ended delegation primitive lives in both modes.
 func buildDirectTools(agent *Agent, run *run) tool.Set {
 	ts := tool.Set{}
-	// Order mirrors newVM (vm.go): registered tools first, then built-ins,
-	// then namespaced bindings. Last write wins on name collisions — so an
-	// author's tool named `fileRead` is silently shadowed by the built-in
-	// `fileRead` in *both* modes (JS via vm.Set last-write, direct via
-	// this map assignment). Keeping the behaviour identical means there's
-	// no surprise where a registered tool works in run_js but disappears
-	// in direct mode (or vice versa). Names are camelCase for built-ins
-	// and `{prefix}_{slug}_{method}` for namespaced bindings — the same
-	// strings the JS bindings use.
 	addRegisteredTools(ts, agent, run)
 	addBuiltinTools(ts, agent, run)
 	addNamespacedTools(ts, agent, run)
@@ -104,8 +94,17 @@ func addRegisteredTools(ts tool.Set, agent *Agent, run *run) {
 		if !accessSatisfies(run.callerAccess, rt.access) {
 			continue
 		}
-		ts[name] = buildRegisteredTool(rt, run)
+		addDirectBinding(ts, binding.Local(binding.Tool, "", name), buildRegisteredTool(rt, run))
 	}
+}
+
+func addDirectBinding(ts tool.Set, path binding.Path, t tool.Tool) {
+	name := path.Direct()
+	if _, exists := ts[name]; exists {
+		panic("agentsdk: duplicate direct capability binding: " + name)
+	}
+	t.Name = name
+	ts[name] = t
 }
 
 // wrapToolWithRun returns a copy of t whose Execute runs under the run-scoped

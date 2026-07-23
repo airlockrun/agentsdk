@@ -608,7 +608,7 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 	t.Run("accepts same pre-1.0 minor series", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"version":"0.4.0-rc.18"}`))
+			_, _ = w.Write([]byte(`{"version":"0.5.0-alpha.1"}`))
 		}))
 		defer srv.Close()
 

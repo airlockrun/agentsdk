@@ -1,14 +1,4 @@
-// Package tsrender produces the TypeScript .d.ts blocks that Airlock
-// embeds into the agent system prompt: typed signatures for registered
-// tools, and per-server `declare const mcp_{slug}: {...}` namespaces for
-// MCP tools.
-//
-// The package is split out from agentsdk's main API surface so builders
-// (agentsdk consumers) don't see these types in their import autocomplete
-// or godoc — agentsdk's main package stays focused on the builder API
-// (RegisterTool, MCPHandle, etc.). The rendering here is shared between
-// agentsdk's tests and the airlock module's prompt template; both import
-// this package directly.
+// Package tsrender produces TypeScript declarations for agent capabilities.
 package tsrender
 
 import (
@@ -17,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/airlockrun/agentsdk/internal/binding"
 	"github.com/airlockrun/goai/schema"
 )
 
@@ -30,6 +21,7 @@ import (
 // appended to the JSDoc block in `[brackets]` so the LLM gets the
 // extra steer without polluting the user-visible description.
 type ToolRender struct {
+	Path          binding.Path
 	Name          string
 	Description   string
 	LLMHint       string
@@ -45,42 +37,54 @@ func RenderToolDecls(tools []ToolRender) string {
 		return ""
 	}
 	var b strings.Builder
+	b.WriteString("declare const tools: {\n")
 	for i, t := range tools {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		renderToolDecl(&b, t)
+		renderToolMethod(&b, t, "  ")
 	}
+	b.WriteString("};\n")
 	return b.String()
 }
 
-func renderToolDecl(b *strings.Builder, t ToolRender) {
+func renderToolMethod(b *strings.Builder, t ToolRender, indent string) {
 	inSchema := decodeSchema(t.InputSchema)
 	outSchema := decodeSchema(t.OutputSchema)
+	parts := t.Path.JSParts()
+	if len(parts) == 0 {
+		panic("tsrender: tool binding path is required")
+	}
+	name := parts[len(parts)-1]
 
 	// JSDoc block: description (+ optional LLMHint in brackets) + @example lines.
+	b.WriteString(indent)
 	b.WriteString("/**\n")
 	for _, line := range strings.Split(strings.TrimSpace(t.Description), "\n") {
+		b.WriteString(indent)
 		b.WriteString(" * ")
 		b.WriteString(line)
 		b.WriteString("\n")
 	}
 	if hint := strings.TrimSpace(t.LLMHint); hint != "" {
+		b.WriteString(indent)
 		b.WriteString(" * [")
 		b.WriteString(hint)
 		b.WriteString("]\n")
 	}
 	for _, ex := range t.InputExamples {
-		b.WriteString(" * @example ")
-		b.WriteString(t.Name)
+		b.WriteString(indent)
+		b.WriteString(" * @example tools.")
+		b.WriteString(name)
 		b.WriteString("(")
 		b.Write(ex)
 		b.WriteString(")\n")
 	}
+	b.WriteString(indent)
 	b.WriteString(" */\n")
 
-	b.WriteString("declare function ")
-	b.WriteString(t.Name)
+	b.WriteString(indent)
+	b.WriteString(name)
 	b.WriteString("(args: ")
 	b.WriteString(tsTypeFromSchema(inSchema, 0))
 	b.WriteString("): ")
@@ -238,97 +242,55 @@ func literalType(v any) string {
 // Only the input shape is typed — MCP doesn't define an output schema, so
 // the rendered return type is always `unknown` (caller does runtime parsing).
 type MCPToolRender struct {
+	Path        binding.Path
 	Name        string
 	Description string
 	InputSchema json.RawMessage
 }
 
-// JSToolNames maps each MCP tool name to a JS-identifier-safe property
-// name. MCP tool names commonly include hyphens (`notion-update-page`);
-// JS parses `obj.notion-update-page(...)` as arithmetic and throws
-// ReferenceError. The original hyphenated name stays canonical on the
-// wire (tool/call JSON-RPC); only the JS surface is renamed.
-//
-// Collision handling: when the `-` → `_` rename would clash with
-// another tool's original name on the same server (e.g. `foo-bar` AND
-// `foo_bar` both exist), the hyphenated tool keeps its original name —
-// the LLM has to use bracket notation for that one, but every other
-// tool on the server still gets the dot-friendly form. Iteration is
-// over a sorted copy so the resulting map is stable across syncs.
-func JSToolNames(names []string) map[string]string {
-	taken := make(map[string]bool, len(names))
-	for _, n := range names {
-		taken[n] = true
-	}
-	sorted := make([]string, len(names))
-	copy(sorted, names)
-	sort.Strings(sorted)
-	out := make(map[string]string, len(sorted))
-	for _, n := range sorted {
-		renamed := strings.ReplaceAll(n, "-", "_")
-		if renamed == n || taken[renamed] {
-			out[n] = n
-			continue
-		}
-		taken[renamed] = true
-		out[n] = renamed
-	}
-	return out
+// NamespaceRender describes one namespace beneath an external capability root.
+type NamespaceRender struct {
+	Namespace string
+	Tools     []MCPToolRender
 }
 
-// RenderMCPNamespace emits a typed `declare const {namespace}: { ... };`
-// block describing each discovered tool as a method on the namespace
-// object. namespace is the FULL JS identifier the runtime binds (e.g.
-// "mcp_github" for an MCP server, "agent_spotify" for a sibling) — the
-// caller owns the prefix so the declaration matches the binding name
-// exactly. Mirrors the JS binding shape installed by agentsdk's vm.go
-// so the LLM's call site and the runtime stay in lockstep.
-//
-//	declare const mcp_github: {
-//	  /** Search for GitHub repositories. */
-//	  search_repos(args: { query: string }): unknown;
-//	  ...
-//	};
-func RenderMCPNamespace(namespace string, tools []MCPToolRender) string {
-	if len(tools) == 0 {
+// RenderNestedRoot emits one declaration for a nested MCP or agent root.
+func RenderNestedRoot(root string, namespaces []NamespaceRender) string {
+	if len(namespaces) == 0 {
 		return ""
 	}
-	sorted := make([]MCPToolRender, len(tools))
-	copy(sorted, tools)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-
-	names := make([]string, len(sorted))
-	for i, t := range sorted {
-		names[i] = t.Name
-	}
-	jsNames := JSToolNames(names)
+	sortedNamespaces := make([]NamespaceRender, len(namespaces))
+	copy(sortedNamespaces, namespaces)
+	sort.Slice(sortedNamespaces, func(i, j int) bool { return sortedNamespaces[i].Namespace < sortedNamespaces[j].Namespace })
 
 	var b strings.Builder
 	b.WriteString("declare const ")
-	b.WriteString(namespace)
+	b.WriteString(root)
 	b.WriteString(": {\n")
-	for _, t := range sorted {
-		if desc := strings.TrimSpace(t.Description); desc != "" {
-			b.WriteString("  /** ")
-			b.WriteString(strings.ReplaceAll(desc, "\n", " "))
-			b.WriteString(" */\n")
-		}
-		jsName := jsNames[t.Name]
-		// Quote when the name still has illegal-identifier chars (the
-		// collision fallback path). TS object literal type syntax accepts
-		// quoted property names; keeps the declaration valid even though
-		// the LLM will need bracket notation to call it.
+	for _, namespace := range sortedNamespaces {
 		b.WriteString("  ")
-		if jsName == t.Name && strings.ContainsAny(jsName, "-") {
-			b.WriteString(`"`)
-			b.WriteString(jsName)
-			b.WriteString(`"`)
-		} else {
-			b.WriteString(jsName)
+		b.WriteString(namespace.Namespace)
+		b.WriteString(": {\n")
+		tools := make([]MCPToolRender, len(namespace.Tools))
+		copy(tools, namespace.Tools)
+		sort.Slice(tools, func(i, j int) bool { return tools[i].Path.JS() < tools[j].Path.JS() })
+		for _, t := range tools {
+			parts := t.Path.JSParts()
+			if len(parts) == 0 {
+				panic("tsrender: external binding path is required")
+			}
+			if desc := strings.TrimSpace(t.Description); desc != "" {
+				b.WriteString("    /** ")
+				b.WriteString(strings.ReplaceAll(desc, "\n", " "))
+				b.WriteString(" */\n")
+			}
+			b.WriteString("    ")
+			b.WriteString(parts[len(parts)-1])
+			b.WriteString("(args: ")
+			b.WriteString(tsTypeFromSchema(decodeSchema(t.InputSchema), 2))
+			b.WriteString("): unknown;\n")
 		}
-		b.WriteString("(args: ")
-		b.WriteString(tsTypeFromSchema(decodeSchema(t.InputSchema), 1))
-		b.WriteString("): unknown;\n")
+		b.WriteString("  };\n")
 	}
 	b.WriteString("};\n")
 	return b.String()

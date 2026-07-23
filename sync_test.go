@@ -32,7 +32,7 @@ func TestSyncWithAirlock(t *testing.T) {
 	a.RegisterCron(&Cron{
 		Slug:        "daily",
 		Schedule:    "0 9 * * *",
-		Handler:     func(ctx context.Context, ew *EventWriter) error { return nil },
+		Handler:     func(ctx context.Context, event ScheduleEvent) error { return nil },
 		Description: "Daily task",
 	})
 	a.RegisterStaticAsset(&StaticAsset{

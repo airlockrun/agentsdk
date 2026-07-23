@@ -99,14 +99,14 @@ func connRequestExec(ctx context.Context, agent *Agent, handle *ConnectionHandle
 }
 
 // connSpilledNote is the LLM-facing note for a spilled conn response. mode
-// chooses the read-back hint: "raw" → `fileRead(bodySavedTo)`, "json" →
-// `JSON.parse(fileRead(bodySavedTo))`. Shared by both adapters so the two
+// chooses the read-back hint: "raw" → `air.fileRead(bodySavedTo)`, "json" →
+// `JSON.parse(air.fileRead(bodySavedTo))`. Shared by both adapters so the two
 // modes never drift on phrasing.
 func connSpilledNote(size int64, savedTo, mode string) string {
 	if mode == "json" {
-		return fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Read with: JSON.parse(fileRead(bodySavedTo)).", size, savedTo)
+		return fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Read with: JSON.parse(air.fileRead(bodySavedTo)).", size, savedTo)
 	}
-	return fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Use fileRead(bodySavedTo) to read the full body.", size, savedTo)
+	return fmt.Sprintf("Body (%d bytes) exceeded inline threshold; saved to %s. Use air.fileRead(bodySavedTo) to read the full body.", size, savedTo)
 }
 
 // execRunOutput is the LLM-facing return shape for exec_{slug}.run /

@@ -22,7 +22,7 @@ func toWireDisplayParts(parts []DisplayPart) []wire.DisplayPart {
 	out := make([]wire.DisplayPart, len(parts))
 	for i, part := range parts {
 		out[i] = wire.DisplayPart{
-			Type:     part.Type,
+			Type:     string(part.Type),
 			Text:     part.Text,
 			Source:   part.Source,
 			URL:      part.URL,
