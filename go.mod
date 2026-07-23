@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/airlockrun/goai v0.1.5-rc.9
-	github.com/airlockrun/sol v0.1.8-rc.7
+	github.com/airlockrun/sol v0.1.8-rc.10
 	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
