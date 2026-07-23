@@ -51,6 +51,96 @@ func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 	}
 }
 
+func TestCmdCloneReplacesBootstrapModule(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const agentID = "11111111-1111-1111-1111-111111111111"
+	source := t.TempDir()
+	mustWrite(t, filepath.Join(source, "go.mod"), "module cloned\n")
+	mustWrite(t, filepath.Join(source, "main.go"), "package main\n")
+	state, err := sourcebundle.Digest(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := sourceServer(t, agentID, "cloned-agent", source, state)
+	defer srv.Close()
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	mustWrite(t, filepath.Join(dst, "go.mod"), "module airlock.bootstrap\n\ngo 1.26\n\nrequire github.com/airlockrun/agentsdk v0.4.0-rc.32\n\ntool github.com/airlockrun/agentsdk/cmd/air\n")
+	mustWrite(t, filepath.Join(dst, "go.sum"), "bootstrap sum\n")
+
+	if err := cmdClone([]string{agentID, dst, "--url", srv.URL}); err != nil {
+		t.Fatalf("cmdClone: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dst, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "module cloned\n" {
+		t.Fatalf("go.mod = %q, want cloned module", body)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "go.sum")); !os.IsNotExist(err) {
+		t.Fatalf("bootstrap go.sum remains: %v", err)
+	}
+}
+
+func TestCmdClonePreservesBootstrapModuleOnDownloadFailure(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	const agentID = "11111111-1111-1111-1111-111111111111"
+	source := t.TempDir()
+	mustWrite(t, filepath.Join(source, "go.mod"), "module cloned\n")
+	srv := sourceServer(t, agentID, "cloned-agent", source, "sha256:wrong")
+	defer srv.Close()
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+		t.Fatal(err)
+	}
+	dst := t.TempDir()
+	bootstrapMod := "module airlock.bootstrap\n\ngo 1.26\n\nrequire github.com/airlockrun/agentsdk v0.4.0-rc.32\n\ntool github.com/airlockrun/agentsdk/cmd/air\n"
+	mustWrite(t, filepath.Join(dst, "go.mod"), bootstrapMod)
+
+	err := cmdClone([]string{agentID, dst, "--url", srv.URL})
+	if err == nil {
+		t.Fatal("cmdClone succeeded with invalid source state")
+	}
+	body, readErr := os.ReadFile(filepath.Join(dst, "go.mod"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(body) != bootstrapMod {
+		t.Fatalf("bootstrap go.mod changed after failure:\n%s", body)
+	}
+}
+
+func TestRestoreBootstrapFilesRemovesPartialClone(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string][]byte{
+		"go.mod": []byte("module airlock.bootstrap\n"),
+		"go.sum": []byte("sum\n"),
+	}
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module cloned\n")
+	mustWrite(t, filepath.Join(dir, "main.go"), "package main\n")
+	mustWrite(t, filepath.Join(dir, ".airlock", "local", "agent.toml"), "partial\n")
+	t.Chdir(dir)
+
+	if err := restoreBootstrapFiles(".", files); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Name() != "go.mod" || entries[1].Name() != "go.sum" {
+		t.Fatalf("restored entries = %v", entries)
+	}
+	for name, want := range files {
+		body, err := os.ReadFile(name)
+		if err != nil || string(body) != string(want) {
+			t.Fatalf("%s = %q, %v; want %q", name, body, err, want)
+		}
+	}
+}
+
 func TestCmdCloneRemovesCreatedDestinationOnInvalidState(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	const agentID = "11111111-1111-1111-1111-111111111111"
@@ -100,7 +190,7 @@ func TestCmdPullRefusesTwoSidedChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = cmdPull([]string{dir})
-	if err == nil || !strings.Contains(err.Error(), "local and Airlock source both changed") || !strings.Contains(err.Error(), "air clone") {
+	if err == nil || !strings.Contains(err.Error(), "local and Airlock source both changed") || !strings.Contains(err.Error(), "airlock clone") {
 		t.Fatalf("cmdPull error = %v", err)
 	}
 	if body, err := os.ReadFile(filepath.Join(dir, "local.txt")); err != nil || string(body) != "local change" {

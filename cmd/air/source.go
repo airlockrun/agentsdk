@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
+	"github.com/airlockrun/agentsdk/internal/bootstrap"
 	"github.com/airlockrun/agentsdk/sourcebundle"
 )
 
@@ -22,7 +24,7 @@ type sourceFlags struct {
 	force  bool
 }
 
-func cmdClone(args []string) error {
+func cmdClone(args []string) (retErr error) {
 	f, positional, err := parseSourceFlags(args, false)
 	if err != nil {
 		return err
@@ -52,17 +54,33 @@ func cmdClone(args []string) error {
 	if statErr != nil && !createdDst {
 		return statErr
 	}
-	if err := ensureEmptyDir(dst); err != nil {
+	isBootstrap, err := bootstrap.EnsureDir(dst)
+	if err != nil {
 		return err
 	}
-	cloneComplete := false
-	if createdDst {
-		defer func() {
-			if !cloneComplete {
-				_ = os.RemoveAll(dst)
-			}
-		}()
+	var bootstrapFiles map[string][]byte
+	if isBootstrap {
+		bootstrapFiles, err = snapshotBootstrapFiles(dst)
+		if err != nil {
+			return err
+		}
 	}
+	cloneComplete := false
+	defer func() {
+		if cloneComplete {
+			return
+		}
+		var cleanupErr error
+		switch {
+		case isBootstrap:
+			cleanupErr = restoreBootstrapFiles(dst, bootstrapFiles)
+		case createdDst:
+			cleanupErr = os.RemoveAll(dst)
+		}
+		if cleanupErr != nil {
+			retErr = errors.Join(retErr, fmt.Errorf("restore clone destination: %w", cleanupErr))
+		}
+	}()
 	tmp, state, err := downloadSource(ctx, baseURL, token, target.AgentID)
 	if err != nil {
 		return err
@@ -80,6 +98,39 @@ func cmdClone(args []string) error {
 	}
 	cloneComplete = true
 	fmt.Printf("Cloned %s (%s) from %s into %s\n", target.Slug, target.AgentID, baseURL, dst)
+	return nil
+}
+
+func snapshotBootstrapFiles(dir string) (map[string][]byte, error) {
+	files := make(map[string][]byte)
+	for _, name := range []string{"go.mod", "go.sum"} {
+		body, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			if os.IsNotExist(err) && name == "go.sum" {
+				continue
+			}
+			return nil, fmt.Errorf("read bootstrap %s: %w", name, err)
+		}
+		files[name] = body
+	}
+	return files, nil
+}
+
+func restoreBootstrapFiles(dir string, files map[string][]byte) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := os.RemoveAll(filepath.Join(dir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o644); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -289,7 +340,7 @@ func downloadSource(ctx context.Context, baseURL, token, agentID string) (string
 }
 
 func sourceConflictError(target agentRemoteBinding, baseURL, remoteName string) error {
-	return fmt.Errorf("local and Airlock source both changed since the last sync.\n\nClone the current source into another directory:\n  air clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there", target.AgentID, target.Slug, remoteName, baseURL)
+	return fmt.Errorf("local and Airlock source both changed since the last sync.\n\nClone the current source into another directory:\n  airlock clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there", target.AgentID, target.Slug, remoteName, baseURL)
 }
 
 func quoteETag(state string) string {

@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/internal/bootstrap"
 	"github.com/airlockrun/agentsdk/scaffold"
 	"golang.org/x/mod/modfile"
 )
@@ -123,7 +124,7 @@ Usage:
 
 Init flags:
   --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
-  --airlock <url>            write .airlock/local/agent.toml with this Airlock URL
+  --url <url>                write .airlock/local/agent.toml with this Airlock URL
 
 Update (dir defaults to "."):
   Reconciles go.mod with this air version, updates the airlock-managed files
@@ -192,7 +193,7 @@ the Airlock URL and does not delete or modify an agent in Airlock.
 // scaffoldFlags holds the inputs used to materialize a scaffold.
 type scaffoldFlags struct {
 	agentSDKVersion string
-	airlockURL      string
+	url             string
 }
 
 // parseFlags walks a simple `--key value` flag list starting at args, calling
@@ -228,8 +229,8 @@ func parseScaffoldFlags(args []string) (scaffoldFlags, []string, error) {
 		switch key {
 		case "agentsdk-version":
 			f.agentSDKVersion = value
-		case "airlock":
-			f.airlockURL = value
+		case "url":
+			f.url = value
 		default:
 			return fmt.Errorf("unknown flag --%s", key)
 		}
@@ -252,7 +253,7 @@ func runInit(args []string, tidy func(string) error) error {
 	}
 	dir := positional[0]
 
-	if err := ensureEmptyDir(dir); err != nil {
+	if err := bootstrap.ResetDir(dir); err != nil {
 		return err
 	}
 
@@ -269,9 +270,9 @@ func runInit(args []string, tidy func(string) error) error {
 	if err := scaffold.Materialize(dir, data); err != nil {
 		return fmt.Errorf("materialize agent: %w", err)
 	}
-	if f.airlockURL != "" {
+	if f.url != "" {
 		binding := agentBinding{}
-		binding.putRemote(defaultRemoteName, agentRemoteBinding{AirlockURL: normalizeBaseURL(f.airlockURL)})
+		binding.putRemote(defaultRemoteName, agentRemoteBinding{AirlockURL: normalizeBaseURL(f.url)})
 		if err := writeAgentBinding(dir, binding); err != nil {
 			return fmt.Errorf("write agent binding: %w", err)
 		}
@@ -589,25 +590,6 @@ func cleanGeneratedDBFiles(dir string) error {
 		if err := os.Remove(filepath.Join(dbDir, entry.Name())); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// ensureEmptyDir creates dir if missing and errors if it exists and is
-// non-empty, so scaffolding never clobbers an existing repo.
-func ensureEmptyDir(dir string) error {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return fmt.Errorf("create %s: %w", dir, err)
-			}
-			return nil
-		}
-		return fmt.Errorf("read %s: %w", dir, err)
-	}
-	if len(entries) > 0 {
-		return fmt.Errorf("target directory %s is not empty", dir)
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ Cyborg agents are deterministic Go where it makes sense (HTTP routes, webhooks, 
 If you're not building on airlock, you don't need this — agentsdk is the glue, not the runtime.
 
 > [!WARNING]
-> **Alpha software.** Early-stage code with bugs we haven't found yet — please [open an issue](https://github.com/airlockrun/agentsdk/issues) for anything that breaks. Note: even though the SDK is alpha, the **public API surface is intended to stay relatively stable and backwards-compatible** even pre-1.0, because agents built against an older agentsdk version need to keep working against newer ones. Internal/unexported code can change freely. See [Stability](#stability) below.
+> **Alpha software.** Early-stage code with bugs we haven't found yet — please [open an issue](https://github.com/airlockrun/agentsdk/issues) for anything that breaks. The current RC line is pre-public and may include coordinated breaking migrations. Internal/unexported code can change freely. See [Stability](#stability) below.
 
 ## Install
 
@@ -16,6 +16,33 @@ go get github.com/airlockrun/agentsdk
 ```
 
 Requires Go 1.26+.
+
+## Air CLI
+
+Install the global launcher once:
+
+```bash
+go install github.com/airlockrun/agentsdk/cmd/airlock@v0.4.0-rc.32
+```
+
+The launcher selects the Agent SDK version advertised by the target Airlock and
+creates a repository that pins its own CLI:
+
+```bash
+airlock init my-app --url https://airlock.example.com
+airlock clone existing-app --url https://airlock.example.com my-app
+```
+
+Inside an agent repository, use the pinned tool for authoring and deployment:
+
+```bash
+go tool air toolchain install
+go tool air build
+go tool air deploy -m "Describe this deployment"
+```
+
+Running `airlock` inside an agent repository delegates non-bootstrap commands
+to `go tool air`; the repository's `go.mod` remains the version source of truth.
 
 For the complete SDK surface and runtime contracts, read the
 [agentsdk API reference](REFERENCE.md). Its focused companions cover
@@ -59,7 +86,7 @@ In a real agent you'd also call `RegisterTool`, `RegisterWebhook`, `RegisterCron
 
 ## Stability
 
-agentsdk's public API is treated as a **stability commitment**: changes to exported types, functions, or runtime behavior are kept backwards-compatible across minor versions. Older built agents must continue to work against newer agentsdk releases.
+The current `v0.4.0-rc.N` line permits coordinated breaking migrations with an RC increment and explicit migration instructions. Published stable releases preserve their author-facing API compatibility.
 
 Internal/unexported code can change freely. Non-trivial API changes go through a Discussion before any PR — see [CONTRIBUTING.md](CONTRIBUTING.md).
 

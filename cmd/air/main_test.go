@@ -178,39 +178,10 @@ func TestExtractSQLCBinary(t *testing.T) {
 	}
 }
 
-func TestEnsureEmptyDir(t *testing.T) {
-	t.Run("creates missing dir", func(t *testing.T) {
-		dir := filepath.Join(t.TempDir(), "new")
-		if err := ensureEmptyDir(dir); err != nil {
-			t.Fatalf("ensureEmptyDir: %v", err)
-		}
-		if _, err := os.Stat(dir); err != nil {
-			t.Fatalf("dir not created: %v", err)
-		}
-	})
-
-	t.Run("accepts empty existing dir", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := ensureEmptyDir(dir); err != nil {
-			t.Fatalf("ensureEmptyDir on empty dir: %v", err)
-		}
-	})
-
-	t.Run("rejects non-empty dir", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := ensureEmptyDir(dir); err == nil {
-			t.Fatal("ensureEmptyDir accepted a non-empty dir")
-		}
-	})
-}
-
 func TestCmdInitSmoke(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "myagent")
 	var tidied bool
-	if err := runInit([]string{dir, "--airlock", "https://airlock.example.com/"}, func(dir string) error {
+	if err := runInit([]string{dir, "--url", "https://airlock.example.com/"}, func(dir string) error {
 		tidied = true
 		return os.WriteFile(filepath.Join(dir, "go.sum"), []byte("checksums\n"), 0o644)
 	}); err != nil {
@@ -231,6 +202,32 @@ func TestCmdInitSmoke(t *testing.T) {
 	remote, hasRemote := b.remote(defaultRemoteName)
 	if !ok || !hasRemote || b.DefaultRemote != defaultRemoteName || remote.AirlockURL != "https://airlock.example.com" {
 		t.Fatalf("binding = %#v, %v", b, ok)
+	}
+}
+
+func TestCmdInitReplacesBootstrapModule(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module airlock.bootstrap\n\ngo 1.26\n\nrequire github.com/airlockrun/agentsdk v0.4.0-rc.32\n\ntool github.com/airlockrun/agentsdk/cmd/air\n")
+	mustWrite(t, filepath.Join(dir, "go.sum"), "bootstrap sum\n")
+
+	if err := runInit([]string{dir}, func(dir string) error {
+		return os.WriteFile(filepath.Join(dir, "go.sum"), []byte("agent sum\n"), 0o644)
+	}); err != nil {
+		t.Fatalf("runInit: %v", err)
+	}
+	body, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "airlock.bootstrap") || !strings.Contains(string(body), "module agent") {
+		t.Fatalf("go.mod was not replaced:\n%s", body)
+	}
+	sum, err := os.ReadFile(filepath.Join(dir, "go.sum"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sum) != "agent sum\n" {
+		t.Fatalf("go.sum = %q, want final agent sum", sum)
 	}
 }
 
@@ -608,7 +605,7 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 	t.Run("accepts same pre-1.0 minor series", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"version":"0.5.0-alpha.1"}`))
+			_, _ = w.Write([]byte(`{"version":"0.4.0-alpha.1"}`))
 		}))
 		defer srv.Close()
 
