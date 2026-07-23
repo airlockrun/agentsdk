@@ -240,7 +240,7 @@ func TestDeploySourceStateErrorExplainsPrecondition(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := deploySourceStateError(&staleSourceError{statusCode: tt.code}, target, "https://airlock.example.com", "prod")
-			for _, want := range []string{tt.want, "go tool air clone", "go tool air deploy", target.AgentID} {
+			for _, want := range []string{tt.want, "airlock clone", "go tool air deploy", target.AgentID} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error %q missing %q", err, want)
 				}

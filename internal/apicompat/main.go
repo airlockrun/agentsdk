@@ -100,7 +100,7 @@ func run() error {
 		fmt.Fprintln(os.Stderr, message)
 	}
 	if breaking {
-		fmt.Printf("API compatibility: allowing first release in breaking series %s against %s\n", compatibilitySeries("v"+current), baseline)
+		fmt.Printf("API compatibility: allowing pre-1.0 prerelease %s against %s\n", current, baseline)
 		return nil
 	}
 	return fmt.Errorf("%d incompatible API change(s) in compatibility series %s", len(incompatible), compatibilitySeries("v"+current))
@@ -157,15 +157,27 @@ func selectBaseline(tags []string, current string) (baseline string, breaking bo
 		return "", false, errors.New("no semantic-version tags found")
 	}
 	sort.Slice(valid, func(i, j int) bool { return semver.Compare(valid[i], valid[j]) > 0 })
+	latest := valid[0]
+	if semver.Compare(current, latest) <= 0 {
+		return "", false, fmt.Errorf("current version %s is not newer than %s", current, latest)
+	}
+	if semver.Major(current) == "v0" && semver.Prerelease(current) != "" {
+		hasStableSeries := false
+		for _, tag := range valid {
+			if compatibilitySeries(tag) == compatibilitySeries(current) && semver.Prerelease(tag) == "" {
+				hasStableSeries = true
+				break
+			}
+		}
+		if !hasStableSeries {
+			return latest, true, nil
+		}
+	}
 	series := compatibilitySeries(current)
 	for _, tag := range valid {
 		if compatibilitySeries(tag) == series {
 			return tag, false, nil
 		}
-	}
-	latest := valid[0]
-	if semver.Compare(current, latest) <= 0 {
-		return "", false, fmt.Errorf("current version %s has no baseline in its series and is not newer than %s", current, latest)
 	}
 	return latest, true, nil
 }

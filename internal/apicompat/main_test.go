@@ -11,10 +11,11 @@ func TestSelectBaseline(t *testing.T) {
 		wantBreaking bool
 	}{
 		{
-			name:         "latest tag in current zero-major series",
+			name:         "pre-1.0 prerelease allows breaking change",
 			tags:         []string{"v0.3.0", "v0.4.0-rc.2", "v0.4.0-rc.10"},
 			current:      "v0.4.0-rc.11",
 			wantBaseline: "v0.4.0-rc.10",
+			wantBreaking: true,
 		},
 		{
 			name:         "first release in new zero-major series",
@@ -22,6 +23,12 @@ func TestSelectBaseline(t *testing.T) {
 			current:      "v0.5.0-rc.1",
 			wantBaseline: "v0.4.9",
 			wantBreaking: true,
+		},
+		{
+			name:         "prerelease preserves stable zero-major series",
+			tags:         []string{"v0.3.0", "v0.4.0"},
+			current:      "v0.4.1-rc.1",
+			wantBaseline: "v0.4.0",
 		},
 		{
 			name:         "latest stable major series",

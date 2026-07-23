@@ -69,7 +69,7 @@ func cmdDeploy(args []string) error {
 		baseURL = boundRemote.AirlockURL
 	}
 	if baseURL == "" {
-		return errors.New("deploy needs an Airlock URL: pass --url or run air init --airlock <url>")
+		return errors.New("deploy needs an Airlock URL: pass --url or configure an Airlock remote for this workspace")
 	}
 	if f.create && boundRemote.AgentID != "" {
 		return fmt.Errorf("remote %q is already bound to %s (%s); deploy without --create to update that agent\n\nTo intentionally replace this local binding, run from %s:\n  go tool air remote unbind %s", remoteName, boundRemote.Slug, boundRemote.AgentID, f.dir, remoteName)
@@ -528,9 +528,9 @@ func deploySourceStateError(stale *staleSourceError, target agentRemoteBinding, 
 		return fmt.Errorf("the connected Git branch changed since this workspace last synced.\n\nClone the current branch into another directory:\n  git clone%s %s ../%s-latest\n\nMerge your changes there and push through Git", branchArg, stale.gitRemote, target.Slug)
 	}
 	if stale.statusCode == http.StatusPreconditionRequired {
-		return fmt.Errorf("Airlock already has source for %s (%s), but this workspace has no synchronized source state.\n\nClone the current source into another directory:\n  go tool air clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  go tool air deploy -m \"Describe this deployment\"\n\nUse --force only to replace Airlock's current source", target.Slug, target.AgentID, target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
+		return fmt.Errorf("Airlock already has source for %s (%s), but this workspace has no synchronized source state.\n\nClone the current source into another directory:\n  airlock clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  go tool air deploy -m \"Describe this deployment\"\n\nUse --force only to replace Airlock's current source", target.Slug, target.AgentID, target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
 	}
-	return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  go tool air clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  go tool air deploy -m \"Describe this deployment\"\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
+	return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  airlock clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  go tool air deploy -m \"Describe this deployment\"\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
 }
 
 func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState, commitMessage string, force bool) (string, error) {
