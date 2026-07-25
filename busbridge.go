@@ -73,7 +73,7 @@ func (s *ndjsonSink) OnAutomaticCompactionFinished(p bus.AutomaticCompactionFini
 }
 
 // OnSuspension serializes the suspension snapshot for the resume
-// path and, if the suspension is delegated (A2A child gate),
+// path and, if the suspension is delegated,
 // synthesizes the leaf confirmation_required so the existing approval
 // pipeline drives it end-to-end without a separate UI path.
 func (s *ndjsonSink) OnSuspension(sc *sol.SuspensionContext) {
@@ -93,37 +93,80 @@ func (s *ndjsonSink) OnSuspension(sc *sol.SuspensionContext) {
 	// the down-cascade. Attribution rides in permission/code so the
 	// human sees which sibling wants to do what.
 	if sc.Reason == "delegated" {
-		var del struct {
-			ToolCallID string `json:"toolCallID"`
-			Child      struct {
-				Slug         string `json:"slug"`
-				Confirmation struct {
-					Agent      string   `json:"agent"`
-					Permission string   `json:"permission"`
-					Patterns   []string `json:"patterns"`
-					Code       string   `json:"code"`
-				} `json:"confirmation"`
-			} `json:"child"`
-		}
-		raw, _ := json.Marshal(sc.Data)
-		_ = json.Unmarshal(raw, &del)
-		who := del.Child.Confirmation.Agent
-		if who == "" {
-			who = del.Child.Slug
-		}
+		toolCallID, confirmation := delegatedConfirmation(sc.Data)
 		perm := "promptAgent"
-		if del.Child.Confirmation.Permission != "" {
-			perm = del.Child.Confirmation.Permission
+		if confirmation.Permission != "" {
+			perm = confirmation.Permission
+		}
+		if confirmation.Agent != "" {
+			perm = confirmation.Agent + ": " + perm
 		}
 		_ = s.ew.writeLine(ndjsonLine{
 			Type: "confirmation_required",
 			Data: map[string]any{
-				"permission": who + ": " + perm,
-				"patterns":   del.Child.Confirmation.Patterns,
-				"code":       del.Child.Confirmation.Code,
-				"toolCallId": del.ToolCallID,
+				"permission": perm,
+				"patterns":   confirmation.Patterns,
+				"code":       confirmation.Code,
+				"metadata":   confirmation.Metadata,
+				"toolCallId": toolCallID,
 			},
 		})
+	}
+}
+
+type suspensionConfirmation struct {
+	Agent      string
+	Permission string
+	Patterns   []string
+	Code       string
+	Metadata   map[string]any
+}
+
+func delegatedConfirmation(data any) (string, suspensionConfirmation) {
+	raw, _ := json.Marshal(data)
+	var delegated struct {
+		ToolCallID string          `json:"toolCallID"`
+		Transport  string          `json:"transport"`
+		Child      json.RawMessage `json:"child"`
+	}
+	_ = json.Unmarshal(raw, &delegated)
+
+	switch delegated.Transport {
+	case "a2a":
+		var child struct {
+			Slug         string                 `json:"slug"`
+			Confirmation suspensionConfirmation `json:"confirmation"`
+		}
+		_ = json.Unmarshal(delegated.Child, &child)
+		if child.Confirmation.Agent == "" {
+			child.Confirmation.Agent = child.Slug
+		}
+		return delegated.ToolCallID, child.Confirmation
+	case "inprocess":
+		var child struct {
+			AgentName         string `json:"agentName"`
+			SuspensionContext struct {
+				Reason string          `json:"reason"`
+				Data   json.RawMessage `json:"data"`
+			} `json:"suspensionContext"`
+		}
+		_ = json.Unmarshal(delegated.Child, &child)
+		var confirmation suspensionConfirmation
+		switch child.SuspensionContext.Reason {
+		case "permission":
+			_ = json.Unmarshal(child.SuspensionContext.Data, &confirmation)
+			if code, ok := confirmation.Metadata["code"].(string); ok {
+				confirmation.Code = code
+			}
+		case "delegated":
+			_, confirmation = delegatedConfirmation(child.SuspensionContext.Data)
+		}
+		if confirmation.Agent == "" {
+			confirmation.Agent = child.AgentName
+		}
+		return delegated.ToolCallID, confirmation
+	default:
+		return delegated.ToolCallID, suspensionConfirmation{}
 	}
 }
 
