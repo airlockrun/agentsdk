@@ -8,10 +8,10 @@ github.com/Masterminds/semver/v3 v3.2.1 h1:RN9w6+7QoMeJVGyfmbcgs28Br8cvmnucEXnY0
 github.com/Masterminds/semver/v3 v3.2.1/go.mod h1:qvl/7zhW3nngYb5+80sSMF+FG2BjYrf8m9wsX0PNOMQ=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/airlockrun/goai v0.1.5-rc.11 h1:g/MepHN22Tm1ae2kFMP2fWVjdWXEn77Fhqzs1fy0BDw=
-github.com/airlockrun/goai v0.1.5-rc.11/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
-github.com/airlockrun/sol v0.1.8-rc.11 h1:FFSS+sGj48uFRCAoL+gwR5f3OybtyVqHc0aVPkBdhLo=
-github.com/airlockrun/sol v0.1.8-rc.11/go.mod h1:MmLgT/0nUfPg/60Uh8WW4c+ZSBCZeTOM4p1gOy7exdQ=
+github.com/airlockrun/goai v0.1.5 h1:oZObsx18bOz1Spw+N/IvC84AIC8nTBBCDRXFSu5GBfg=
+github.com/airlockrun/goai v0.1.5/go.mod h1:bwFi12cS+TAyr8SjW7s48WMnsuKWx8PeNcxbIWJ4drM=
+github.com/airlockrun/sol v0.1.8 h1:HFWlqVJX/t+sP+qN+kTeRu8ckZpDT+n8jyLXoOhPzrg=
+github.com/airlockrun/sol v0.1.8/go.mod h1:xUR51TZGIONfjsVAhZBYGfH1Szr9N5QSmkt5mBHdKVM=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
