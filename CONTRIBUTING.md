@@ -22,13 +22,12 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 
 ## Scope
 
-agentsdk is the public Go SDK that user-built agents import. The current `v0.4.0-rc.N` line is pre-public and may carry coordinated breaking migrations between RCs. Published stable releases preserve their author-facing API compatibility.
+agentsdk is the public Go SDK that user-built agents import. The `v0.4` line is stable and preserves its author-facing API compatibility.
 
 Incompatible changes require an approved API Discussion, a clear migration plan,
-and a new RC while the SDK series remains pre-public. The API compatibility
-check reports every incompatible change and permits it only for a newer
-pre-1.0 prerelease in a series with no stable tag; stable compatibility series
-reject it. Internal code can be refactored freely.
+and a new compatibility series. The API compatibility check reports every
+incompatible change and rejects it within a stable compatibility series.
+Internal code can be refactored freely.
 
 If you have an API improvement in mind, please open a Discussion before writing code so we can talk through compatibility implications first.
 
