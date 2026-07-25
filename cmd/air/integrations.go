@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"strings"
@@ -378,39 +380,233 @@ func consumeIntegrationTargetFlag(args []string, index *int, flags *integrationT
 	return true, nil
 }
 
-func probeMCP(rawURL string) error {
-	u, err := url.Parse(rawURL)
-	if err != nil || u.IsAbs() == false || (u.Scheme != "http" && u.Scheme != "https") {
-		return errors.New("MCP URL must be an absolute HTTP or HTTPS URL")
+type mcpProbeTool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
+var mcpProbeNonPublicPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("100:0:0:1::/64"),
+	netip.MustParsePrefix("2001:2::/48"),
+	netip.MustParsePrefix("2001:10::/28"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+	netip.MustParsePrefix("5f00::/16"),
+}
+
+type mcpProbeAuth struct {
+	Status                    string   `json:"status"`
+	DynamicClientRegistration string   `json:"dynamicClientRegistration"`
+	LikelyAuthMode            string   `json:"likelyAuthMode"`
+	UnavailableAuthModes      []string `json:"unavailableAuthModes,omitempty"`
+	AuthorizationServers      []string `json:"authorizationServers,omitempty"`
+	AuthorizationURL          string   `json:"authorizationURL,omitempty"`
+	TokenURL                  string   `json:"tokenURL,omitempty"`
+	RegistrationEndpoint      string   `json:"registrationEndpoint,omitempty"`
+	ScopesSupported           []string `json:"scopesSupported,omitempty"`
+	Message                   string   `json:"message"`
+}
+
+type mcpProbeResult struct {
+	URL          string         `json:"url"`
+	MCPStatus    string         `json:"mcpStatus"`
+	MCPError     string         `json:"mcpError,omitempty"`
+	Instructions string         `json:"instructions,omitempty"`
+	Tools        []mcpProbeTool `json:"tools"`
+	Auth         mcpProbeAuth   `json:"auth"`
+}
+
+func assessMCPAuth(ctx context.Context, httpClient *http.Client, rawURL string) mcpProbeAuth {
+	discovery, err := mcp.DiscoverOAuthMetadata(ctx, httpClient, rawURL)
+	if err != nil {
+		return mcpProbeAuth{
+			Status:                    "unknown",
+			DynamicClientRegistration: "unknown",
+			LikelyAuthMode:            "unknown",
+			Message:                   "OAuth metadata could not be fully discovered; the authentication mode is unknown: " + err.Error(),
+		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	client := mcp.NewClient()
-	defer client.DisconnectAll()
-	if err := client.Connect(ctx, mcp.ServerConfig{Name: "probe", Transport: "http", URL: rawURL}); err != nil {
-		return err
+
+	scopes := discovery.ProtectedResource.ScopesSupported
+	if len(scopes) == 0 {
+		scopes = discovery.Metadata.ScopesSupported
 	}
-	type probeTool struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		InputSchema json.RawMessage `json:"inputSchema"`
+	auth := mcpProbeAuth{
+		Status:               "oauth_metadata_discovered",
+		AuthorizationServers: discovery.ProtectedResource.AuthorizationServers,
+		AuthorizationURL:     discovery.Metadata.AuthorizationEndpoint,
+		TokenURL:             discovery.Metadata.TokenEndpoint,
+		ScopesSupported:      scopes,
 	}
-	result := struct {
-		URL          string      `json:"url"`
-		Instructions string      `json:"instructions,omitempty"`
-		Tools        []probeTool `json:"tools"`
-	}{URL: rawURL, Instructions: client.GetServerInstructions("probe")}
-	for _, item := range client.GetTools().Ordered(nil) {
-		result.Tools = append(result.Tools, probeTool{
-			Name: strings.TrimPrefix(item.Name, "probe_"), Description: item.Description, InputSchema: item.InputSchema,
-		})
+	if discovery.Metadata.RegistrationEndpoint == "" {
+		auth.DynamicClientRegistration = "not_advertised"
+		auth.LikelyAuthMode = "MCPAuthOAuth"
+		auth.UnavailableAuthModes = []string{"MCPAuthOAuthDiscovery"}
+		auth.Message = "OAuth endpoints were discovered, but the authorization server does not advertise a dynamic client registration endpoint. MCPAuthOAuthDiscovery cannot be used; MCPAuthOAuth is the likely mode."
+		return auth
 	}
+
+	auth.DynamicClientRegistration = "advertised"
+	auth.LikelyAuthMode = "MCPAuthOAuthDiscovery"
+	auth.RegistrationEndpoint = discovery.Metadata.RegistrationEndpoint
+	auth.Message = "OAuth and dynamic client registration are advertised. MCPAuthOAuthDiscovery is the likely mode; registration was not attempted."
+	return auth
+}
+
+func newMCPProbeHTTPClient(serverURL *url.URL) *http.Client {
+	allowLoopback := isMCPProbeLoopback(serverURL.Hostname())
+	dialer := &net.Dialer{}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		resolved, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		var dialErr error
+		for _, candidate := range resolved {
+			if !mcpProbeAddressAllowed(candidate.IP, allowLoopback) {
+				continue
+			}
+			conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+			if err == nil {
+				return conn, nil
+			}
+			dialErr = err
+		}
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		return nil, errors.New("OAuth metadata host does not resolve to an allowed address")
+	}
+	return &http.Client{
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			if len(via) > 0 && !sameMCPProbeOrigin(via[0].URL, req.URL) {
+				return errors.New("cross-origin OAuth metadata redirect is not allowed")
+			}
+			return nil
+		},
+	}
+}
+
+func mcpProbeAddressAllowed(ip net.IP, allowLoopback bool) bool {
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	address = address.Unmap()
+	if address.IsLoopback() {
+		return allowLoopback
+	}
+	if !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() || address.IsUnspecified() {
+		return false
+	}
+	for _, prefix := range mcpProbeNonPublicPrefixes {
+		if prefix.Contains(address) {
+			return false
+		}
+	}
+	return true
+}
+
+func isMCPProbeLoopback(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func sameMCPProbeOrigin(left, right *url.URL) bool {
+	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Hostname(), right.Hostname()) && mcpProbePort(left) == mcpProbePort(right)
+}
+
+func mcpProbePort(u *url.URL) string {
+	if u.Port() != "" {
+		return u.Port()
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
+
+func printMCPProbe(result mcpProbeResult) error {
 	encoded, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return err
 	}
 	fmt.Println(string(encoded))
 	return nil
+}
+
+func probeMCP(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.IsAbs() == false || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("MCP URL must be an absolute HTTP or HTTPS URL")
+	}
+	if u.Scheme != "https" && !isMCPProbeLoopback(u.Hostname()) {
+		return errors.New("MCP URL must use HTTPS except for loopback development")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	httpClient := newMCPProbeHTTPClient(u)
+	authResult := make(chan mcpProbeAuth, 1)
+	go func() {
+		authResult <- assessMCPAuth(ctx, httpClient, rawURL)
+	}()
+	client := mcp.NewClient()
+	defer client.DisconnectAll()
+	if err := client.Connect(ctx, mcp.ServerConfig{Name: "probe", Transport: "http", URL: rawURL, HTTPClient: httpClient}); err != nil {
+		var clientErr *mcp.MCPClientError
+		if errors.As(err, &clientErr) && clientErr.StatusCode == http.StatusUnauthorized {
+			return printMCPProbe(mcpProbeResult{
+				URL:       rawURL,
+				MCPStatus: "authentication_required",
+				MCPError:  err.Error(),
+				Tools:     make([]mcpProbeTool, 0),
+				Auth:      <-authResult,
+			})
+		}
+		cancel()
+		<-authResult
+		return err
+	}
+	result := mcpProbeResult{
+		URL:          rawURL,
+		MCPStatus:    "connected",
+		Instructions: client.GetServerInstructions("probe"),
+		Tools:        make([]mcpProbeTool, 0),
+		Auth:         <-authResult,
+	}
+	for _, item := range client.GetTools().Ordered(nil) {
+		result.Tools = append(result.Tools, mcpProbeTool{
+			Name: strings.TrimPrefix(item.Name, "probe_"), Description: item.Description, InputSchema: item.InputSchema,
+		})
+	}
+	return printMCPProbe(result)
 }
 
 func printProtoJSON(message proto.Message) error {

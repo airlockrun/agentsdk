@@ -13,11 +13,22 @@ go tool air mcp tools github
 go tool air mcp call github search_repos --args '{"query":"airlock"}'
 ```
 
-`mcp probe` connects directly to a URL and is useful before registration. The
-other commands resolve a deployment target through `.airlock/local/agent.toml`
-for local development or the build-bound environment in hosted codegen. A
-named remote binds one Airlock URL and one stable agent ID, so one workspace can
-address production and development agents on the same or different instances:
+`mcp probe` connects directly to a URL and reports the public tool list plus a
+passive OAuth assessment. `auth.dynamicClientRegistration` is `advertised`,
+`not_advertised`, or `unknown`; the probe never attempts to register a client.
+When OAuth endpoints are discovered without DCR, the output marks
+`MCPAuthOAuthDiscovery` unavailable and identifies `MCPAuthOAuth` as the likely
+mode, including the discovered authorization and token URLs. An `unknown`
+assessment means the auth mode must come from current server documentation; it
+does not mean `MCPAuthNone`. `mcpStatus` is `connected` when the public handshake
+succeeds and `authentication_required` when the endpoint returns 401; the latter
+still returns the auth assessment with an empty tool list.
+
+The other commands resolve a deployment target through
+`.airlock/local/agent.toml` for local development or the build-bound environment
+in hosted codegen. A named remote binds one Airlock URL and one stable agent ID,
+so one workspace can address production and development agents on the same or
+different instances:
 
 ```bash
 go tool air deploy --remote dev --url https://airlock.example.com --agent my-agent-dev -m "Configure development integrations"
