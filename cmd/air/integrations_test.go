@@ -1,16 +1,43 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
+	"github.com/airlockrun/goai/mcp"
 	"google.golang.org/protobuf/encoding/protojson"
 )
+
+func TestMCPProbeAddressAllowed(t *testing.T) {
+	tests := []struct {
+		address       string
+		allowLoopback bool
+		want          bool
+	}{
+		{address: "8.8.8.8", want: true},
+		{address: "127.0.0.1", want: false},
+		{address: "127.0.0.1", allowLoopback: true, want: true},
+		{address: "10.0.0.1", want: false},
+		{address: "100.64.0.1", want: false},
+		{address: "198.18.0.1", want: false},
+		{address: "169.254.169.254", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.address, func(t *testing.T) {
+			if got := mcpProbeAddressAllowed(net.ParseIP(tt.address), tt.allowLoopback); got != tt.want {
+				t.Errorf("mcpProbeAddressAllowed(%s, %v) = %v, want %v", tt.address, tt.allowLoopback, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestResolveIntegrationTargetCodegen(t *testing.T) {
 	t.Setenv("AIRLOCK_API_URL", "https://airlock.example/")
@@ -221,6 +248,200 @@ func TestConnectionRequestReturnsErrorForUpstreamFailure(t *testing.T) {
 	if output != "denied" {
 		t.Fatalf("stdout = %q", output)
 	}
+}
+
+func TestProbeMCPReportsOAuthMode(t *testing.T) {
+	tests := []struct {
+		name                 string
+		oauthMetadata        bool
+		registrationEndpoint bool
+		mcpUnauthorized      bool
+		wantMCPStatus        string
+		wantToolCount        int
+		wantStatus           string
+		wantDCR              string
+		wantMode             string
+		wantUnavailable      string
+		wantMessage          string
+	}{
+		{
+			name:                 "DCR advertised",
+			oauthMetadata:        true,
+			registrationEndpoint: true,
+			wantMCPStatus:        "connected",
+			wantToolCount:        1,
+			wantStatus:           "oauth_metadata_discovered",
+			wantDCR:              "advertised",
+			wantMode:             "MCPAuthOAuthDiscovery",
+			wantMessage:          "registration was not attempted",
+		},
+		{
+			name:            "DCR not advertised",
+			oauthMetadata:   true,
+			wantMCPStatus:   "connected",
+			wantToolCount:   1,
+			wantStatus:      "oauth_metadata_discovered",
+			wantDCR:         "not_advertised",
+			wantMode:        "MCPAuthOAuth",
+			wantUnavailable: "MCPAuthOAuthDiscovery",
+			wantMessage:     "does not advertise a dynamic client registration endpoint",
+		},
+		{
+			name:          "auth unknown",
+			wantMCPStatus: "connected",
+			wantToolCount: 1,
+			wantStatus:    "unknown",
+			wantDCR:       "unknown",
+			wantMode:      "unknown",
+			wantMessage:   "authentication mode is unknown",
+		},
+		{
+			name:            "authentication required",
+			oauthMetadata:   true,
+			mcpUnauthorized: true,
+			wantMCPStatus:   "authentication_required",
+			wantToolCount:   0,
+			wantStatus:      "oauth_metadata_discovered",
+			wantDCR:         "not_advertised",
+			wantMode:        "MCPAuthOAuth",
+			wantUnavailable: "MCPAuthOAuthDiscovery",
+			wantMessage:     "does not advertise a dynamic client registration endpoint",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var registrationRequests atomic.Int32
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/.well-known/oauth-protected-resource/mcp/v1":
+					if r.Method != http.MethodGet {
+						t.Errorf("protected resource metadata method = %s", r.Method)
+					}
+					if !tt.oauthMetadata {
+						http.NotFound(w, r)
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(mcp.OAuthProtectedResourceMetadata{
+						Resource:             server.URL + "/mcp/v1",
+						AuthorizationServers: []string{server.URL + "/"},
+						ScopesSupported:      []string{"mail.read"},
+					})
+					return
+				case "/.well-known/oauth-protected-resource":
+					http.NotFound(w, r)
+					return
+				case "/.well-known/oauth-authorization-server":
+					if r.Method != http.MethodGet {
+						t.Errorf("authorization server metadata method = %s", r.Method)
+					}
+					w.Header().Set("Content-Type", "application/json")
+					metadata := mcp.AuthorizationServerMetadata{
+						Issuer:                        server.URL,
+						AuthorizationEndpoint:         server.URL + "/authorize",
+						TokenEndpoint:                 server.URL + "/token",
+						CodeChallengeMethodsSupported: []string{"S256"},
+					}
+					if tt.registrationEndpoint {
+						metadata.RegistrationEndpoint = server.URL + "/register"
+					}
+					_ = json.NewEncoder(w).Encode(metadata)
+					return
+				case "/register":
+					registrationRequests.Add(1)
+					http.Error(w, "registration must not be attempted", http.StatusInternalServerError)
+					return
+				case "/mcp/v1":
+					serveProbeMCP(w, r, tt.mcpUnauthorized)
+					return
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			output := captureCommandStdout(t, func() error { return probeMCP(server.URL + "/mcp/v1") })
+			var envelope map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(output), &envelope); err != nil {
+				t.Fatalf("decode probe envelope: %v\n%s", err, output)
+			}
+			for _, field := range []string{"url", "mcpStatus", "tools", "auth"} {
+				if _, ok := envelope[field]; !ok {
+					t.Errorf("probe output missing %q", field)
+				}
+			}
+			var authFields map[string]json.RawMessage
+			if err := json.Unmarshal(envelope["auth"], &authFields); err != nil {
+				t.Fatalf("decode auth envelope: %v", err)
+			}
+			for _, field := range []string{"status", "dynamicClientRegistration", "likelyAuthMode", "message"} {
+				if _, ok := authFields[field]; !ok {
+					t.Errorf("auth output missing %q", field)
+				}
+			}
+			var result mcpProbeResult
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatalf("decode probe output: %v\n%s", err, output)
+			}
+			if result.MCPStatus != tt.wantMCPStatus {
+				t.Errorf("MCPStatus = %q, want %q", result.MCPStatus, tt.wantMCPStatus)
+			}
+			if len(result.Tools) != tt.wantToolCount || (tt.wantToolCount > 0 && result.Tools[0].Name != "lookup") {
+				t.Fatalf("Tools = %#v", result.Tools)
+			}
+			if result.Auth.Status != tt.wantStatus || result.Auth.DynamicClientRegistration != tt.wantDCR || result.Auth.LikelyAuthMode != tt.wantMode {
+				t.Errorf("Auth = %#v", result.Auth)
+			}
+			if tt.wantUnavailable != "" && (len(result.Auth.UnavailableAuthModes) != 1 || result.Auth.UnavailableAuthModes[0] != tt.wantUnavailable) {
+				t.Errorf("UnavailableAuthModes = %v", result.Auth.UnavailableAuthModes)
+			}
+			if !strings.Contains(result.Auth.Message, tt.wantMessage) {
+				t.Errorf("Message = %q, want substring %q", result.Auth.Message, tt.wantMessage)
+			}
+			if registrationRequests.Load() != 0 {
+				t.Errorf("registration requests = %d, want 0", registrationRequests.Load())
+			}
+		})
+	}
+}
+
+func serveProbeMCP(w http.ResponseWriter, r *http.Request, unauthorized bool) {
+	if unauthorized {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="mcp"`)
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	if r.Method == http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var request struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if request.Method == "notifications/initialized" {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	results := map[string]any{
+		"initialize": map[string]any{
+			"protocolVersion": mcp.LatestProtocolVersion,
+			"instructions":    "Use carefully.",
+		},
+		"tools/list": map[string]any{
+			"tools": []map[string]any{{
+				"name": "lookup", "description": "Look up a value", "inputSchema": map[string]any{"type": "object"},
+			}},
+		},
+		"resources/list": map[string]any{"resources": []any{}},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": results[request.Method]})
 }
 
 func captureCommandStdout(t *testing.T, run func() error) string {

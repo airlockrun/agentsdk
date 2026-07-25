@@ -580,7 +580,7 @@ github := agent.RegisterMCP(&agentsdk.MCP{
     Slug:     "github",
     Name:     "GitHub",
     URL:      "https://api.githubcopilot.com/mcp",
-    AuthMode: agentsdk.MCPAuthOAuthDiscovery, // RFC 9728 auto-discovery
+    AuthMode: agentsdk.MCPAuthOAuthDiscovery, // RFC 9728/8414 discovery + RFC 7591 DCR
     Access:   agentsdk.AccessUser,
 })
 
@@ -597,8 +597,11 @@ if err != nil {
 same as `ConnectionHandle.Request` — detect it with the same two-value
 `agentsdk.IsAuthRequired(err)` pattern.
 
-**`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 auto), `MCPAuthOAuth`
-(manual URLs), `MCPAuthToken`, `MCPAuthNone`.
+**`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 plus advertised RFC 7591
+DCR), `MCPAuthOAuth` (manual URLs/client), `MCPAuthToken`, `MCPAuthNone`. Run
+`go tool air mcp probe <url>` first. Use discovery only when DCR is `advertised`;
+without DCR, manual OAuth with the reported endpoints is likely. `unknown` does
+not mean no auth. See **`/libs/agentsdk/reference/integrations.md`**.
 
 **`AuthInjection`** — same shape and options as
 `RegisterConnection.AuthInjection` (bearer / api_key_header / path_prefix /
