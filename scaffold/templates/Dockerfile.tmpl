@@ -28,7 +28,7 @@ COPY . .
 # Tailwind v4 standalone + DaisyUI live under the same repo-local path the
 # local CLI installer writes, so styles/app.css can load the plugin by one
 # relative path in both local builds and Docker builds.
-RUN mkdir -p .airlock/toolchain/bin .airlock/toolchain/lib/tailwind views/static
+RUN mkdir -p .airlock/toolchain/bin .airlock/toolchain/lib/tailwind views/static internal/db db/queries db/migrations
 COPY --from=sqlc /workspace/sqlc /build/.airlock/toolchain/bin/sqlc
 ADD https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64 /build/.airlock/toolchain/bin/tailwindcss
 ADD --chmod=0644 https://github.com/saadeghi/daisyui/releases/download/${DAISYUI_VERSION}/daisyui.mjs       /build/.airlock/toolchain/lib/tailwind/daisyui.mjs
