@@ -182,6 +182,9 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(dockerfileStr, "FROM sqlc/sqlc:1.30.0 AS sqlc") || !strings.Contains(dockerfileStr, ".airlock/toolchain/bin/sqlc generate") {
 		t.Error("Dockerfile missing pinned conditional sqlc generation")
 	}
+	if !strings.Contains(dockerfileStr, "views/static internal/db db/queries db/migrations") {
+		t.Error("Dockerfile must create optional generated and database directories")
+	}
 	if strings.Contains(dockerfileStr, "--from=libs") {
 		t.Error("Dockerfile must not reference the old libs-owned/libs-ext contexts")
 	}
