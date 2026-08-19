@@ -98,12 +98,14 @@ func withGoWall(ctx context.Context, gw *goWall) context.Context {
 func startJSGuard(ctx context.Context, vm *goja.Runtime, gw *goWall) (stop func()) {
 	done := make(chan struct{})
 	startedAt := time.Now()
+	cpuLimit := jsCPULimit
+	monitorInterval := jsMonitorInterval
 	// Go-call time already accumulated before this run_js call must not
 	// count toward this call's JS budget.
 	gwBase := gw.elapsed()
 
 	go func() {
-		t := time.NewTicker(jsMonitorInterval)
+		t := time.NewTicker(monitorInterval)
 		defer t.Stop()
 		for {
 			select {
@@ -114,7 +116,7 @@ func startJSGuard(ctx context.Context, vm *goja.Runtime, gw *goWall) (stop func(
 				return
 			case <-t.C:
 				jsTime := time.Since(startedAt) - (gw.elapsed() - gwBase)
-				if jsTime > jsCPULimit {
+				if jsTime > cpuLimit {
 					vm.Interrupt(errJSCPU)
 					return
 				}

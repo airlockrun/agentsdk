@@ -39,6 +39,16 @@ func (ew *EventWriter) ensureHeaders() {
 	}
 }
 
+// flushHeaders commits the streaming response before the first event is
+// available. This lets the caller retain control of a run while the model is
+// still waiting to produce output.
+func (ew *EventWriter) flushHeaders() {
+	ew.mu.Lock()
+	defer ew.mu.Unlock()
+	ew.ensureHeaders()
+	ew.flusher.Flush()
+}
+
 func (ew *EventWriter) writeLine(line ndjsonLine) error {
 	ew.mu.Lock()
 	defer ew.mu.Unlock()

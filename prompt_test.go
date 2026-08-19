@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai"
@@ -31,6 +33,32 @@ type greetIn struct {
 
 type greetOut struct {
 	Greeting string `json:"greeting"`
+}
+
+type orderedResponseRecorder struct {
+	*httptest.ResponseRecorder
+	mu         sync.Mutex
+	operations []string
+}
+
+func (w *orderedResponseRecorder) Write(body []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.operations = append(w.operations, "write")
+	return w.ResponseRecorder.Write(body)
+}
+
+func (w *orderedResponseRecorder) Flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.operations = append(w.operations, "flush")
+	w.ResponseRecorder.Flush()
+}
+
+func (w *orderedResponseRecorder) snapshot() (int, []string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.Code, append([]string(nil), w.operations...)
 }
 
 // greetTool builds a greet-shaped tool.Tool for the test suite.
@@ -54,14 +82,18 @@ func TestPromptHandler(t *testing.T) {
 	}
 	body, _ := json.Marshal(input)
 
-	w := httptest.NewRecorder()
+	w := &orderedResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 	r := httptest.NewRequest("POST", "/prompt", bytes.NewReader(body))
 	r.Header.Set("X-Run-ID", "run-prompt-1")
 
 	handlePrompt(a)(w, r)
 
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
+	code, operations := w.snapshot()
+	if code != 200 {
+		t.Fatalf("expected 200, got %d", code)
+	}
+	if len(operations) == 0 || operations[0] != "flush" {
+		t.Fatalf("first response operation = %v, want header flush before body write", operations)
 	}
 
 	// Should have NDJSON response.
@@ -74,6 +106,115 @@ func TestPromptHandler(t *testing.T) {
 	completeReqs := mock.RequestsByPath("/api/agent/run/complete")
 	if len(completeReqs) != 1 {
 		t.Fatalf("expected 1 complete request, got %d", len(completeReqs))
+	}
+}
+
+func TestPromptHandlerFlushesHeadersBeforeModelSetupCompletes(t *testing.T) {
+	a, mock := testAgent(t)
+	modelStarted := make(chan struct{})
+	releaseModel := make(chan struct{})
+	mock.BeforeLLMResponse = func() {
+		close(modelStarted)
+		<-releaseModel
+	}
+
+	input := wire.PromptInput{Messages: []message.Message{message.NewUserMessage("hello")}}
+	body, _ := json.Marshal(input)
+	w := &orderedResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
+	r := httptest.NewRequest(http.MethodPost, "/prompt", bytes.NewReader(body))
+	r.Header.Set("X-Run-ID", "run-prompt-blocked-model")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handlePrompt(a)(w, r)
+	}()
+
+	select {
+	case <-modelStarted:
+	case <-time.After(5 * time.Second):
+		close(releaseModel)
+		t.Fatal("model request did not start")
+	}
+	code, operations := w.snapshot()
+	if code != http.StatusOK || len(operations) != 1 || operations[0] != "flush" {
+		close(releaseModel)
+		t.Fatalf("response before model setup completed: code=%d operations=%v", code, operations)
+	}
+
+	close(releaseModel)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("prompt handler did not finish")
+	}
+}
+
+func TestPromptHandlerFlushesHeadersOverHTTPBeforeModelSetupCompletes(t *testing.T) {
+	a, mock := testAgent(t)
+	modelStarted := make(chan struct{})
+	releaseModel := make(chan struct{})
+	defer func() {
+		select {
+		case <-releaseModel:
+		default:
+			close(releaseModel)
+		}
+	}()
+	mock.BeforeLLMResponse = func() {
+		close(modelStarted)
+		<-releaseModel
+	}
+
+	server := httptest.NewServer(handlePrompt(a))
+	defer server.Close()
+	input := wire.PromptInput{Messages: []message.Message{message.NewUserMessage("hello")}}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, server.URL, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("X-Run-ID", "run-prompt-http-blocked-model")
+
+	response := make(chan *http.Response, 1)
+	requestErr := make(chan error, 1)
+	go func() {
+		resp, err := server.Client().Do(req)
+		if err != nil {
+			requestErr <- err
+			return
+		}
+		response <- resp
+	}()
+
+	select {
+	case <-modelStarted:
+	case err := <-requestErr:
+		t.Fatalf("prompt request before model setup: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("model request did not start")
+	}
+
+	var resp *http.Response
+	select {
+	case resp = <-response:
+	case err := <-requestErr:
+		t.Fatalf("prompt request: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("HTTP client did not receive headers while model setup was blocked")
+	}
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("response status/content-type = %d/%q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+
+	close(releaseModel)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		t.Fatalf("read prompt response: %v", err)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close prompt response: %v", err)
 	}
 }
 

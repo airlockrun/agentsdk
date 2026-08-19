@@ -25,6 +25,9 @@ type Mock struct {
 
 	// LLMResponse is the NDJSON response returned by the model endpoint.
 	LLMResponse []byte
+	// BeforeLLMResponse, when set, runs after the request is recorded and before
+	// response headers or events are written.
+	BeforeLLMResponse func()
 }
 
 // New creates a mock Airlock server and returns it with its base URL.
@@ -86,6 +89,9 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 
 	mux.HandleFunc("POST /api/agent/llm/stream", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.BeforeLLMResponse != nil {
+			m.BeforeLLMResponse()
+		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		llmResponse := m.LLMResponse
 		if response != nil {

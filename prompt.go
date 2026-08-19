@@ -110,6 +110,11 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 			}
 		}()
 
+		// Commit the response before waiting on sync, session loading, or the
+		// model. Airlock can then return the run ID and expose cancellation even
+		// when the first NDJSON event takes a long time to arrive.
+		ew.flushHeaders()
+
 		// Self-heal a stale config cache. Airlock stamps its current config
 		// fingerprint on every dispatch; a mismatch means a model-slot or slug
 		// change landed without firing /refresh. Resync before building the
@@ -335,18 +340,24 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 // Agent code that throws inside run_js never propagates here; goja errors
 // are caught at the tool boundary and returned as tool.Result.
 func handleRunResult(ctx context.Context, run *run, ew *EventWriter, result *sol.RunResult, err error) {
-	if err != nil {
-		ew.WriteError(err)
-		run.complete(ctx, "error", err.Error(), wire.ErrorKindPlatform, "")
-		return
-	}
-
-	// Emit rich messages for Airlock to store (before finish/suspended signals).
-	if len(result.NewMessages) > 0 {
+	if result != nil && len(result.NewMessages) > 0 {
 		ew.writeLine(ndjsonLine{
 			Type: "messages",
 			Data: result.NewMessages,
 		})
+	}
+	if err != nil {
+		if result != nil && result.Status == sol.RunCancelled {
+			run.complete(ctx, "error", "run cancelled", "", "")
+			return
+		}
+		ew.WriteError(err)
+		run.complete(ctx, "error", err.Error(), wire.ErrorKindPlatform, "")
+		return
+	}
+	if result == nil {
+		failPromptRun(ctx, run, ew, errors.New("sol returned no run result"))
+		return
 	}
 
 	switch result.Status {
