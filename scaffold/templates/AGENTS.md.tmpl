@@ -47,7 +47,7 @@ assumption in `NOTES.md`.
 
 ```
 {agent-repo}/
-├── main.go            # newAgent() injects dependencies and registers bound methods
+├── main.go            # newAgent() defines declarations and wires late-bound handles
 ├── main_test.go       # Composition smoke test via agent.Handler()
 ├── handlers/          # CONTROLLERS — HTTP handlers; import domain + views
 │   ├── home.go
@@ -71,12 +71,24 @@ assumption in `NOTES.md`.
 └── NOTES.md           # Agent-specific design log
 ```
 
-**Keep `main.go` thin.** `newAgent()` is the composition root: register SDK
-handles, construct services, inject those values directly into each consuming
-package's constructor, and register bound handler and tool methods. Business
-logic lives in domain packages, never inline in main. `main()` only calls
-`newAgent().Serve()`; keep that split so tests can build the complete agent and
-serve `agent.Handler()`.
+**Keep `main.go` thin.** `newAgent()` is the definition-only composition root:
+register SDK handles, construct services, inject those values directly into
+each consuming package's constructor, and register bound handler and tool
+methods. It must not read runtime environment, execute database operations,
+make network calls, or start goroutines. `agentsdk.New` performs none of that
+runtime work, and Airlock invokes the same factory offline to obtain the
+canonical manifest. Business logic lives in domain packages, never inline in
+main. `main()` only calls `newAgent().Serve()`; `Serve` freezes declarations,
+starts runtime dependencies and migrations, syncs with Airlock, runs named
+process-local `OnStart` hooks, and then serves.
+
+`Agent.DB()` and registration APIs return late-bound handles that are safe to
+pass into constructors in `newAgent`. Operations on runtime-backed handles are
+unavailable until startup. Use `OnStart(name, hook)` for disposable
+process-local initialization that needs the started and synchronized runtime;
+durable work belongs in a registered job. `Agent.Manifest()` freezes and returns
+the complete canonical declaration, and `AIRLOCK_AGENT_MODE=manifest` emits it
+without runtime environment, database, migrations, or network.
 
 ## MVC: handlers are the integration point
 
@@ -164,9 +176,10 @@ agent.RegisterTool(tool.Typed[ListIn, ListOut]("list").
 Use relative paths (`/auth`, `/settings`) for links within the same agent UI.
 `agentsdk.AgentURL()` / `agentsdk.AgentURLFromContext(ctx)` return the agent's
 public origin for absolute URLs that leave the request context, such as emails,
-third-party callbacks, or chat messages. These accessors return an error in
-tests that call `agent.Handler()` without syncing with Airlock first; render
-pages so they can omit absolute links when the URL is unavailable.
+third-party callbacks, or chat messages. These accessors are unavailable during
+definition and offline manifest inspection. `agenttest.New` returns a synced
+agent; render pages so they can omit absolute links when the URL is unavailable
+in narrower unit tests.
 
 ## Build chain
 
@@ -233,8 +246,9 @@ Tests must not load secrets, connection credentials, or MCP credentials from
   `agenttest.New(t, newAgent)` and serve `env.Agent.Handler()` through
   `httptest` so a small request set proves the complete dependency graph,
   routes, and static declarations are wired. The helper stands up a mock
-  Airlock, selects a test database, and sets every `AIRLOCK_*` variable before
-  it invokes `newAgent`:
+  Airlock and selects a test database only after it invokes `newAgent` with
+  runtime environment cleared. It then starts the runtime, applies migrations,
+  syncs declarations, runs named `OnStart` hooks, and returns a ready agent:
 
   ```go
   func TestAgentComposition(t *testing.T) {
@@ -260,12 +274,14 @@ Tests must not load secrets, connection credentials, or MCP credentials from
   failures commonly occur.
 - **DB-backed tests:** `agenttest.New` uses `$TEST_DB_URL` only when supplied;
   otherwise it starts a throwaway `pgvector/pgvector:pg17` container. It never
-  connects to an inherited `$AIRLOCK_DB_URL`. `agentsdk.New` resets the schema
-  and applies source migrations from the enclosing module's `db/migrations`
-  before it returns inside the factory, including when the test belongs to a
-  subpackage. Never change process cwd to find migrations. Dependency
-  constructors and registrations can immediately use the migrated `agent.DB()`. The
-  helper closes the pool and test services during cleanup.
+  connects to an inherited `$AIRLOCK_DB_URL`. The factory may wire the
+  late-bound `agent.DB()` into dependency constructors but must not query it.
+  After the factory returns, startup resets the schema and applies source
+  migrations from the enclosing module's `db/migrations`, including when the
+  test belongs to a subpackage. Never change process cwd to find migrations.
+  `agenttest.New` returns only after sync and `OnStart` hooks, so tests can use
+  the migrated database immediately. The helper closes the pool and test
+  services during cleanup.
 
   ```go
   func TestThing(t *testing.T) {

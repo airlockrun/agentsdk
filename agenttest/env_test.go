@@ -1,6 +1,7 @@
 package agenttest_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -13,7 +14,7 @@ import (
 	"github.com/airlockrun/agentsdk/agenttest"
 )
 
-func TestNewSetsDatabaseAndMigratesBeforeFactoryContinues(t *testing.T) {
+func TestNewDefinesBeforeRuntimeAndStartsMigratedDatabase(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/agent\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -39,36 +40,41 @@ DROP TABLE bootstrap_order;
 	inherited := "postgres://production:secret@127.0.0.1:1/production"
 	t.Setenv("AIRLOCK_DB_URL", inherited)
 
-	var migratedTable string
-	agenttest.New(t, func() *agentsdk.Agent {
+	var startupTable string
+	env := agenttest.New(t, func() *agentsdk.Agent {
 		if os.Getenv("AIRLOCK_DB_URL") == inherited {
 			t.Fatal("factory inherited AIRLOCK_DB_URL")
 		}
 		a := agentsdk.New(agentsdk.Config{Description: "test agent"})
-		var table string
-		if err := a.DB().QueryRowContext(t.Context(), `SELECT 'bootstrap_order'::regclass::text`).Scan(&table); err != nil {
-			t.Fatalf("migration was not applied before factory continued: %v", err)
-		}
-		migratedTable = table
-		rollback := errors.New("rollback")
-		err := a.DB().Transaction(t.Context(), nil, func(tx agentsdk.DBTX) error {
-			if _, err := tx.ExecContext(t.Context(), "INSERT INTO bootstrap_order (id) VALUES (1)"); err != nil {
-				return err
-			}
-			return rollback
+		a.OnStart("verify_migrations", func(ctx context.Context) error {
+			return a.DB().QueryRowContext(ctx, `SELECT 'bootstrap_order'::regclass::text`).Scan(&startupTable)
 		})
-		if !errors.Is(err, rollback) {
-			t.Fatalf("Transaction error = %v, want rollback sentinel", err)
-		}
-		var count int
-		if err := a.DB().QueryRowContext(t.Context(), "SELECT count(*) FROM bootstrap_order").Scan(&count); err != nil {
-			t.Fatalf("count rolled-back rows: %v", err)
-		}
-		if count != 0 {
-			t.Fatalf("rows after rollback = %d, want 0", count)
-		}
 		return a
 	})
+	if startupTable != "bootstrap_order" {
+		t.Fatalf("startup hook table = %q, want bootstrap_order", startupTable)
+	}
+	var migratedTable string
+	if err := env.Agent.DB().QueryRowContext(t.Context(), `SELECT 'bootstrap_order'::regclass::text`).Scan(&migratedTable); err != nil {
+		t.Fatalf("migration was not applied before runtime start completed: %v", err)
+	}
+	rollback := errors.New("rollback")
+	err := env.Agent.DB().Transaction(t.Context(), nil, func(tx agentsdk.DBTX) error {
+		if _, err := tx.ExecContext(t.Context(), "INSERT INTO bootstrap_order (id) VALUES (1)"); err != nil {
+			return err
+		}
+		return rollback
+	})
+	if !errors.Is(err, rollback) {
+		t.Fatalf("Transaction error = %v, want rollback sentinel", err)
+	}
+	var count int
+	if err := env.Agent.DB().QueryRowContext(t.Context(), "SELECT count(*) FROM bootstrap_order").Scan(&count); err != nil {
+		t.Fatalf("count rolled-back rows: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("rows after rollback = %d, want 0", count)
+	}
 
 	if migratedTable != "bootstrap_order" {
 		t.Fatalf("migrated table = %q, want bootstrap_order", migratedTable)

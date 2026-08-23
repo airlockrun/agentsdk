@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -33,6 +34,9 @@ import (
 // the running container's local copy is the working copy, S3 is the
 // durable record. See the agent-builder prompt for a full worked example.
 func (a *Agent) SyncDown(ctx context.Context, prefix, localDir string) error {
+	if !a.runtimeAvailable() {
+		return a.runtimeUnavailable("SyncDown")
+	}
 	prefix = strings.TrimRight(prefix, "/")
 	if prefix != "" {
 		if _, err := normalizePath(prefix); err != nil {
@@ -135,6 +139,9 @@ func (a *Agent) SyncDown(ctx context.Context, prefix, localDir string) error {
 //
 // Trusted: no access check (builder code that constructs paths itself).
 func (a *Agent) SyncUp(ctx context.Context, localDir, prefix string) error {
+	if !a.runtimeAvailable() {
+		return a.runtimeUnavailable("SyncUp")
+	}
 	prefix = strings.TrimRight(prefix, "/")
 	if prefix != "" {
 		if _, err := normalizePath(prefix); err != nil {
@@ -163,10 +170,13 @@ func (a *Agent) SyncUp(ctx context.Context, localDir, prefix string) error {
 		}
 
 		// Skip if remote already matches local.
-		if remote, err := a.StatFile(ctx, remotePath); err == nil {
+		remote, err := a.StatFile(ctx, remotePath)
+		if err == nil {
 			if remote.Size == info.Size() && !info.ModTime().After(remote.LastModified) {
 				return nil
 			}
+		} else if !errors.Is(err, ErrNotFound) {
+			return fmt.Errorf("agentsdk: SyncUp: stat %s: %w", remotePath, err)
 		}
 
 		f, err := os.Open(path)

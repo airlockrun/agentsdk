@@ -1,8 +1,11 @@
 package agentsdk
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -22,6 +25,7 @@ func TestSyncWithAirlock(t *testing.T) {
 		TokenURL:    "https://oauth2.googleapis.com/token",
 		Access:      AccessUser,
 	})
+	a.RegisterTool(addTool("lookup", "Look up a record"), AccessUser)
 	a.RegisterWebhook(&Webhook{
 		Path:        "github",
 		Handler:     func(ctx context.Context, data []byte, ew *EventWriter) error { return nil },
@@ -29,6 +33,20 @@ func TestSyncWithAirlock(t *testing.T) {
 		Header:      "X-Hub-Signature-256",
 		Description: "GitHub events",
 	})
+	a.RegisterRoute(&Route{
+		Method: http.MethodGet, Path: "/status", Access: AccessAdmin, Description: "Agent status",
+		Handler: func(http.ResponseWriter, *http.Request) error { return nil },
+	})
+	a.RegisterTopic(&Topic{Slug: "alerts", Description: "Alerts", Access: AccessUser})
+	a.RegisterDirectory("cache", DirectoryOpts{
+		Read: AccessAdmin, Write: AccessAdmin, List: AccessAdmin, Description: "Local cache",
+	})
+	a.RegisterExecEndpoint(&ExecEndpoint{Slug: "runner", Description: "Build runner", Access: AccessAdmin})
+	a.RegisterMCP(&MCP{
+		Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthNone, Access: AccessUser,
+	})
+	a.AddInstruction(&Instruction{Text: "Prefer concise answers.", Access: []Access{AccessUser}})
+	a.RegisterModel(&ModelSlot{Slug: "writer", Capability: CapText, Description: "Writing model"})
 	jobHandle := RegisterJob(a, testJobDefinition(1))
 	jobHandle.Cron(&JobCron[testJobInput]{
 		Slug:        "daily",
@@ -41,6 +59,9 @@ func TestSyncWithAirlock(t *testing.T) {
 		ContentType: "text/css",
 		Data:        []byte("body{}"),
 	})
+	a.RegisterEnvVar(&EnvVar{Slug: "api_key", Description: "API key", Secret: true})
+	a.OnStart("hydrate-cache", func(context.Context) error { return nil })
+	manifest := a.Manifest()
 
 	a.syncWithAirlock(context.Background())
 
@@ -57,11 +78,53 @@ func TestSyncWithAirlock(t *testing.T) {
 	if err := json.Unmarshal(syncReqs[0].Body, &body); err != nil {
 		t.Fatalf("decode sync body: %v", err)
 	}
+	expected, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(syncReqs[0].Body, expected) {
+		t.Fatalf("runtime sync differs from Manifest():\n sync: %s\nmanifest: %s", syncReqs[0].Body, expected)
+	}
+	if len(body.EnvVars) != 1 || body.EnvVars[0].Slug != "api_key" {
+		t.Fatalf("env vars = %+v", body.EnvVars)
+	}
+	wantAssetHash := fmt.Sprintf("%x", sha256.Sum256([]byte("body{}")))
+	if len(body.StaticAssets) != 1 || body.StaticAssets[0].Name != "app.01234567.css" || body.StaticAssets[0].Size != 6 || body.StaticAssets[0].SHA256 != wantAssetHash {
+		t.Fatalf("static assets = %+v", body.StaticAssets)
+	}
+	if len(body.StartupHooks) != 1 || body.StartupHooks[0].Name != "hydrate-cache" {
+		t.Fatalf("startup hooks = %+v", body.StartupHooks)
+	}
 	if len(body.Connections) != 1 || body.Connections[0].Slug != "gmail" {
 		t.Fatalf("expected gmail connection in sync batch, got %+v", body.Connections)
 	}
-	if len(body.Routes) != 1 || body.Routes[0].Path != "/static/{name}" || body.Routes[0].Method != http.MethodGet || body.Routes[0].Access != wire.AccessPublic {
-		t.Fatalf("expected public static route in sync batch, got %+v", body.Routes)
+	if len(body.Tools) != 1 || body.Tools[0].Name != "lookup" {
+		t.Fatalf("tools = %+v", body.Tools)
+	}
+	if len(body.Routes) != 2 || body.Routes[0].Path != "/static/{name}" || body.Routes[0].Method != http.MethodGet || body.Routes[0].Access != wire.AccessPublic || body.Routes[1].Path != "/status" {
+		t.Fatalf("routes = %+v", body.Routes)
+	}
+	if len(body.Topics) != 1 || body.Topics[0].Slug != "alerts" {
+		t.Fatalf("topics = %+v", body.Topics)
+	}
+	foundCache := false
+	for _, directory := range body.Directories {
+		foundCache = foundCache || directory.Path == "cache"
+	}
+	if !foundCache {
+		t.Fatalf("directories = %+v", body.Directories)
+	}
+	if len(body.ExecEndpoints) != 1 || body.ExecEndpoints[0].Slug != "runner" {
+		t.Fatalf("exec endpoints = %+v", body.ExecEndpoints)
+	}
+	if len(body.MCPServers) != 1 || body.MCPServers[0].Slug != "docs" {
+		t.Fatalf("MCP servers = %+v", body.MCPServers)
+	}
+	if len(body.Instructions) != 1 || body.Instructions[0].Text != "Prefer concise answers." {
+		t.Fatalf("instructions = %+v", body.Instructions)
+	}
+	if len(body.ModelSlots) != 1 || body.ModelSlots[0].Slug != "writer" {
+		t.Fatalf("model slots = %+v", body.ModelSlots)
 	}
 	if len(body.JobHandlers) != 1 {
 		t.Fatalf("job handlers = %d, want 1", len(body.JobHandlers))

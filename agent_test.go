@@ -11,40 +11,48 @@ import (
 	"github.com/airlockrun/agentsdk/wire"
 )
 
-func TestNewRequiresDatabaseURL(t *testing.T) {
+func TestStartRequiresDatabaseURL(t *testing.T) {
 	t.Setenv("AIRLOCK_AGENT_MODE", "")
 	t.Setenv("AIRLOCK_AGENT_ID", "test-agent")
 	t.Setenv("AIRLOCK_API_URL", "http://127.0.0.1")
 	t.Setenv("AIRLOCK_AGENT_TOKEN", "test-token")
 	t.Setenv("AIRLOCK_DB_URL", "")
 
-	defer func() {
-		got := fmt.Sprint(recover())
-		want := "agentsdk: required environment variable AIRLOCK_DB_URL is not set"
-		if got != want {
-			t.Fatalf("panic = %q, want %q", got, want)
-		}
+	a := New(Config{Description: "test"})
+	got := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		_ = a.Start(t.Context())
+		return nil
 	}()
-	New(Config{Description: "test"})
+	want := "agentsdk: required environment variable AIRLOCK_DB_URL is not set"
+	if fmt.Sprint(got) != want {
+		t.Fatalf("panic = %q, want %q", got, want)
+	}
+	if a.phase != agentClosed {
+		t.Fatalf("phase after startup panic = %v, want closed", a.phase)
+	}
+	if err := a.Start(t.Context()); err == nil || err.Error() != "agentsdk: agent runtime can only start once" {
+		t.Fatalf("second Start error = %v", err)
+	}
 }
 
-func TestNewRejectsUnknownAgentMode(t *testing.T) {
-	t.Setenv("AIRLOCK_AGENT_MODE", "manifest")
-	expectPanicContains(t, "unsupported AIRLOCK_AGENT_MODE: manifest", func() {
-		New(Config{Description: "test"})
+func TestServeRejectsUnknownAgentMode(t *testing.T) {
+	t.Setenv("AIRLOCK_AGENT_MODE", "unknown")
+	expectPanicContains(t, "unsupported AIRLOCK_AGENT_MODE: unknown", func() {
+		New(Config{Description: "test"}).Serve()
 	})
 }
 
-func TestJobManifestModeServesCanonicalManifestWithoutRuntimeDependencies(t *testing.T) {
-	t.Setenv("AIRLOCK_AGENT_MODE", "job-manifest")
+func TestManifestModeServesCanonicalManifestWithoutRuntimeDependencies(t *testing.T) {
+	t.Setenv("AIRLOCK_AGENT_MODE", "manifest")
 	t.Setenv("AIRLOCK_AGENT_ID", "")
 	t.Setenv("AIRLOCK_API_URL", "")
 	t.Setenv("AIRLOCK_AGENT_TOKEN", "")
 	t.Setenv("AIRLOCK_DB_URL", "postgres://must-not-be-opened")
 
 	a := New(Config{Description: "manifest test"})
-	if a.db != nil || a.client != nil || a.httpClient != nil {
-		t.Fatalf("manifest mode initialized runtime dependencies: db=%p client=%p http=%p", a.db, a.client, a.httpClient)
+	if a.db == nil || a.db.db != nil || a.client != nil || a.httpClient != nil {
+		t.Fatalf("definition initialized runtime dependencies: db=%p pool=%p client=%p http=%p", a.db, a.db.db, a.client, a.httpClient)
 	}
 	second := RegisterJob(a, testJobDefinition(2))
 	first := RegisterJob(a, testJobDefinition(1))
@@ -77,7 +85,7 @@ func TestJobManifestModeServesCanonicalManifestWithoutRuntimeDependencies(t *tes
 	if len(output) == 0 || output[len(output)-1] != '\n' || strings.Count(string(output), "\n") != 1 {
 		t.Fatalf("manifest output is not exactly one JSON line: %q", output)
 	}
-	var manifest wire.JobManifest
+	var manifest wire.AgentManifest
 	if err := json.Unmarshal(output, &manifest); err != nil {
 		t.Fatalf("decode manifest: %v", err)
 	}
@@ -99,18 +107,17 @@ func TestJobManifestModeServesCanonicalManifestWithoutRuntimeDependencies(t *tes
 	})
 }
 
-func TestJobManifestModeRuntimeMethodsFailLoudly(t *testing.T) {
-	t.Setenv("AIRLOCK_AGENT_MODE", "job-manifest")
+func TestDefinitionRuntimeMethodsFailLoudly(t *testing.T) {
 	a := New(Config{Description: "manifest test"})
 
-	expectPanicContains(t, "DB is unavailable when AIRLOCK_AGENT_MODE=job-manifest", func() {
-		a.DB()
+	expectPanicContains(t, "DB.PingContext is unavailable before the agent runtime starts", func() {
+		_ = a.DB().PingContext(t.Context())
 	})
-	if _, err := a.AgentURL(); err == nil || !strings.Contains(err.Error(), "AIRLOCK_AGENT_MODE=job-manifest") {
+	if _, err := a.AgentURL(); err == nil || !strings.Contains(err.Error(), "before the agent runtime starts") {
 		t.Fatalf("AgentURL error = %v", err)
 	}
 	handle := RegisterJob(a, testJobDefinition(1))
-	if _, err := handle.Get(t.Context(), testJobID); err == nil || !strings.Contains(err.Error(), "AIRLOCK_AGENT_MODE=job-manifest") {
-		t.Fatalf("Get error = %v", err)
-	}
+	expectPanicContains(t, "JobHandle.Get is unavailable before the agent runtime starts", func() {
+		_, _ = handle.Get(t.Context(), testJobID)
+	})
 }

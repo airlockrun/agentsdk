@@ -19,22 +19,20 @@ import (
 	"go.uber.org/zap"
 )
 
-const maxJobManifestBytes = 4 << 20
+const maxManifestBytes = 4 << 20
 
-// Serve emits one canonical job manifest to stdout and returns when
-// AIRLOCK_AGENT_MODE=job-manifest. Otherwise it starts the agent HTTP server,
-// blocks until SIGINT/SIGTERM, listens on AIRLOCK_ADDR or :8080, and syncs the
-// agent's declared capabilities with Airlock before accepting requests.
+// Serve emits one canonical declaration manifest to stdout and returns when
+// AIRLOCK_AGENT_MODE=manifest. Otherwise it starts the agent runtime and HTTP
+// server, blocking until SIGINT/SIGTERM.
 func (a *Agent) Serve() {
-	if a.jobManifestMode {
-		a.serveJobManifest(os.Stdout)
+	switch mode := os.Getenv("AIRLOCK_AGENT_MODE"); mode {
+	case "manifest":
+		a.serveManifest(os.Stdout)
 		return
+	case "":
+	default:
+		panic("agentsdk: unsupported AIRLOCK_AGENT_MODE: " + mode)
 	}
-	defer func() {
-		if err := a.Close(); err != nil {
-			agentLogger().Warn("close database", zap.Error(err))
-		}
-	}()
 
 	addr := os.Getenv("AIRLOCK_ADDR")
 	if addr == "" {
@@ -43,11 +41,14 @@ func (a *Agent) Serve() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-
-	// Sync with Airlock before accepting requests. syncOrPanic preserves the
-	// historical "fail loud at boot" behaviour; the underlying syncWithAirlock
-	// is also called from /refresh where errors propagate to Airlock.
-	a.syncOrPanic(ctx)
+	if err := a.Start(ctx); err != nil {
+		panic(err)
+	}
+	defer func() {
+		if err := a.Close(); err != nil {
+			agentLogger().Warn("close database", zap.Error(err))
+		}
+	}()
 
 	// Start the background-run flusher. Closes any stale ambient run after
 	// the inactivity window elapses.
@@ -73,22 +74,21 @@ func (a *Agent) Serve() {
 	}
 }
 
-func (a *Agent) serveJobManifest(w io.Writer) {
-	a.freeze()
-	payload, err := json.Marshal(a.buildJobManifest())
+func (a *Agent) serveManifest(w io.Writer) {
+	payload, err := json.Marshal(a.Manifest())
 	if err != nil {
-		panic("agentsdk: encode job manifest: " + err.Error())
+		panic("agentsdk: encode manifest: " + err.Error())
 	}
-	if len(payload) > maxJobManifestBytes {
-		panic(fmt.Sprintf("agentsdk: job manifest exceeds %d bytes", maxJobManifestBytes))
+	if len(payload) > maxManifestBytes {
+		panic(fmt.Sprintf("agentsdk: manifest exceeds %d bytes", maxManifestBytes))
 	}
 	payload = append(payload, '\n')
 	n, err := w.Write(payload)
 	if err != nil {
-		panic("agentsdk: write job manifest: " + err.Error())
+		panic("agentsdk: write manifest: " + err.Error())
 	}
 	if n != len(payload) {
-		panic("agentsdk: write job manifest: short write")
+		panic("agentsdk: write manifest: short write")
 	}
 }
 
@@ -97,10 +97,9 @@ func (a *Agent) serveJobManifest(w io.Writer) {
 // route registered via RegisterRoute, each wrapped with the lazy-run + logging
 // middleware. Serve installs it after syncing with Airlock.
 //
-// Handler validates and freezes registrations, but does not sync with Airlock
-// or listen. Tests use it to exercise routes through the real dispatch (including
-// {param} extraction) with httptest. A test that needs the synced prompt data
-// or MCP schemas a handler reads must call syncWithAirlock first.
+// Handler requires a started runtime, validates and freezes registrations, and
+// does not listen. Tests use it after agenttest.New to exercise routes through
+// the real dispatch (including {param} extraction) with httptest.
 func (a *Agent) Handler() http.Handler {
 	a.requireRuntime("Handler")
 	a.freeze()

@@ -91,6 +91,9 @@ type recordedExecResponse struct {
 //	defer s.Stdout.Close()
 //	defer s.Stderr.Close()
 func (h *ExecHandle) RunStream(ctx context.Context, cmd ExecCommand) (*ExecStream, error) {
+	if !h.agent.runtimeAvailable() {
+		return nil, h.agent.runtimeUnavailable("ExecHandle.RunStream")
+	}
 	if cmd.Command == "" {
 		return nil, &ExecError{Kind: ExecErrorKindConfig, Message: "Command is required"}
 	}

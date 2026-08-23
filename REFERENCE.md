@@ -21,13 +21,19 @@ file is the canonical SDK reference.
 
 ## Mental model
 
-An agent is a normal Go program. In `main()` you construct an agent, *register*
-capabilities on it (tools, connections, MCP servers, webhooks, crons, routes,
-static assets, topics, storage directories), then call `agent.Serve()`, which
-starts an HTTP server and blocks.
+An agent has definition and runtime phases. `agentsdk.New` creates declaration
+state only: no runtime environment, database, network, or migrations. Factories
+register capabilities, construct services, and inject returned handles.
+`Agent.DB()` is late-bound: it can be wired now, but operations require startup.
 
-The first `Serve`, `Handler`, or sync validates and freezes registrations.
-Later registration panics; the SDK snapshots caller-owned declarations.
+`Agent.Manifest()` validates and freezes registrations and returns the complete
+canonical declaration used for sync. `AIRLOCK_AGENT_MODE=manifest` makes
+`Serve` emit it as one JSON line without starting runtime dependencies.
+
+Normally, `Serve` freezes declarations, starts runtime dependencies and
+migrations, syncs with Airlock, runs named process-local `OnStart` hooks in
+registration order, then serves. Later registration panics. Hooks are for
+disposable local initialization; durable work belongs in a registered job.
 
 At runtime the LLM does **not** see your Go functions directly. It sees one
 tool, `run_js`, a JavaScript VM. Everything you register with `RegisterTool`
@@ -74,11 +80,11 @@ Generated `*_templ.go`, `views/static/app.css`, `internal/db/*` except
 `internal/db/doc.go`, and root binaries are gitignored. Commit source inputs;
 builds regenerate outputs.
 
-Agent integration tests use `agenttest.New(t, factory)`, which configures the
-Airlock API mock and test database before constructing the agent. The returned
-`Env.Airlock` records platform calls for assertions. Tests that only need the
-HTTP mock can use `agenttest.NewMockAirlock`; transport payload types remain an
-SDK runtime detail rather than part of the root author API.
+`agenttest.New(t, factory)` invokes the factory first with runtime environment
+cleared, then provisions its mock and database, starts, migrates, syncs, and
+runs `OnStart` hooks. It returns an agent ready for `DB` and `Handler`;
+`Env.Airlock` records platform calls. Tests needing only the HTTP mock can use
+`agenttest.NewMockAirlock`; wire payloads remain an SDK runtime detail.
 
 Authenticated in-process handler tests attach caller state without private
 transport headers:
@@ -238,6 +244,14 @@ agent := agentsdk.New(agentsdk.Config{
 })
 agent.Serve() // starts HTTP server, blocks until shutdown
 ```
+
+`agentsdk.New` is pure definition and wiring. `agent.DB()` returns a late-bound
+`*AgentDB` for sqlc constructors; operations fail before startup.
+`agent.OnStart(name, hook)` registers process-local initialization that runs in
+order after sync and before readiness; use jobs for durable work.
+`agent.Manifest()` freezes and returns the complete canonical declaration.
+`AIRLOCK_AGENT_MODE=manifest` emits it offline; normally `Serve` freezes,
+starts, migrates, syncs, runs hooks, and serves.
 
 **Choosing `Emoji`:** every product on this platform is an agent, so the
 emoji must distinguish *this* agent from all the others — pick one that
@@ -802,7 +816,7 @@ log.Info("imported rows", zap.Int("count", 42))
 // Storage — trusted; no ResolveFilePath. See /libs/agentsdk/reference/files.md.
 agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir / DeleteFile / CopyFile
 resolved, err := agent.ResolveFilePath(ctx, llmPath, agentsdk.FileOperationRead)
-agent.DB() // required *AgentDB pool — pass to sqlc-generated New()
+agent.DB() // late-bound *AgentDB handle; operations require a started runtime
 ```
 
 `AuthRequiredError` from `ConnectionHandle.Request` means the user must
@@ -1119,9 +1133,10 @@ container's local copy is the working copy; S3 is the durable record.
 //   for each local file newer than remote: WriteFile, set local mtime
 //   to the resulting S3 LastModified.
 
-// Boot: pull latest in the background so we don't block Serve (no-op on
-// first boot when S3 is empty — the image's seeded binary stays).
-go func() { _ = agent.SyncDown(context.Background(), "state/bin/", "/var/agent/bin/") }()
+// Boot: restore process-local state after runtime sync and before readiness.
+agent.OnStart("restore_bun", func(ctx context.Context) error {
+    return agent.SyncDown(ctx, "state/bin/", "/var/agent/bin/")
+})
 
 // A recurring job self-updates, then pushes the new binary up.
 refreshJob := agentsdk.RegisterJob(agent, &agentsdk.Job[struct{}, struct{}]{
@@ -1151,10 +1166,12 @@ write, or list"`); the trusted Go file API still reaches it freely. Use
 sigs, ML weights, browser binaries) — it's just a convention so the LLM-facing
 directory inventory reads cleanly.
 
-**Health-check budget:** the platform expects `agent.Serve()` to start within
-~15 seconds of container start. Anything slower than a few hundred ms —
-`SyncDown`, third-party warm-up, model preload — must run in a goroutine *after*
-you call `Serve`, not synchronously in `main()` before it.
+**Startup budget:** the platform allows up to two minutes for a cold agent
+runtime to become healthy. Named `OnStart` hooks block readiness and run in
+registration order; return hydration errors so the process fails instead of
+serving with incomplete local state. Keep hooks bounded by their context and
+reserve durable business work for registered jobs. Never start runtime work in
+the definition factory: manifest inspection invokes that factory offline.
 
 ---
 
@@ -1163,10 +1180,11 @@ you call `Serve`, not synchronously in `main()` before it.
 A full Postgres schema (usually with pgvector — pair vector columns with
 `agent.EmbeddingModel(ctx, slug)`). Tables via goose migrations in
 `db/migrations/`; queries via sqlc (`db/queries/` → generated `internal/db/`).
-`AIRLOCK_DB_URL` is required. `agentsdk.New` opens and bounded-pings one owned
-pool, then runs migrations before returning. `agent.DB()` always returns its
-`*AgentDB`; pass it straight to the generated `New()`. **Always use sqlc** —
-never raw `db.QueryRow` / `db.Exec` strings in Go.
+`AIRLOCK_DB_URL` is required at startup, not during definition. Pass the
+late-bound `agent.DB()` to generated `New()` while wiring, but do not query from
+the factory. `Start` opens and bounded-pings the pool and migrates before sync
+and `OnStart`. **Always use sqlc** — never raw `db.QueryRow` / `db.Exec` strings
+in Go.
 
 ```go
 db := agent.DB()

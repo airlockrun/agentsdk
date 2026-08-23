@@ -18,6 +18,9 @@ type TopicHandle struct {
 // It panics on a PerUser topic — those deliver only via PublishToUser, so a
 // broadcast would leak one user's content to every subscriber.
 func (h *TopicHandle) Publish(ctx context.Context, parts []DisplayPart) error {
+	if !h.agent.runtimeAvailable() {
+		return h.agent.runtimeUnavailable("TopicHandle.Publish")
+	}
 	if h.perUser {
 		panic("agentsdk: Publish on PerUser topic " + h.slug + ": use PublishToUser")
 	}
@@ -27,6 +30,9 @@ func (h *TopicHandle) Publish(ctx context.Context, parts []DisplayPart) error {
 // PublishToUser sends display parts only to the given user's conversations
 // subscribed to this topic. userID is the internal-user uuid (User.ID).
 func (h *TopicHandle) PublishToUser(ctx context.Context, userID string, parts []DisplayPart) error {
+	if !h.agent.runtimeAvailable() {
+		return h.agent.runtimeUnavailable("TopicHandle.PublishToUser")
+	}
 	if userID == "" {
 		panic("agentsdk: PublishToUser on topic " + h.slug + ": userID is required")
 	}

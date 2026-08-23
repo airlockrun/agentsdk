@@ -80,6 +80,7 @@ func setupConnAgent(t *testing.T, f *fakeAirlock, connSlug string) (*Agent, *run
 		topics:        make(map[string]*Topic),
 		routes:        make(map[string]*Route),
 		execEndpoints: make(map[string]*ExecEndpoint),
+		phase:         agentRunning,
 	}
 	a.client = newAirlockClient(f.srv.URL, "test-token", a.httpClient)
 	a.auths[connSlug] = &Connection{Slug: connSlug, Access: AccessAdmin}

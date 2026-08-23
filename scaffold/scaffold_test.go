@@ -76,6 +76,9 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(string(mainGo), "newAgent().Serve()") {
 		t.Error("main.go missing newAgent().Serve()")
 	}
+	if !strings.Contains(string(mainGo), "newAgent defines the complete agent and wires late-bound SDK handles") {
+		t.Error("main.go missing definition-only lifecycle guidance")
+	}
 	if !strings.Contains(string(mainGo), "pages := handlers.New()") {
 		t.Error("main.go missing handler construction")
 	}
@@ -92,6 +95,36 @@ func TestMaterialize(t *testing.T) {
 	}
 	if !strings.Contains(string(mainTest), "agenttest.WithUser") {
 		t.Error("main_test.go missing authenticated caller helper")
+	}
+	if !strings.Contains(string(mainTest), "agenttest.New invokes") ||
+		!strings.Contains(string(mainTest), "newAgent first, then provisions runtime dependencies") {
+		t.Error("main_test.go missing factory-first agenttest lifecycle guidance")
+	}
+	if strings.Contains(string(mainTest), "applies migrations before newAgent constructs") {
+		t.Error("main_test.go claims migrations run before the definition factory")
+	}
+
+	agentsMD, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	for _, want := range []string{
+		"newAgent()` is the definition-only composition root",
+		"Agent.DB()` and registration APIs return late-bound handles",
+		"AIRLOCK_AGENT_MODE=manifest",
+		"After the factory returns, startup resets the schema",
+	} {
+		if !strings.Contains(string(agentsMD), want) {
+			t.Errorf("AGENTS.md missing lifecycle guidance %q", want)
+		}
+	}
+	for _, stale := range []string{
+		"sets every `AIRLOCK_*` variable before it invokes `newAgent`",
+		"applies source migrations from the enclosing module's `db/migrations` before it returns inside the factory",
+	} {
+		if strings.Contains(string(agentsMD), stale) {
+			t.Errorf("AGENTS.md contains stale lifecycle guidance %q", stale)
+		}
 	}
 
 	homeGo, err := os.ReadFile(filepath.Join(dir, "handlers", "home.go"))

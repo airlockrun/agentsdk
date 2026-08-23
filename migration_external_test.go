@@ -104,7 +104,7 @@ func TestMoveFileRestartStates(t *testing.T) {
 			})
 			srv := httptest.NewServer(mux)
 			defer srv.Close()
-			a := &Agent{httpClient: srv.Client()}
+			a := &Agent{httpClient: srv.Client(), phase: agentStarting}
 			a.client = newAirlockClient(srv.URL, "test", a.httpClient)
 
 			err := a.MoveFile(context.Background(), "old/file.txt", "new/file.txt")

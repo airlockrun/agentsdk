@@ -11,10 +11,11 @@ func main() {
 	newAgent().Serve()
 }
 
-// newAgent builds the agent and registers everything on it. main() and the
-// tests both go through here, so a test can exercise the fully-wired agent via
-// agent.Handler(). Keep registration in this function — don't inline it back
-// into main(), or the tests stop compiling.
+// newAgent defines the complete agent and wires late-bound SDK handles into its
+// dependencies. It must not read runtime environment, query the database, make
+// network calls, or start goroutines: Airlock also invokes this definition
+// offline to obtain the manifest. agenttest.New starts the returned agent before
+// tests use Agent.DB() or Agent.Handler(). Keep this function separate from main.
 func newAgent() *agentsdk.Agent {
 	agent := agentsdk.New(agentsdk.Config{
 		Description: "New agent — update this description after implementation",

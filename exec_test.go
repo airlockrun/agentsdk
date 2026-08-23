@@ -63,7 +63,7 @@ func TestExecHandle_Run_DemuxesNDJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}, execEndpoints: map[string]*ExecEndpoint{}}
+	a := &Agent{httpClient: &http.Client{}, execEndpoints: map[string]*ExecEndpoint{}, phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &ExecHandle{slug: "vps", agent: a}
 
@@ -91,7 +91,7 @@ func TestExecHandle_Run_MidStreamErrorEnvelope(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}}
+	a := &Agent{httpClient: &http.Client{}, phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &ExecHandle{slug: "vps", agent: a}
 
@@ -113,7 +113,7 @@ func TestExecHandle_Run_PreStreamNotConfigured(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}}
+	a := &Agent{httpClient: &http.Client{}, phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &ExecHandle{slug: "vps", agent: a}
 
@@ -153,7 +153,7 @@ func TestExecHandle_Run_OutputTooLarge(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}}
+	a := &Agent{httpClient: &http.Client{}, phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &ExecHandle{slug: "vps", agent: a}
 
@@ -203,7 +203,7 @@ func TestExecHandle_RunStream_PipeToWriter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}}
+	a := &Agent{httpClient: &http.Client{}, phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &ExecHandle{slug: "vps", agent: a}
 

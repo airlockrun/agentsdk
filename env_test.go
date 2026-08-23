@@ -17,7 +17,7 @@ func TestEnvVarHandleGetFallsBackToDefaultOnUnset(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}, sensitiveSet: make(map[string]struct{})}
+	a := &Agent{httpClient: &http.Client{}, sensitiveSet: make(map[string]struct{}), phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &EnvVarHandle{slug: "region", defaultValue: "us-east-1", agent: a}
 
@@ -36,7 +36,7 @@ func TestEnvVarHandleGetUnsetWithoutDefaultErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}, sensitiveSet: make(map[string]struct{})}
+	a := &Agent{httpClient: &http.Client{}, sensitiveSet: make(map[string]struct{}), phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &EnvVarHandle{slug: "region", agent: a}
 

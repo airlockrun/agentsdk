@@ -53,12 +53,14 @@ func runIDHeader(runID string) map[string]string {
 // with a non-chat capability. Pass the returned model the same ctx when
 // calling Stream.
 func (a *Agent) LLM(ctx context.Context, slug string) stream.Model {
+	a.requireRuntime("LLM")
 	return a.proxyLLM(ctx, slug, a.requireSlot(slug, CapText, CapVision))
 }
 
 // ImageModel returns an image generation model for the registered slot `slug`.
 // Panics unless `slug` is registered with CapImage.
 func (a *Agent) ImageModel(ctx context.Context, slug string) model.ImageModel {
+	a.requireRuntime("ImageModel")
 	a.requireSlot(slug, CapImage)
 	return a.proxyImage(ctx, slug, CapImage)
 }
@@ -66,6 +68,7 @@ func (a *Agent) ImageModel(ctx context.Context, slug string) model.ImageModel {
 // EmbeddingModel returns an embedding model for the registered slot `slug`.
 // Panics unless `slug` is registered with CapEmbedding.
 func (a *Agent) EmbeddingModel(ctx context.Context, slug string) model.EmbeddingModel {
+	a.requireRuntime("EmbeddingModel")
 	a.requireSlot(slug, CapEmbedding)
 	return a.proxyEmbedding(ctx, slug, CapEmbedding)
 }
@@ -73,6 +76,7 @@ func (a *Agent) EmbeddingModel(ctx context.Context, slug string) model.Embedding
 // SpeechModel returns a text-to-speech model for the registered slot `slug`.
 // Panics unless `slug` is registered with CapSpeech.
 func (a *Agent) SpeechModel(ctx context.Context, slug string) model.SpeechModel {
+	a.requireRuntime("SpeechModel")
 	a.requireSlot(slug, CapSpeech)
 	return a.proxySpeech(ctx, slug, CapSpeech)
 }
@@ -80,6 +84,7 @@ func (a *Agent) SpeechModel(ctx context.Context, slug string) model.SpeechModel 
 // TranscriptionModel returns a speech-to-text model for the registered slot
 // `slug`. Panics unless `slug` is registered with CapTranscription.
 func (a *Agent) TranscriptionModel(ctx context.Context, slug string) model.TranscriptionModel {
+	a.requireRuntime("TranscriptionModel")
 	a.requireSlot(slug, CapTranscription)
 	return a.proxyTranscription(ctx, slug, CapTranscription)
 }
@@ -156,6 +161,9 @@ func (a *Agent) proxyTranscription(ctx context.Context, slug string, cap ModelCa
 // decline to call doesn't). If you genuinely need the model to decide whether
 // to search mid-conversation, wrap this in your own RegisterTool.
 func (a *Agent) WebSearch(ctx context.Context, slug string, req websearch.Request) (*websearch.Response, error) {
+	if !a.runtimeAvailable() {
+		return nil, a.runtimeUnavailable("WebSearch")
+	}
 	a.requireSlot(slug, CapSearch)
 	return (&proxySearchClient{client: a.client}).Search(ctx, slug, req)
 }

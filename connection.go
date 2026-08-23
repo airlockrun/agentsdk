@@ -63,6 +63,9 @@ func (h *ConnectionHandle) Request(ctx context.Context, opts RequestOpts) ([]byt
 // error carrying the upstream status and body preview. The returned Body
 // is the live HTTP response body — close it when done.
 func (h *ConnectionHandle) RequestStream(ctx context.Context, opts RequestOpts) (*ConnectionResponse, error) {
+	if !h.agent.runtimeAvailable() {
+		return nil, h.agent.runtimeUnavailable("ConnectionHandle.RequestStream")
+	}
 	if opts.Path == "" {
 		return nil, fmt.Errorf("agentsdk: RequestOpts.Path is required")
 	}

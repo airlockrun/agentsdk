@@ -13,7 +13,9 @@ import (
 )
 
 // TestAgentComposition exercises the routes and static declarations wired by
-// newAgent through the real SDK mux. Handler behavior has package-local tests.
+// newAgent through the started and synchronized SDK mux. agenttest.New invokes
+// newAgent first, then provisions runtime dependencies, starts and migrates,
+// syncs, and runs named OnStart hooks. Handler behavior has package-local tests.
 func TestAgentComposition(t *testing.T) {
 	env := agenttest.New(t, newAgent)
 	user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
@@ -39,10 +41,11 @@ func TestAgentComposition(t *testing.T) {
 
 // TestDBMigratesAndConnects is the worked example for DB-backed tests.
 // agenttest.New uses TEST_DB_URL when supplied or starts pgvector with Docker.
-// agentsdk.New finds db/migrations at the enclosing module root, resets the
-// schema, and applies migrations before newAgent constructs dependencies or
-// registrations. Once you add tables, query through Agent.DB() and assert on
-// the results; this run checks that the migrated pool is reachable.
+// It invokes newAgent while Agent.DB() is only a late-bound handle, then starts
+// the runtime, finds db/migrations at the enclosing module root, resets and
+// migrates the schema, syncs, and runs OnStart hooks. Once you add tables, query
+// through Agent.DB() after agenttest.New returns and assert on the results; this
+// run checks that the migrated pool is reachable.
 func TestDBMigratesAndConnects(t *testing.T) {
 	env := agenttest.New(t, newAgent)
 	if err := env.Agent.DB().PingContext(context.Background()); err != nil {
