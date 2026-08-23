@@ -8,7 +8,7 @@ package agentsdk
 // Fragments accumulate in registration order and are joined with "\n\n" by
 // Airlock at run dispatch, then appended to the sync-rendered system prompt.
 // Only /prompt-triggered runs (web + bridge) receive instructions — webhook and
-// cron handlers run arbitrary Go code and build their own prompts.
+// job handlers run arbitrary Go code and build their own prompts.
 func (a *Agent) AddInstruction(p *Instruction) {
 	done := a.beginRegistration("AddInstruction")
 	defer done()

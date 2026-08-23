@@ -32,21 +32,22 @@ func testAgent(t *testing.T) (*Agent, *mockairlock.Mock) {
 	t.Cleanup(mock.Close)
 
 	a := &Agent{
-		agentID:          "test-agent",
-		apiURL:           url,
-		token:            "test-token",
-		httpClient:       &http.Client{},
-		sensitiveSet:     make(map[string]struct{}),
-		tools:            make(map[string]*registeredTool),
-		webhooks:         make(map[string]*Webhook),
-		scheduleHandlers: make(map[string]*scheduleHandler),
-		auths:            make(map[string]*Connection),
-		mcps:             make(map[string]*MCP),
-		topics:           make(map[string]*Topic),
-		routes:           make(map[string]*Route),
-		envVars:          make(map[string]*EnvVar),
-		execEndpoints:    make(map[string]*ExecEndpoint),
-		staticAssets:     make(map[string]*StaticAsset),
+		agentID:       "test-agent",
+		apiURL:        url,
+		token:         "test-token",
+		httpClient:    &http.Client{},
+		sensitiveSet:  make(map[string]struct{}),
+		tools:         make(map[string]*registeredTool),
+		webhooks:      make(map[string]*Webhook),
+		jobs:          make(map[jobKey]*registeredJob),
+		jobCrons:      make(map[string]*registeredJobCron),
+		auths:         make(map[string]*Connection),
+		mcps:          make(map[string]*MCP),
+		topics:        make(map[string]*Topic),
+		routes:        make(map[string]*Route),
+		envVars:       make(map[string]*EnvVar),
+		execEndpoints: make(map[string]*ExecEndpoint),
+		staticAssets:  make(map[string]*StaticAsset),
 	}
 	db, err := sql.Open("agentsdk-test", "")
 	if err != nil {

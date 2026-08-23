@@ -277,21 +277,22 @@ type MCPContent struct {
 }
 
 type SyncRequest struct {
-	Version          string               `json:"version"`
-	Description      string               `json:"description,omitempty"`
-	Emoji            string               `json:"emoji,omitempty"`
-	Tools            []ToolDef            `json:"tools,omitempty"`
-	Webhooks         []WebhookDef         `json:"webhooks"`
-	ScheduleHandlers []ScheduleHandlerDef `json:"scheduleHandlers"`
-	Routes           []RouteDef           `json:"routes,omitempty"`
-	Topics           []TopicDef           `json:"topics,omitempty"`
-	MCPServers       []MCPDef             `json:"mcpServers,omitempty"`
-	Connections      []ConnectionDef      `json:"connections,omitempty"`
-	ExecEndpoints    []ExecEndpointDef    `json:"execEndpoints,omitempty"`
-	EnvVars          []EnvVarDef          `json:"envVars,omitempty"`
-	Directories      []DirectoryDef       `json:"directories,omitempty"`
-	Instructions     []InstructionDef     `json:"instructions,omitempty"`
-	ModelSlots       []ModelSlotDef       `json:"modelSlots,omitempty"`
+	Version       string            `json:"version"`
+	Description   string            `json:"description,omitempty"`
+	Emoji         string            `json:"emoji,omitempty"`
+	Tools         []ToolDef         `json:"tools,omitempty"`
+	Webhooks      []WebhookDef      `json:"webhooks"`
+	JobHandlers   []JobHandlerDef   `json:"jobHandlers,omitempty"`
+	JobCrons      []JobCronDef      `json:"jobCrons,omitempty"`
+	Routes        []RouteDef        `json:"routes,omitempty"`
+	Topics        []TopicDef        `json:"topics,omitempty"`
+	MCPServers    []MCPDef          `json:"mcpServers,omitempty"`
+	Connections   []ConnectionDef   `json:"connections,omitempty"`
+	ExecEndpoints []ExecEndpointDef `json:"execEndpoints,omitempty"`
+	EnvVars       []EnvVarDef       `json:"envVars,omitempty"`
+	Directories   []DirectoryDef    `json:"directories,omitempty"`
+	Instructions  []InstructionDef  `json:"instructions,omitempty"`
+	ModelSlots    []ModelSlotDef    `json:"modelSlots,omitempty"`
 }
 
 type EnvVarDef struct {
@@ -422,39 +423,132 @@ type WebhookDef struct {
 	Description string `json:"description,omitempty"`
 }
 
-type ScheduleHandlerDef struct {
-	Slug        string `json:"slug"`
-	Kind        string `json:"kind"`
-	Recurrence  string `json:"recurrence,omitempty"`
-	TimeoutMs   int64  `json:"timeoutMs"`
-	Description string `json:"description,omitempty"`
+type JobHandlerDef struct {
+	Name             string          `json:"name"`
+	Version          int32           `json:"version"`
+	Description      string          `json:"description"`
+	TimeoutMs        int64           `json:"timeoutMs"`
+	MaxAttempts      int32           `json:"maxAttempts"`
+	MaxConcurrency   int32           `json:"maxConcurrency"`
+	InputSchema      json.RawMessage `json:"inputSchema"`
+	OutputSchema     json.RawMessage `json:"outputSchema"`
+	InputSchemaHash  string          `json:"inputSchemaHash"`
+	OutputSchemaHash string          `json:"outputSchemaHash"`
 }
 
-type ScheduleRequest struct {
-	ID     string    `json:"id"`
-	Slug   string    `json:"slug"`
-	FireAt time.Time `json:"fireAt"`
+type JobCronDef struct {
+	Slug             string          `json:"slug"`
+	Schedule         string          `json:"schedule"`
+	Description      string          `json:"description"`
+	HandlerName      string          `json:"handlerName"`
+	HandlerVersion   int32           `json:"handlerVersion"`
+	InputSchemaHash  string          `json:"inputSchemaHash"`
+	OutputSchemaHash string          `json:"outputSchemaHash"`
+	Input            json.RawMessage `json:"input"`
 }
 
-type ScheduleFireRequest struct {
-	ID          string    `json:"id"`
-	Slug        string    `json:"slug"`
-	ScheduledAt time.Time `json:"scheduledAt"`
-	Attempt     int       `json:"attempt"`
+// JobManifest is the canonical job declaration emitted by an agent image in
+// job-manifest inspection mode. Both slices are ordered by their identifiers.
+type JobManifest struct {
+	JobHandlers []JobHandlerDef `json:"jobHandlers"`
+	JobCrons    []JobCronDef    `json:"jobCrons"`
 }
 
-type ScheduleFireResponse struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+type JobRunRequest struct {
+	ID                      string          `json:"id"`
+	Name                    string          `json:"name"`
+	Version                 int32           `json:"version"`
+	InputSchemaHash         string          `json:"inputSchemaHash"`
+	OutputSchemaHash        string          `json:"outputSchemaHash"`
+	Attempt                 int32           `json:"attempt"`
+	TimeoutMs               int64           `json:"timeoutMs"`
+	Input                   json.RawMessage `json:"input"`
+	ScheduledAt             *time.Time      `json:"scheduledAt,omitempty"`
+	InitiatorKind           string          `json:"initiatorKind"`
+	InitiatorUserID         string          `json:"initiatorUserId"`
+	InitiatorConversationID string          `json:"initiatorConversationId"`
+	CallerAccess            Access          `json:"callerAccess"`
 }
 
-type ScheduledFire struct {
-	ID         string    `json:"id"`
-	Slug       string    `json:"slug"`
-	Kind       string    `json:"kind"`
-	FireAt     time.Time `json:"fireAt"`
-	Status     string    `json:"status"`
-	Recurrence string    `json:"recurrence,omitempty"`
+type JobRunResponse struct {
+	// Status is success, error, timeout, or retry. Retry reports a temporary
+	// enqueue availability failure and asks Airlock to redeliver the attempt.
+	Status string          `json:"status"`
+	Output json.RawMessage `json:"output,omitempty"`
+	Error  string          `json:"error,omitempty"`
+}
+
+type EnqueueJobRequest struct {
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	Version          int32           `json:"version"`
+	InputSchemaHash  string          `json:"inputSchemaHash"`
+	OutputSchemaHash string          `json:"outputSchemaHash"`
+	Input            json.RawMessage `json:"input"`
+	ScheduledAt      *time.Time      `json:"scheduledAt,omitempty"`
+}
+
+type JobProgress struct {
+	Phase     string `json:"phase"`
+	Message   string `json:"message"`
+	Completed int64  `json:"completed"`
+	Total     int64  `json:"total"`
+}
+
+type UpdateJobProgressRequest struct {
+	Attempt   int32  `json:"attempt"`
+	Phase     string `json:"phase"`
+	Message   string `json:"message"`
+	Completed int64  `json:"completed"`
+	Total     int64  `json:"total"`
+}
+
+type JobInfo struct {
+	ID               string          `json:"id"`
+	AgentID          string          `json:"agentId"`
+	HandlerName      string          `json:"handlerName"`
+	HandlerVersion   int32           `json:"handlerVersion"`
+	InputSchemaHash  string          `json:"inputSchemaHash"`
+	OutputSchemaHash string          `json:"outputSchemaHash"`
+	Status           string          `json:"status"`
+	Input            json.RawMessage `json:"input"`
+	Output           json.RawMessage `json:"output,omitempty"`
+	AttemptCount     int32           `json:"attemptCount"`
+	MaxAttempts      int32           `json:"maxAttempts"`
+	AttemptLimit     int32           `json:"attemptLimit"`
+	LastError        string          `json:"lastError,omitempty"`
+	Progress         *JobProgress    `json:"progress,omitempty"`
+	SourceRunID      string          `json:"sourceRunId,omitempty"`
+	ScheduledAt      *time.Time      `json:"scheduledAt,omitempty"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
+	StartedAt        *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt      *time.Time      `json:"completedAt,omitempty"`
+}
+
+type EnqueueJobResponse struct {
+	Job     JobInfo `json:"job"`
+	Created bool    `json:"created"`
+}
+
+const EnqueueJobErrorCodeUnavailable = "enqueue_unavailable"
+
+// EnqueueJobErrorResponse is returned with HTTP 409 when an exact job handler
+// contract is temporarily unavailable during a deployment transition.
+type EnqueueJobErrorResponse struct {
+	Code           string `json:"code"`
+	Error          string `json:"error"`
+	HandlerName    string `json:"handlerName"`
+	HandlerVersion int32  `json:"handlerVersion"`
+}
+
+type GetJobResponse struct {
+	Job JobInfo `json:"job"`
+}
+
+type ListJobsResponse struct {
+	Jobs       []JobInfo `json:"jobs"`
+	NextCursor string    `json:"nextCursor,omitempty"`
 }
 
 type HTTPRequest struct {

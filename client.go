@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // airlockClient is the internal HTTP client for communicating with the Airlock API.
@@ -27,21 +29,26 @@ func newAirlockClient(baseURL, token string, httpClient *http.Client) *airlockCl
 // newRequest creates an *http.Request with auth header set. Use when you need
 // to customise headers (e.g. Content-Type) before sending.
 func (c *airlockClient) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	if c == nil {
+		return nil, fmt.Errorf("agentsdk: %s %s is unavailable when AIRLOCK_AGENT_MODE=job-manifest", method, path)
+	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, fmt.Errorf("agentsdk: request %s %s: %w", method, path, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
+	if run := runFromContext(ctx); run != nil && run.id != "" {
+		req.Header.Set("X-Airlock-Run-ID", run.id)
+	}
 	return req, nil
 }
 
 // do sends an HTTP request to the Airlock API with auth header.
 func (c *airlockClient) do(ctx context.Context, method, path string, body io.Reader) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
+	req, err := c.newRequest(ctx, method, path, body)
 	if err != nil {
-		return nil, fmt.Errorf("agentsdk: request %s %s: %w", method, path, err)
+		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
@@ -79,8 +86,13 @@ func (c *airlockClient) getRange(ctx context.Context, path string, start, end in
 }
 
 // doJSON sends a JSON request and decodes the JSON response.
-// Returns *AuthRequiredError on 402, generic error on non-2xx.
+// Returns *AuthRequiredError on 402, *JobEnqueueUnavailableError for a typed
+// enqueue-unavailable 409, and a generic error on other non-2xx responses.
 func (c *airlockClient) doJSON(ctx context.Context, method, path string, reqBody, result any) error {
+	return c.doJSONWithHeaders(ctx, method, path, reqBody, result, nil)
+}
+
+func (c *airlockClient) doJSONWithHeaders(ctx context.Context, method, path string, reqBody, result any, headers http.Header) error {
 	var body io.Reader
 	if reqBody != nil {
 		b, err := json.Marshal(reqBody)
@@ -90,9 +102,25 @@ func (c *airlockClient) doJSON(ctx context.Context, method, path string, reqBody
 		body = bytes.NewReader(b)
 	}
 
-	resp, err := c.do(ctx, method, path, body)
+	req, err := c.newRequest(ctx, method, path, body)
 	if err != nil {
 		return err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for name, values := range headers {
+		for _, value := range values {
+			req.Header.Add(name, value)
+		}
+	}
+	if gw := goWallFrom(ctx); gw != nil {
+		gw.enter()
+		defer gw.exit()
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("agentsdk: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
@@ -106,6 +134,16 @@ func (c *airlockClient) doJSON(ctx context.Context, method, path string, reqBody
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusConflict && method == http.MethodPost && path == "/api/agent/jobs" {
+			var wireErr wire.EnqueueJobErrorResponse
+			if err := json.Unmarshal(b, &wireErr); err == nil && wireErr.Code == wire.EnqueueJobErrorCodeUnavailable {
+				return &JobEnqueueUnavailableError{
+					HandlerName:    wireErr.HandlerName,
+					HandlerVersion: int(wireErr.HandlerVersion),
+					Message:        wireErr.Error,
+				}
+			}
+		}
 		return fmt.Errorf("%s %s: status %d: %s", method, path, resp.StatusCode, string(b))
 	}
 

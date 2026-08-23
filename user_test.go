@@ -28,7 +28,7 @@ func TestUserFromContext(t *testing.T) {
 		t.Errorf("UserFromContext = %+v", u)
 	}
 
-	// A cron/schedule/webhook run has no user → absent.
+	// A system job or webhook run has no user → absent.
 	r2 := newRun(a, "run-2", "", "", context.Background())
 	if u, ok := UserFromContext(contextWithRun(context.Background(), r2)); ok {
 		t.Errorf("UserFromContext(no user) = %+v, true; want absent", u)

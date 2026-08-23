@@ -74,7 +74,7 @@ func (ew *EventWriter) WriteEvent(event stream.Event) error {
 	})
 }
 
-// WriteProgress writes a progress event (for webhook/cron handlers).
+// WriteProgress writes a progress event for webhook handlers.
 func (ew *EventWriter) WriteProgress(message string) error {
 	return ew.writeLine(ndjsonLine{
 		Type: "progress",

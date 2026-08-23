@@ -603,9 +603,14 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 	})
 
 	t.Run("accepts same pre-1.0 minor series", func(t *testing.T) {
+		parts := strings.SplitN(agentsdk.Version, ".", 3)
+		if len(parts) != 3 {
+			t.Fatalf("agentsdk.Version = %q, want semantic version", agentsdk.Version)
+		}
+		compatibleVersion := parts[0] + "." + parts[1] + ".0-alpha.1"
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"version":"0.4.0-alpha.1"}`))
+			_, _ = w.Write([]byte(`{"version":"` + compatibleVersion + `"}`))
 		}))
 		defer srv.Close()
 

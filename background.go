@@ -103,6 +103,7 @@ func (a *Agent) stopBackgroundFlusher() {
 // runForCall is the one resolver used by every ctx-aware Agent method.
 // Precedence: dispatcher-bound run → route-lazy run → Agent background run.
 func (a *Agent) runForCall(ctx context.Context) *run {
+	a.requireRuntime("runtime operation")
 	if r := runFromContext(ctx); r != nil {
 		return r
 	}

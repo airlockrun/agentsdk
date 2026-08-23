@@ -74,6 +74,7 @@ const (
 	migrationUp migrationMode = iota
 	migrationValidate
 	migrationDownTo
+	migrationUpOnly
 	migrationTestReset
 )
 
@@ -100,6 +101,8 @@ func (a *Agent) autoMigrate() {
 		}
 		mode = migrationDownTo
 		downTo = v
+	} else if os.Getenv("AGENT_MIGRATE_UP_ONLY") == "1" {
+		mode = migrationUpOnly
 	}
 
 	hasFiles, err := hasMigrationFiles(dir)
@@ -108,7 +111,7 @@ func (a *Agent) autoMigrate() {
 	}
 	if !hasFiles {
 		agentLogger().Info("no migrations found", zap.String("directory", dir))
-		if mode == migrationValidate || mode == migrationDownTo {
+		if mode == migrationValidate || mode == migrationDownTo || mode == migrationUpOnly {
 			os.Exit(0)
 		}
 		return
@@ -126,6 +129,9 @@ func (a *Agent) autoMigrate() {
 		os.Exit(0)
 	case migrationDownTo:
 		agentLogger().Info("migrated down", zap.Int64("to_version", downTo))
+		os.Exit(0)
+	case migrationUpOnly:
+		agentLogger().Info("migrated up")
 		os.Exit(0)
 	default:
 		agentLogger().Info("migrations applied")

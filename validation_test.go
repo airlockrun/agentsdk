@@ -65,20 +65,6 @@ func TestRegistrationValidation(t *testing.T) {
 			},
 		},
 		{
-			name: "cron expression",
-			want: "invalid Schedule",
-			call: func(a *Agent) {
-				a.RegisterCron(&Cron{Slug: "daily", Schedule: "not a cron", Handler: noopFire, Description: "Daily task"})
-			},
-		},
-		{
-			name: "schedule timeout is not negative",
-			want: "must not be negative",
-			call: func(a *Agent) {
-				a.RegisterSchedule(&Schedule{Slug: "once", Handler: noopFire, Timeout: -time.Second, Description: "One task"})
-			},
-		},
-		{
 			name: "route method is uppercase",
 			want: "uppercase HTTP token",
 			call: func(a *Agent) {
@@ -111,6 +97,13 @@ func TestRegistrationValidation(t *testing.T) {
 			want: "reserved by the framework",
 			call: func(a *Agent) {
 				a.RegisterRoute(&Route{Method: http.MethodGet, Path: "/static/custom.js", Handler: noopRoute, Access: AccessPublic, Description: "Asset"})
+			},
+		},
+		{
+			name: "job route is reserved",
+			want: "reserved by the framework",
+			call: func(a *Agent) {
+				a.RegisterRoute(&Route{Method: http.MethodPost, Path: "/job/custom/1", Handler: noopRoute, Access: AccessPublic, Description: "Job shadow"})
 			},
 		},
 		{

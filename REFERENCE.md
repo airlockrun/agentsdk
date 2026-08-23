@@ -371,8 +371,8 @@ agent.AddInstruction(&agentsdk.Instruction{
 ```
 
 Multiple calls accumulate in registration order. Empty `Access` slice = visible
-to every caller. **Scope:** chat-style runs only (web UI, bridges) — webhooks
-and crons invoke your Go handler directly and never build a system prompt.
+to every caller. **Scope:** chat-style runs only (web UI, bridges). Webhooks and
+jobs invoke your Go handler directly and never build a system prompt.
 
 ## RegisterWebhook
 
@@ -395,48 +395,13 @@ asymmetric over `timestamp‖body`, ±5-min skew). So the handler is trusted.
 Use `Verify: "none"` explicitly for an unverified webhook. `Description` is
 required; zero `Timeout` means two minutes and negative values are rejected.
 
-## RegisterCron / RegisterSchedule — timed handlers
+## RegisterJob
 
-Crons (recurring) and schedules (runtime-armed one-shots) share one handler type
-`func(context.Context, ScheduleEvent) error` and one slug namespace. Delivery is
-at least once, so handlers use the occurrence ID as an idempotency key. Domain
-data lives in the agent's own DB and survives container suspension.
-
-```go
-agent.RegisterCron(&agentsdk.Cron{
-    Slug:     "daily_report",
-    Schedule: "0 9 * * *", // standard cron expression
-    Handler:  func(ctx context.Context, event agentsdk.ScheduleEvent) error { return nil },
-    Description: "Generate and send the daily report",
-})
-
-agent.RegisterSchedule(&agentsdk.Schedule{
-    Slug:    "remind",
-    Handler: func(ctx context.Context, event agentsdk.ScheduleEvent) error {
-        // Load and complete the reminder idempotently under event.ID.
-        return nil
-    },
-    Description: "Fire one user reminder",
-})
-```
-
-**Reminder idiom** (per-user, suspension-safe). A tool, not the LLM directly,
-drives scheduling — schedules have no built-in user surface:
-
-```go
-// in a setReminder tool handler:
-u, _ := agentsdk.UserFromContext(ctx)
-id := uuid.NewString()
-// First store (id -> u.ID, text) in the agent's own DB.
-err := agent.ScheduleAt(ctx, agentsdk.ScheduleRequest{ID: id, Slug: "remind", FireAt: when})
-// Retry the identical ScheduleAt request if the outcome is uncertain.
-```
-
-On fire, the `remind` handler looks up `event.ID`, commits completion
-idempotently, and delivers via a `PerUser` topic's `PublishToUser`. Cancel/list
-are your own tools over `agent.CancelSchedule(id)` / `agent.ListSchedules(...)`,
-scoped against your DB. Never use an in-process timer — the container suspends
-and the timer dies.
+Typed, versioned jobs provide durable background work, recurring cron enqueue,
+and delayed enqueue. Delivery is at least once. Read
+`/libs/agentsdk/reference/jobs.md` for registration, lifecycle operations,
+idempotency, synchronous durable `JobContext.ReportProgress`, progress snapshots,
+`JobHandle.Cron`, and `JobHandle.EnqueueAt`.
 
 ## RegisterRoute — custom HTTP routes
 
@@ -1158,15 +1123,19 @@ container's local copy is the working copy; S3 is the durable record.
 // first boot when S3 is empty — the image's seeded binary stays).
 go func() { _ = agent.SyncDown(context.Background(), "state/bin/", "/var/agent/bin/") }()
 
-// A cron self-updates, then pushes the new binary up.
-agent.RegisterCron(&agentsdk.Cron{
-    Slug: "bun_refresh", Schedule: "0 3 * * 0",
-    Handler: func(ctx context.Context, _ agentsdk.ScheduleEvent) error {
+// A recurring job self-updates, then pushes the new binary up.
+refreshJob := agentsdk.RegisterJob(agent, &agentsdk.Job[struct{}, struct{}]{
+    Name: "bun_refresh", Version: 1, Description: "Refresh the Bun binary.",
+    Timeout: 10 * time.Minute, MaxAttempts: 3, MaxConcurrency: 1,
+    Handler: func(ctx context.Context, _ agentsdk.JobContext, _ struct{}) (struct{}, error) {
         if err := exec.CommandContext(ctx, "/var/agent/bin/bun", "upgrade").Run(); err != nil {
-            return err
+            return struct{}{}, err
         }
-        return agent.SyncUp(ctx, "/var/agent/bin/", "state/bin/")
+        return struct{}{}, agent.SyncUp(ctx, "/var/agent/bin/", "state/bin/")
     },
+})
+refreshJob.Cron(&agentsdk.JobCron[struct{}]{
+    Slug: "bun_refresh", Schedule: "0 3 * * 0", Description: "Refresh Bun weekly.",
 })
 ```
 

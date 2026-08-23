@@ -43,6 +43,7 @@ func New(t *testing.T, factory func() *agentsdk.Agent) *Env {
 	t.Setenv("AIRLOCK_AGENT_TOKEN", "test-token")
 	t.Setenv("AGENT_VALIDATE_MIGRATIONS", "")
 	t.Setenv("AGENT_MIGRATE_DOWN_TO", "")
+	t.Setenv("AGENT_MIGRATE_UP_ONLY", "")
 	t.Setenv("AGENTSDK_TEST_MIGRATIONS", "1")
 
 	// AIRLOCK_DB_URL is production input and may be inherited from the shell.

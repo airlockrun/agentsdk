@@ -28,14 +28,14 @@ Two other documents complete the picture:
 
 Requests are often a single line — "build me a Spotify app", "a kanban
 board", or just "I want an app". Unless the user clearly asks for something
-narrower (one chat tool, a webhook, a cron), read "app" as **a web app plus
-the tools that drive it**, not one or the other:
+narrower (one chat tool, a webhook, a recurring job), read "app" as **a web app
+plus the tools that drive it**, not one or the other:
 
 - A **web UI** — templ + htmx pages (see the HTML UI section) the user opens
   in a browser to see and manipulate their data.
 - **LLM-callable tools** (`RegisterTool`) over the *same* domain, so the agent
   can do the same things conversationally (Telegram / Discord / web chat).
-- The **state, connections, and schedules** that domain needs behind both.
+- The **state, connections, and jobs** that domain needs behind both.
 
 The UI and the tools are two faces of one domain layer (`service.go`) — build
 both against it. A bare tool with no UI, or a UI the agent can't operate over

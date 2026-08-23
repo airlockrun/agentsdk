@@ -21,7 +21,7 @@ type run struct {
 	bridgeID            string
 	conversationID      string
 	parentRunID         string // for A2A/external MCP calls — the caller's run ID from X-Parent-Run-ID; gates __incoming/run-<id>/ reads
-	userID              string // the originating user (anchor for scoped dirs); empty for cron/webhook/anon
+	userID              string // the originating user (anchor for scoped dirs); empty for system jobs, webhooks, and anonymous runs
 	supportedModalities []string
 	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
 	autoConfirm         bool        // run_js skips the request_confirmation gate (set for non-interactive runs, e.g. public one-shot bridge sessions)

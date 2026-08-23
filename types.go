@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// defaultTimeout is the default execution timeout for webhooks and crons.
+// defaultTimeout is the default execution timeout for webhooks.
 const defaultTimeout = 2 * time.Minute
 
 type noUnkeyedLiterals struct{}
@@ -19,7 +19,7 @@ type noUnkeyedLiterals struct{}
 // User identifies the human a run is acting for, exposed to handler code via
 // UserFromContext and to run_js as the `user` global. ID is the stable
 // internal-user uuid (the key to scope agent-owned data by); Email/DisplayName
-// are display claims. All fields are empty for cron/schedule/webhook and
+// are display claims. All fields are empty for system job/webhook and
 // anonymous runs.
 type User struct {
 	ID          string
@@ -32,11 +32,6 @@ type User struct {
 // WebhookHandlerFunc handles incoming webhook requests. Pass ctx to any
 // agent.X(ctx, ...) call the body makes.
 type WebhookHandlerFunc func(ctx context.Context, data []byte, ew *EventWriter) error
-
-// ScheduleHandlerFunc handles one immutable cron or one-shot occurrence.
-// Handlers commit effects idempotently using event.ID because delivery is at
-// least once.
-type ScheduleHandlerFunc func(ctx context.Context, event ScheduleEvent) error
 
 // RouteHandlerFunc handles custom HTTP routes registered via RegisterRoute.
 // Handler code uses r.Context() for agent calls and returns execution errors to
@@ -69,34 +64,6 @@ const (
 	WebhookVerificationBearer  WebhookVerification = "bearer"
 	WebhookVerificationEd25519 WebhookVerification = "ed25519"
 )
-
-// --- Cron ---
-
-// Cron is a recurring, code-declared schedule registered via agent.RegisterCron.
-// It fires by schedule, never by user action — no Access field. The slug shares
-// one namespace with RegisterSchedule (unique per agent).
-type Cron struct {
-	noUnkeyedLiterals
-
-	Slug        string              // unique per agent (across crons + schedules)
-	Schedule    string              // standard cron expression, e.g. "0 9 * * *"
-	Handler     ScheduleHandlerFunc // required
-	Timeout     time.Duration       // max execution time (default: 2 min)
-	Description string              // required: shown to users
-}
-
-// Schedule is a code-declared handler for runtime-armed one-shot fires
-// registered via agent.RegisterSchedule. Arm an instance with agent.ScheduleAt;
-// per-instance data lives in the agent's own DB (keyed by the caller-owned ID),
-// not in the platform. No Access field — fires are trusted/system.
-type Schedule struct {
-	noUnkeyedLiterals
-
-	Slug        string              // unique per agent (across crons + schedules)
-	Handler     ScheduleHandlerFunc // required
-	Timeout     time.Duration       // max execution time (default: 2 min)
-	Description string              // required: shown to users
-}
 
 // --- Route ---
 
@@ -729,53 +696,6 @@ type ModelSlot struct {
 	Slug        string
 	Capability  ModelCapability // required: CapText, CapVision, CapImage, CapSpeech, CapTranscription, CapEmbedding, or CapSearch
 	Description string          // required: human-readable hint shown in the admin UI
-}
-
-// ScheduleRequest arms one idempotent occurrence of a registered one-shot
-// handler. ID must be a canonical UUID generated before domain data is stored.
-type ScheduleRequest struct {
-	noUnkeyedLiterals
-
-	ID     string    `json:"id"`
-	Slug   string    `json:"slug"`
-	FireAt time.Time `json:"fireAt"`
-}
-
-// ScheduleEvent identifies one at-least-once delivery attempt.
-type ScheduleEvent struct {
-	ID          string
-	Slug        string
-	ScheduledAt time.Time
-	Attempt     int
-}
-
-type ScheduleKind string
-
-const (
-	ScheduleKindCron    ScheduleKind = "cron"
-	ScheduleKindOneShot ScheduleKind = "schedule"
-	ScheduleKindManual  ScheduleKind = "manual"
-)
-
-type ScheduleStatus string
-
-const (
-	ScheduleStatusPending   ScheduleStatus = "pending"
-	ScheduleStatusLeased    ScheduleStatus = "leased"
-	ScheduleStatusSucceeded ScheduleStatus = "succeeded"
-	ScheduleStatusFailed    ScheduleStatus = "failed"
-	ScheduleStatusOrphaned  ScheduleStatus = "orphaned"
-	ScheduleStatusCancelled ScheduleStatus = "cancelled"
-)
-
-// ScheduledFire is one pending/recorded fire row, returned by ListSchedules.
-type ScheduledFire struct {
-	ID         string         `json:"id"`
-	Slug       string         `json:"slug"`
-	Kind       ScheduleKind   `json:"kind"`
-	FireAt     time.Time      `json:"fireAt"`
-	Status     ScheduleStatus `json:"status"`
-	Recurrence string         `json:"recurrence,omitempty"`
 }
 
 // ShareFileResponse is returned by POST /api/agent/storage/share.

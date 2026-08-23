@@ -61,55 +61,6 @@ func (a *Agent) RegisterWebhook(w *Webhook) {
 	a.webhooks[copy.Path] = &copy
 }
 
-// RegisterCron installs a recurring cron. Schedule is a standard cron
-// expression (e.g. "0 9 * * *"). Synced to Airlock on Serve() so the scheduler
-// fires it. The slug shares one namespace with RegisterSchedule.
-func (a *Agent) RegisterCron(c *Cron) {
-	done := a.beginRegistration("RegisterCron")
-	defer done()
-	if c == nil {
-		panic("agentsdk: RegisterCron: nil *Cron")
-	}
-	h := &scheduleHandler{
-		slug:        c.Slug,
-		kind:        "cron",
-		recurrence:  c.Schedule,
-		handler:     c.Handler,
-		timeout:     c.Timeout,
-		description: c.Description,
-	}
-	validateScheduleHandler(h)
-	a.addScheduleHandler(h)
-}
-
-// RegisterSchedule installs a handler for runtime-armed one-shot fires (see
-// agent.ScheduleAt). The slug shares one namespace with RegisterCron.
-func (a *Agent) RegisterSchedule(s *Schedule) {
-	done := a.beginRegistration("RegisterSchedule")
-	defer done()
-	if s == nil {
-		panic("agentsdk: RegisterSchedule: nil *Schedule")
-	}
-	h := &scheduleHandler{
-		slug:        s.Slug,
-		kind:        "schedule",
-		handler:     s.Handler,
-		timeout:     s.Timeout,
-		description: s.Description,
-	}
-	validateScheduleHandler(h)
-	a.addScheduleHandler(h)
-}
-
-// addScheduleHandler stores a handler, enforcing slug uniqueness across both
-// crons and schedules (one /fire/{slug} dispatch namespace per agent).
-func (a *Agent) addScheduleHandler(h *scheduleHandler) {
-	if _, exists := a.scheduleHandlers[h.slug]; exists {
-		panic("agentsdk: duplicate schedule slug: " + h.slug)
-	}
-	a.scheduleHandlers[h.slug] = h
-}
-
 // RegisterRoute installs a custom HTTP route served by this agent and
 // proxied via Airlock's subdomain routing.
 func (a *Agent) RegisterRoute(r *Route) {

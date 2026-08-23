@@ -59,6 +59,7 @@ func (a *Agent) prepareGenInput(ctx context.Context, input *stream.Input, r *run
 // GenerateImage generates an image. A missing Model defaults to the agent's
 // image-capability proxy model.
 func (a *Agent) GenerateImage(ctx context.Context, input goai.ImageInput) (*goai.ImageResult, error) {
+	a.requireRuntime("GenerateImage")
 	if input.Model == nil {
 		input.Model = a.proxyImage(ctx, "", CapImage)
 	}
@@ -68,6 +69,7 @@ func (a *Agent) GenerateImage(ctx context.Context, input goai.ImageInput) (*goai
 // GenerateSpeech synthesizes speech. A missing Model defaults to the agent's
 // speech-capability proxy model.
 func (a *Agent) GenerateSpeech(ctx context.Context, input goai.SpeechInput) (*goai.SpeechResult, error) {
+	a.requireRuntime("GenerateSpeech")
 	if input.Model == nil {
 		input.Model = a.proxySpeech(ctx, "", CapSpeech)
 	}
@@ -77,6 +79,7 @@ func (a *Agent) GenerateSpeech(ctx context.Context, input goai.SpeechInput) (*go
 // Transcribe converts speech to text. A missing Model defaults to the agent's
 // transcription-capability proxy model.
 func (a *Agent) Transcribe(ctx context.Context, input goai.TranscribeInput) (*goai.TranscriptionResult, error) {
+	a.requireRuntime("Transcribe")
 	if input.Model == nil {
 		input.Model = a.proxyTranscription(ctx, "", CapTranscription)
 	}
@@ -86,6 +89,7 @@ func (a *Agent) Transcribe(ctx context.Context, input goai.TranscribeInput) (*go
 // Embed computes embeddings. A missing Model defaults to the agent's
 // embedding-capability proxy model.
 func (a *Agent) Embed(ctx context.Context, input goai.EmbedInput) (*goai.EmbedResult, error) {
+	a.requireRuntime("Embed")
 	if input.Model == nil {
 		input.Model = a.proxyEmbedding(ctx, "", CapEmbedding)
 	}

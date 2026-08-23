@@ -81,7 +81,7 @@ func main() {
 }
 ```
 
-In a real agent you'd also call `RegisterTool`, `RegisterWebhook`, `RegisterCron`, `RegisterConnection`, and so on. The [API reference](REFERENCE.md) documents the full surface.
+In a real agent you'd also call `RegisterTool`, `RegisterWebhook`, `RegisterJob`, `RegisterConnection`, and so on. The [API reference](REFERENCE.md) documents the full surface.
 
 ## Companion projects
 

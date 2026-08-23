@@ -29,10 +29,11 @@ func TestSyncWithAirlock(t *testing.T) {
 		Header:      "X-Hub-Signature-256",
 		Description: "GitHub events",
 	})
-	a.RegisterCron(&Cron{
+	jobHandle := RegisterJob(a, testJobDefinition(1))
+	jobHandle.Cron(&JobCron[testJobInput]{
 		Slug:        "daily",
 		Schedule:    "0 9 * * *",
-		Handler:     func(ctx context.Context, event ScheduleEvent) error { return nil },
+		Input:       testJobInput{Source: "uploads/daily.mov"},
 		Description: "Daily task",
 	})
 	a.RegisterStaticAsset(&StaticAsset{
@@ -61,5 +62,25 @@ func TestSyncWithAirlock(t *testing.T) {
 	}
 	if len(body.Routes) != 1 || body.Routes[0].Path != "/static/{name}" || body.Routes[0].Method != http.MethodGet || body.Routes[0].Access != wire.AccessPublic {
 		t.Fatalf("expected public static route in sync batch, got %+v", body.Routes)
+	}
+	if len(body.JobHandlers) != 1 {
+		t.Fatalf("job handlers = %d, want 1", len(body.JobHandlers))
+	}
+	job := body.JobHandlers[0]
+	if job.Name != "convert_video" || job.Version != 1 || job.MaxAttempts != 3 || job.MaxConcurrency != 2 {
+		t.Fatalf("job handler = %+v", job)
+	}
+	if len(job.InputSchemaHash) != 64 || len(job.OutputSchemaHash) != 64 {
+		t.Fatalf("job schema hashes = %q, %q", job.InputSchemaHash, job.OutputSchemaHash)
+	}
+	if len(body.JobCrons) != 1 {
+		t.Fatalf("job crons = %d, want 1", len(body.JobCrons))
+	}
+	cron := body.JobCrons[0]
+	if cron.Slug != "daily" || cron.Schedule != "0 9 * * *" || cron.Description != "Daily task" ||
+		cron.HandlerName != job.Name || cron.HandlerVersion != job.Version ||
+		cron.InputSchemaHash != job.InputSchemaHash || cron.OutputSchemaHash != job.OutputSchemaHash ||
+		string(cron.Input) != `{"source":"uploads/daily.mov"}` {
+		t.Fatalf("job cron = %+v", cron)
 	}
 }

@@ -1,12 +1,15 @@
 package mockairlock
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/sol/websearch"
 )
 
@@ -15,6 +18,7 @@ type Request struct {
 	Method string
 	Path   string
 	Body   []byte
+	Header http.Header
 }
 
 // Mock is an httptest server that implements the Airlock agent API.
@@ -28,6 +32,12 @@ type Mock struct {
 	// BeforeLLMResponse, when set, runs after the request is recorded and before
 	// response headers or events are written.
 	BeforeLLMResponse func()
+	// EnqueueJobResponse and GetJobResponse override the default job responses.
+	EnqueueJobResponse *wire.EnqueueJobResponse
+	EnqueueJobError    *wire.EnqueueJobErrorResponse
+	GetJobResponse     *wire.GetJobResponse
+	RunCompleteStatus  int
+	JobProgressStatus  int
 }
 
 // New creates a mock Airlock server and returns it with its base URL.
@@ -147,10 +157,58 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 	})
 	mux.HandleFunc("POST /api/agent/run/complete", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.RunCompleteStatus != 0 {
+			http.Error(w, "run completion rejected", m.RunCompleteStatus)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("POST /api/agent/schedules", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/agent/jobs", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.EnqueueJobError != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(m.EnqueueJobError)
+			return
+		}
+		response := m.EnqueueJobResponse
+		if response == nil {
+			var request wire.EnqueueJobRequest
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			now := time.Now().UTC()
+			response = &wire.EnqueueJobResponse{
+				Job: wire.JobInfo{
+					ID: request.ID, AgentID: "test-agent", HandlerName: request.Name, HandlerVersion: request.Version,
+					InputSchemaHash: request.InputSchemaHash, OutputSchemaHash: request.OutputSchemaHash,
+					Status: "queued", Input: request.Input, MaxAttempts: 3, AttemptLimit: 100, SourceRunID: r.Header.Get("X-Airlock-Run-ID"),
+					ScheduledAt: request.ScheduledAt,
+					CreatedAt:   now, UpdatedAt: now,
+				},
+				Created: true,
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(response)
+	})
+	mux.HandleFunc("GET /api/agent/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		if m.GetJobResponse == nil {
+			http.Error(w, "GetJobResponse is not configured", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(m.GetJobResponse)
+	})
+	mux.HandleFunc("DELETE /api/agent/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("PUT /api/agent/jobs/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		if m.JobProgressStatus != 0 {
+			http.Error(w, "job progress rejected", m.JobProgressStatus)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("PUT /api/agent/connections/{slug}", func(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +267,8 @@ func (m *Mock) Close() {
 
 func (m *Mock) record(r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
 	m.mu.Lock()
-	m.requests = append(m.requests, Request{Method: r.Method, Path: r.URL.Path, Body: body})
+	m.requests = append(m.requests, Request{Method: r.Method, Path: r.URL.Path, Body: body, Header: r.Header.Clone()})
 	m.mu.Unlock()
 }

@@ -3,6 +3,7 @@ package agentsdk
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
@@ -23,15 +24,20 @@ var (
 )
 
 const (
-	maxToolNameLength    = 58
-	maxBindingSlugLength = 44
-	maxLocalSlugLength   = 63
+	maxToolNameLength      = 58
+	maxBindingSlugLength   = 44
+	maxLocalSlugLength     = 63
+	maxJobDescriptionBytes = 4096
+	maxJobTimeout          = 24 * time.Hour
+	maxJobAttempts         = 100
+	maxJobConcurrency      = 1000
+	maxJobSchemaBytes      = 256 * 1024
 )
 
 var frameworkRoutePatterns = []string{
 	"POST /prompt",
 	"POST /webhook/{name}",
-	"POST /fire/{slug}",
+	"POST /job/{name}/{version}",
 	"POST /refresh",
 	"GET /health",
 	"POST /__air/tool/{name}",
@@ -68,8 +74,8 @@ func (a *Agent) validateRegistrations() {
 	for _, w := range a.webhooks {
 		validateWebhook(w)
 	}
-	for _, h := range a.scheduleHandlers {
-		validateScheduleHandler(h)
+	for _, j := range a.jobs {
+		validateRegisteredJob(j)
 	}
 	validateRoutePatterns(a.routes, nil)
 	for _, r := range a.routes {
@@ -107,6 +113,61 @@ func (a *Agent) validateRegistrations() {
 		}
 		seenModels[slot.Slug] = struct{}{}
 	}
+}
+
+func validateRegisteredJob(job *registeredJob) {
+	if job == nil {
+		panic("agentsdk: registered job is nil")
+	}
+	validateLocalIdentifier("RegisterJob", "Name", job.name, maxLocalSlugLength)
+	name := fmt.Sprintf("RegisterJob(%q)", job.name)
+	if job.version <= 0 {
+		panic(name + ": Version must be positive")
+	}
+	if job.version > math.MaxInt32 {
+		panic(name + ": Version exceeds the wire limit")
+	}
+	if strings.TrimSpace(job.description) == "" {
+		panic(name + ": Description is required")
+	}
+	if len(job.description) > maxJobDescriptionBytes {
+		panic(name + ": Description exceeds 4096 bytes")
+	}
+	if job.timeout <= 0 || job.timeout.Milliseconds() <= 0 {
+		panic(name + ": Timeout must be at least one millisecond")
+	}
+	if job.timeout > maxJobTimeout {
+		panic(name + ": Timeout exceeds 24 hours")
+	}
+	if job.maxAttempts <= 0 {
+		panic(name + ": MaxAttempts must be positive")
+	}
+	if job.maxAttempts > math.MaxInt32 {
+		panic(name + ": MaxAttempts exceeds the wire limit")
+	}
+	if job.maxAttempts > maxJobAttempts {
+		panic(name + ": MaxAttempts exceeds 100")
+	}
+	if job.maxConcurrency <= 0 {
+		panic(name + ": MaxConcurrency must be positive")
+	}
+	if job.maxConcurrency > math.MaxInt32 {
+		panic(name + ": MaxConcurrency exceeds the wire limit")
+	}
+	if job.maxConcurrency > maxJobConcurrency {
+		panic(name + ": MaxConcurrency exceeds 1000")
+	}
+	if job.handler == nil {
+		panic(name + ": Handler is required")
+	}
+	if len(job.inputSchema) > maxJobSchemaBytes {
+		panic(name + ": InputSchema exceeds 256 KiB")
+	}
+	if len(job.outputSchema) > maxJobSchemaBytes {
+		panic(name + ": OutputSchema exceeds 256 KiB")
+	}
+	validateJSON(name+".InputSchema", job.inputSchema)
+	validateJSON(name+".OutputSchema", job.outputSchema)
 }
 
 func validateRegisteredTool(t *registeredTool) {
@@ -154,32 +215,6 @@ func validateWebhook(w *Webhook) {
 		panic(fmt.Sprintf("agentsdk: RegisterWebhook(%q): invalid Verify %q", w.Path, w.Verify))
 	}
 	validateTimeout(fmt.Sprintf("RegisterWebhook(%q).Timeout", w.Path), w.Timeout)
-}
-
-func validateScheduleHandler(h *scheduleHandler) {
-	if h == nil {
-		panic("agentsdk: schedule handler is nil")
-	}
-	validateLocalSlug("schedule", h.slug)
-	if h.handler == nil {
-		panic(fmt.Sprintf("agentsdk: schedule handler %q: Handler is required", h.slug))
-	}
-	if strings.TrimSpace(h.description) == "" {
-		panic(fmt.Sprintf("agentsdk: schedule handler %q: Description is required", h.slug))
-	}
-	validateTimeout(fmt.Sprintf("schedule handler %q Timeout", h.slug), h.timeout)
-	switch h.kind {
-	case "cron":
-		if _, err := cronParser.Parse(h.recurrence); err != nil {
-			panic(fmt.Sprintf("agentsdk: RegisterCron(%q): invalid Schedule: %v", h.slug, err))
-		}
-	case "schedule":
-		if h.recurrence != "" {
-			panic(fmt.Sprintf("agentsdk: RegisterSchedule(%q): recurrence must be empty", h.slug))
-		}
-	default:
-		panic(fmt.Sprintf("agentsdk: schedule handler %q: invalid kind %q", h.slug, h.kind))
-	}
 }
 
 func validateRoute(r *Route) {
@@ -258,10 +293,10 @@ func registerMuxPattern(mux *http.ServeMux, pattern string, handler http.Handler
 }
 
 func frameworkRoutePath(path string) bool {
-	if path == "/prompt" || path == "/webhook" || path == "/fire" || path == "/refresh" || path == "/health" || path == "/__air" || path == "/static" {
+	if path == "/prompt" || path == "/webhook" || path == "/job" || path == "/refresh" || path == "/health" || path == "/__air" || path == "/static" {
 		return true
 	}
-	return strings.HasPrefix(path, "/webhook/") || strings.HasPrefix(path, "/fire/") || strings.HasPrefix(path, "/__air/") || strings.HasPrefix(path, "/static/")
+	return strings.HasPrefix(path, "/webhook/") || strings.HasPrefix(path, "/job/") || strings.HasPrefix(path, "/__air/") || strings.HasPrefix(path, "/static/")
 }
 
 func validateTopic(t *Topic) {

@@ -26,7 +26,7 @@ func (r *run) recordAction(actionType string, request any, response any, err err
 }
 
 // complete flushes the run's recorded actions to Airlock. Called only by
-// dispatchers (serve.go webhook/cron, prompt.go, route wrapper, background
+// dispatchers (webhooks, jobs, prompts, routes, and background
 // flusher) — never by builder code. errorKind is one of errorKindPlatform /
 // errorKindAgent / "" — required when status == "error", ignored otherwise.
 func (r *run) complete(ctx context.Context, status, errMsg, errorKind, panicTrace string) error {

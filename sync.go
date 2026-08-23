@@ -5,16 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/airlockrun/agentsdk/wire"
 	"go.uber.org/zap"
 )
 
-// syncWithAirlock registers connections, MCP servers, webhooks, crons, topics, and event subscriptions with Airlock.
+// syncWithAirlock registers the agent's declared capabilities with Airlock.
 // Called by Serve() at startup (via syncOrPanic) and by the /refresh handler.
 // Returns the error so /refresh can propagate it; startup panics via the wrapper.
 func (a *Agent) syncWithAirlock(ctx context.Context) error {
+	if a.jobManifestMode {
+		return a.runtimeUnavailable("sync")
+	}
 	a.freeze()
 	// Declare each connection as a need in the sync batch. The agent declares
 	// the shape; operators create + bind the backing resource.
@@ -80,20 +84,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: w.Description,
 		})
 	}
-	scheduleHandlers := make([]wire.ScheduleHandlerDef, 0, len(a.scheduleHandlers))
-	for _, h := range a.scheduleHandlers {
-		timeout := h.timeout
-		if timeout == 0 {
-			timeout = defaultTimeout
-		}
-		scheduleHandlers = append(scheduleHandlers, wire.ScheduleHandlerDef{
-			Slug:        h.slug,
-			Kind:        h.kind,
-			Recurrence:  h.recurrence,
-			TimeoutMs:   timeout.Milliseconds(),
-			Description: h.description,
-		})
-	}
+	jobManifest := a.buildJobManifest()
 	routeCount := len(a.routes)
 	if len(a.staticAssets) > 0 {
 		routeCount++
@@ -191,20 +182,21 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	}
 
 	syncBody := wire.SyncRequest{
-		Version:          Version,
-		Description:      a.description,
-		Emoji:            a.emoji,
-		Tools:            tools,
-		Webhooks:         webhooks,
-		ScheduleHandlers: scheduleHandlers,
-		Routes:           routes,
-		Topics:           topics,
-		MCPServers:       mcpServers,
-		Connections:      connections,
-		ExecEndpoints:    execEndpoints,
-		Directories:      directories,
-		Instructions:     instructions,
-		ModelSlots:       modelSlots,
+		Version:       Version,
+		Description:   a.description,
+		Emoji:         a.emoji,
+		Tools:         tools,
+		Webhooks:      webhooks,
+		JobHandlers:   jobManifest.JobHandlers,
+		JobCrons:      jobManifest.JobCrons,
+		Routes:        routes,
+		Topics:        topics,
+		MCPServers:    mcpServers,
+		Connections:   connections,
+		ExecEndpoints: execEndpoints,
+		Directories:   directories,
+		Instructions:  instructions,
+		ModelSlots:    modelSlots,
 	}
 
 	var syncResp wire.SyncResponse
@@ -227,6 +219,55 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (a *Agent) buildJobManifest() wire.JobManifest {
+	jobKeys := make([]jobKey, 0, len(a.jobs))
+	for key := range a.jobs {
+		jobKeys = append(jobKeys, key)
+	}
+	sort.Slice(jobKeys, func(i, j int) bool {
+		if jobKeys[i].name == jobKeys[j].name {
+			return jobKeys[i].version < jobKeys[j].version
+		}
+		return jobKeys[i].name < jobKeys[j].name
+	})
+	jobHandlers := make([]wire.JobHandlerDef, 0, len(jobKeys))
+	for _, key := range jobKeys {
+		job := a.jobs[key]
+		jobHandlers = append(jobHandlers, wire.JobHandlerDef{
+			Name:             job.name,
+			Version:          int32(job.version),
+			Description:      job.description,
+			TimeoutMs:        job.timeout.Milliseconds(),
+			MaxAttempts:      int32(job.maxAttempts),
+			MaxConcurrency:   int32(job.maxConcurrency),
+			InputSchema:      job.inputSchema,
+			OutputSchema:     job.outputSchema,
+			InputSchemaHash:  job.inputSchemaHash,
+			OutputSchemaHash: job.outputSchemaHash,
+		})
+	}
+	cronSlugs := make([]string, 0, len(a.jobCrons))
+	for slug := range a.jobCrons {
+		cronSlugs = append(cronSlugs, slug)
+	}
+	sort.Strings(cronSlugs)
+	jobCrons := make([]wire.JobCronDef, 0, len(cronSlugs))
+	for _, slug := range cronSlugs {
+		cron := a.jobCrons[slug]
+		jobCrons = append(jobCrons, wire.JobCronDef{
+			Slug:             cron.slug,
+			Schedule:         cron.schedule,
+			Description:      cron.description,
+			HandlerName:      cron.handlerName,
+			HandlerVersion:   int32(cron.handlerVersion),
+			InputSchemaHash:  cron.inputSchemaHash,
+			OutputSchemaHash: cron.outputSchemaHash,
+			Input:            cron.input,
+		})
+	}
+	return wire.JobManifest{JobHandlers: jobHandlers, JobCrons: jobCrons}
 }
 
 // syncOrPanic is the startup wrapper that turns sync failures into panics —

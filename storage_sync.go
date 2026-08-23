@@ -28,7 +28,7 @@ import (
 //
 // Trusted: no access check (builder code that constructs paths itself).
 //
-// Use case: pair with SyncUp in a cron handler to persist self-updating
+// Use case: pair with SyncUp in a recurring job handler to persist self-updating
 // binaries (e.g. `bun upgrade`, `freshclam`) across container restarts —
 // the running container's local copy is the working copy, S3 is the
 // durable record. See the agent-builder prompt for a full worked example.

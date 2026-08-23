@@ -54,7 +54,7 @@ var ErrInvalidPath = errors.New("agentsdk: invalid path")
 // --- Caller plumbing ---
 
 // caller carries the access level of whoever triggered the current
-// dispatch. Framework dispatch sites (tool Execute, VM bindings, cron,
+// dispatch. Framework dispatch sites (tool Execute, VM bindings, jobs,
 // webhook, route, subdomain proxy) inject one onto ctx via withCaller.
 // Builder Go code that constructs paths itself does NOT need to set a
 // caller — it calls the trusted file API directly (OpenFile/ReadFile/
@@ -213,6 +213,9 @@ func (a *Agent) hasPublicDirCap(op FileOperation) bool {
 // ResolveFilePath authorizes an untrusted path and returns the exact physical
 // path that storage operations must use. Trusted Go storage methods bypass it.
 func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperation) (FilePath, error) {
+	if a.jobManifestMode {
+		return "", a.runtimeUnavailable("ResolveFilePath")
+	}
 	if _, ok := dirCap(&directory{}, op); !ok {
 		return "", fmt.Errorf("agentsdk: unsupported file operation %q", op)
 	}

@@ -19,10 +19,17 @@ import (
 	"go.uber.org/zap"
 )
 
-// Serve starts the agent HTTP server. Blocks until SIGINT/SIGTERM.
-// Listens on AIRLOCK_ADDR env var or :8080.
-// Before starting, syncs connections/webhooks/crons with Airlock.
+const maxJobManifestBytes = 4 << 20
+
+// Serve emits one canonical job manifest to stdout and returns when
+// AIRLOCK_AGENT_MODE=job-manifest. Otherwise it starts the agent HTTP server,
+// blocks until SIGINT/SIGTERM, listens on AIRLOCK_ADDR or :8080, and syncs the
+// agent's declared capabilities with Airlock before accepting requests.
 func (a *Agent) Serve() {
+	if a.jobManifestMode {
+		a.serveJobManifest(os.Stdout)
+		return
+	}
 	defer func() {
 		if err := a.Close(); err != nil {
 			agentLogger().Warn("close database", zap.Error(err))
@@ -66,8 +73,27 @@ func (a *Agent) Serve() {
 	}
 }
 
+func (a *Agent) serveJobManifest(w io.Writer) {
+	a.freeze()
+	payload, err := json.Marshal(a.buildJobManifest())
+	if err != nil {
+		panic("agentsdk: encode job manifest: " + err.Error())
+	}
+	if len(payload) > maxJobManifestBytes {
+		panic(fmt.Sprintf("agentsdk: job manifest exceeds %d bytes", maxJobManifestBytes))
+	}
+	payload = append(payload, '\n')
+	n, err := w.Write(payload)
+	if err != nil {
+		panic("agentsdk: write job manifest: " + err.Error())
+	}
+	if n != len(payload) {
+		panic("agentsdk: write job manifest: short write")
+	}
+}
+
 // Handler builds the agent's HTTP mux: the framework routes (/prompt,
-// /webhook, /fire, /refresh, /health, the A2A and asset endpoints) plus every
+// /webhook, /job, /refresh, /health, the A2A and asset endpoints) plus every
 // route registered via RegisterRoute, each wrapped with the lazy-run + logging
 // middleware. Serve installs it after syncing with Airlock.
 //
@@ -76,11 +102,12 @@ func (a *Agent) Serve() {
 // {param} extraction) with httptest. A test that needs the synced prompt data
 // or MCP schemas a handler reads must call syncWithAirlock first.
 func (a *Agent) Handler() http.Handler {
+	a.requireRuntime("Handler")
 	a.freeze()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /prompt", handlePrompt(a))
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
-	mux.HandleFunc("POST /fire/{slug}", a.handleFire)
+	mux.HandleFunc("POST /job/{name}/{version}", a.handleJob)
 	mux.HandleFunc("POST /refresh", a.handleRefresh)
 	mux.HandleFunc("GET /health", a.handleHealth)
 	// A2A: airlock's MCP server forwards user-registered tool calls
@@ -154,71 +181,6 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run.complete(ctx, "success", "", "", "")
-}
-
-// handleFire serves one scheduler delivery attempt and acknowledges the
-// handler result with a bounded JSON response.
-func (a *Agent) handleFire(w http.ResponseWriter, r *http.Request) {
-	slug := r.PathValue("slug")
-	h, ok := a.scheduleHandlers[slug]
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	var req wire.ScheduleFireRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil || req.ID == "" || req.Slug != slug || req.ScheduledAt.IsZero() || req.Attempt < 1 {
-		http.Error(w, "invalid schedule fire request", http.StatusBadRequest)
-		return
-	}
-
-	timeout := h.timeout
-	if timeout == 0 {
-		timeout = defaultTimeout
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-
-	runID := r.Header.Get("X-Run-ID")
-	if runID == "" {
-		panic("agentsdk: X-Run-ID header is required")
-	}
-	bridgeID := r.Header.Get("X-Bridge-ID")
-
-	run := newRun(a, runID, bridgeID, "", ctx)
-	run.callerAccess = AccessAdmin // a timed fire is a trusted scheduled trigger
-	ctx = contextWithRun(ctx, run)
-	event := ScheduleEvent{ID: req.ID, Slug: req.Slug, ScheduledAt: req.ScheduledAt, Attempt: req.Attempt}
-	writeResult := func(status, message string) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(wire.ScheduleFireResponse{Status: status, Error: message})
-	}
-
-	defer func() {
-		if rec := recover(); rec != nil {
-			trace := string(debug.Stack())
-			errMsg := fmt.Sprintf("%v", rec)
-			run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, trace)
-			writeResult("error", errMsg)
-			return
-		}
-	}()
-
-	if err := h.handler(ctx, event); err != nil {
-		status := "error"
-		if ctx.Err() == context.DeadlineExceeded {
-			status = "timeout"
-		}
-		run.complete(ctx, status, err.Error(), wire.ErrorKindAgent, "")
-		writeResult(status, err.Error())
-		return
-	}
-	if ctx.Err() == context.DeadlineExceeded {
-		run.complete(ctx, "timeout", ctx.Err().Error(), wire.ErrorKindAgent, "")
-		writeResult("timeout", ctx.Err().Error())
-		return
-	}
-	run.complete(ctx, "success", "", "", "")
-	writeResult("success", "")
 }
 
 // handleDirectTool dispatches a user-registered tool by name without
@@ -304,25 +266,34 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	_, _ = sw.Write([]byte(res.Output))
 }
 
-// wrapRoute converts a RouteHandlerFunc into http.HandlerFunc, installing
-// a lazy run and caller on r.Context and completing a materialized run from
-// the handler's error, panic, and response status.
+// wrapRoute converts a RouteHandlerFunc into http.HandlerFunc and completes the
+// Airlock-created route run from the handler's error, panic, and response status.
+// Direct Handler tests without an ingress run retain lazy-run behavior.
 func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Carry the authenticated user (airlock forwards X-User-ID /
-		// X-User-Email on authed proxied requests) so UserFromContext works
-		// in route handlers — without materializing a run.
 		caller := callerFromRequest(r)
 		user := userFromRequest(r)
-		lazy := &lazyRun{
-			agent:           a,
-			triggerRef:      "route:" + key,
-			userID:          user.ID,
-			userEmail:       user.Email,
-			userDisplayName: user.DisplayName,
-			callerAccess:    caller.Access,
+		var activeRun *run
+		var lazy *lazyRun
+		var ctx context.Context
+		if runID := r.Header.Get("X-Run-ID"); runID != "" {
+			activeRun = newRun(a, runID, "", "", r.Context())
+			activeRun.userID = user.ID
+			activeRun.userEmail = user.Email
+			activeRun.userDisplayName = user.DisplayName
+			activeRun.callerAccess = caller.Access
+			ctx = activeRun.checkedCtx()
+		} else {
+			lazy = &lazyRun{
+				agent:           a,
+				triggerRef:      "route:" + key,
+				userID:          user.ID,
+				userEmail:       user.Email,
+				userDisplayName: user.DisplayName,
+				callerAccess:    caller.Access,
+			}
+			ctx = withCaller(contextWithLazyRun(r.Context(), lazy), caller)
 		}
-		ctx := withCaller(contextWithLazyRun(r.Context(), lazy), caller)
 		r = r.WithContext(ctx)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		var dispatchErr error
@@ -351,7 +322,11 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 			if sw.status >= http.StatusInternalServerError {
 				agentLogger().Warn("route error response", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", sw.status))
 			}
-			completeLazyRun(ctx, lazy, sw.status, dispatchErr, panicTrace)
+			if activeRun != nil {
+				completeHTTPRun(ctx, activeRun, sw.status, dispatchErr, panicTrace)
+			} else {
+				completeLazyRun(ctx, lazy, sw.status, dispatchErr, panicTrace)
+			}
 		}()
 
 		dispatchErr = handler(sw, r)
@@ -392,6 +367,10 @@ func completeLazyRun(ctx context.Context, lazy *lazyRun, status int, dispatchErr
 	if run == nil {
 		return
 	}
+	completeHTTPRun(ctx, run, status, dispatchErr, panicTrace)
+}
+
+func completeHTTPRun(ctx context.Context, run *run, status int, dispatchErr error, panicTrace string) {
 	if dispatchErr != nil {
 		_ = run.complete(ctx, "error", dispatchErr.Error(), wire.ErrorKindAgent, panicTrace)
 		return
@@ -441,21 +420,11 @@ func (a *Agent) handleRefresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
-	type scheduleInfo struct {
-		Slug string `json:"slug"`
-		Kind string `json:"kind"`
-	}
-
 	webhooks := make([]string, 0, len(a.webhooks))
 	for path := range a.webhooks {
 		webhooks = append(webhooks, path)
 	}
 	sort.Strings(webhooks)
-
-	schedules := make([]scheduleInfo, 0, len(a.scheduleHandlers))
-	for slug, h := range a.scheduleHandlers {
-		schedules = append(schedules, scheduleInfo{Slug: slug, Kind: h.kind})
-	}
 
 	tools := make([]string, 0, len(a.tools))
 	for name := range a.tools {
@@ -482,11 +451,10 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := struct {
-		Status    string         `json:"status"`
-		Webhooks  []string       `json:"webhooks"`
-		Schedules []scheduleInfo `json:"schedules"`
-		Tools     []string       `json:"tools"`
-	}{status, webhooks, schedules, tools}
+		Status   string   `json:"status"`
+		Webhooks []string `json:"webhooks"`
+		Tools    []string `json:"tools"`
+	}{status, webhooks, tools}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

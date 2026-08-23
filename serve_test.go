@@ -32,7 +32,16 @@ func TestHealthEndpoint(t *testing.T) {
 		Status string   `json:"status"`
 		Tools  []string `json:"tools"`
 	}
-	json.NewDecoder(w.Body).Decode(&resp)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := raw["schedules"]; exists {
+		t.Fatal("health response exposes schedules")
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
 	if resp.Status != "ok" {
 		t.Fatalf("expected ok, got %s", resp.Status)
 	}

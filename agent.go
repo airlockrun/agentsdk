@@ -37,6 +37,8 @@ type Config struct {
 // Agent is a long-lived singleton, one per container.
 // Created once at startup via New(), lives for the lifetime of the process.
 type Agent struct {
+	jobManifestMode bool
+
 	agentID     string
 	apiURL      string
 	token       string
@@ -52,17 +54,18 @@ type Agent struct {
 	registrationM sync.Mutex
 	frozen        bool
 
-	tools            map[string]*registeredTool
-	webhooks         map[string]*Webhook
-	scheduleHandlers map[string]*scheduleHandler
-	routes           map[string]*Route
-	auths            map[string]*Connection
-	mcps             map[string]*MCP
-	envVars          map[string]*EnvVar
-	topics           map[string]*Topic
-	execEndpoints    map[string]*ExecEndpoint
-	staticAssets     map[string]*StaticAsset
-	directories      []*directory // registration order; longest-prefix wins at lookup
+	tools         map[string]*registeredTool
+	webhooks      map[string]*Webhook
+	jobs          map[jobKey]*registeredJob
+	jobCrons      map[string]*registeredJobCron
+	routes        map[string]*Route
+	auths         map[string]*Connection
+	mcps          map[string]*MCP
+	envVars       map[string]*EnvVar
+	topics        map[string]*Topic
+	execEndpoints map[string]*ExecEndpoint
+	staticAssets  map[string]*StaticAsset
+	directories   []*directory // registration order; longest-prefix wins at lookup
 
 	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
@@ -93,6 +96,9 @@ var ErrAgentURLUnavailable = errors.New("agentsdk: agent URL is unavailable")
 // AgentURL only when an absolute URL leaves the current request context, such
 // as emails, third-party callbacks, or messages.
 func (a *Agent) AgentURL() (string, error) {
+	if a.jobManifestMode {
+		return "", a.runtimeUnavailable("AgentURL")
+	}
 	a.syncMu.RLock()
 	defer a.syncMu.RUnlock()
 	if a.promptData.AgentRouteURL == "" {
@@ -124,9 +130,10 @@ func AgentFromContext(ctx context.Context) *Agent {
 }
 
 // UserFromContext returns the human a run is acting for. The second return is
-// false for runs with no originating user — cron/schedule/webhook triggers and
-// anonymous/public prompt runs. ID is the stable internal-user uuid and is the
-// key to scope agent-owned data by; Email/DisplayName are display claims.
+// false for runs with no originating user, including system job and webhook
+// triggers and anonymous/public prompt runs. ID is the stable internal-user
+// uuid and is the key to scope agent-owned data by; Email/DisplayName are
+// display claims.
 // Reading it never materializes a run, so route handlers can call it freely:
 // /prompt and route runs carry id+email+display name (airlock forwards
 // X-User-ID/Email/Name); the A2A path carries id only.
@@ -149,14 +156,24 @@ func UserFromContext(ctx context.Context) (User, bool) {
 	return User{}, false
 }
 
-// New creates an Agent by reading required environment variables.
-// Panics if AIRLOCK_AGENT_ID, AIRLOCK_API_URL, AIRLOCK_AGENT_TOKEN, or
-// AIRLOCK_DB_URL is missing. The database connection is opened, checked, and
-// migrated before New returns.
+// New creates an Agent. When AIRLOCK_AGENT_MODE=job-manifest, New initializes
+// registration state without runtime credentials, an Airlock client, or a
+// database. An unknown nonempty mode panics. In normal mode it panics if
+// AIRLOCK_AGENT_ID, AIRLOCK_API_URL, AIRLOCK_AGENT_TOKEN, or AIRLOCK_DB_URL is missing; the database connection is
+// opened, checked, and migrated before New returns.
 // Panics if Config.Description is empty.
 func New(cfg Config) *Agent {
 	if strings.TrimSpace(cfg.Description) == "" {
 		panic("agentsdk: Config.Description is required")
+	}
+	a := newAgentRegistrationState(cfg)
+	switch mode := os.Getenv("AIRLOCK_AGENT_MODE"); mode {
+	case "job-manifest":
+		a.jobManifestMode = true
+		return a
+	case "":
+	default:
+		panic("agentsdk: unsupported AIRLOCK_AGENT_MODE: " + mode)
 	}
 
 	agentID := requireEnv("AIRLOCK_AGENT_ID")
@@ -173,26 +190,11 @@ func New(cfg Config) *Agent {
 		panic("agentsdk: failed to connect to database: " + err.Error())
 	}
 
-	a := &Agent{
-		agentID:          agentID,
-		apiURL:           apiURL,
-		token:            token,
-		description:      cfg.Description,
-		emoji:            cfg.Emoji,
-		httpClient:       &http.Client{},
-		db:               &AgentDB{db: sqlDB},
-		sensitiveSet:     make(map[string]struct{}),
-		tools:            make(map[string]*registeredTool),
-		webhooks:         make(map[string]*Webhook),
-		scheduleHandlers: make(map[string]*scheduleHandler),
-		routes:           make(map[string]*Route),
-		auths:            make(map[string]*Connection),
-		mcps:             make(map[string]*MCP),
-		envVars:          make(map[string]*EnvVar),
-		topics:           make(map[string]*Topic),
-		execEndpoints:    make(map[string]*ExecEndpoint),
-		staticAssets:     make(map[string]*StaticAsset),
-	}
+	a.agentID = agentID
+	a.apiURL = apiURL
+	a.token = token
+	a.httpClient = &http.Client{}
+	a.db = &AgentDB{db: sqlDB}
 	a.db.agent = a
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
@@ -205,6 +207,26 @@ func New(cfg Config) *Agent {
 		}()
 		a.autoMigrate()
 	}()
+	return a
+}
+
+func newAgentRegistrationState(cfg Config) *Agent {
+	a := &Agent{
+		description:   cfg.Description,
+		emoji:         cfg.Emoji,
+		sensitiveSet:  make(map[string]struct{}),
+		tools:         make(map[string]*registeredTool),
+		webhooks:      make(map[string]*Webhook),
+		jobs:          make(map[jobKey]*registeredJob),
+		jobCrons:      make(map[string]*registeredJobCron),
+		routes:        make(map[string]*Route),
+		auths:         make(map[string]*Connection),
+		mcps:          make(map[string]*MCP),
+		envVars:       make(map[string]*EnvVar),
+		topics:        make(map[string]*Topic),
+		execEndpoints: make(map[string]*ExecEndpoint),
+		staticAssets:  make(map[string]*StaticAsset),
+	}
 	// Framework-owned scratch directory — used by run_js output truncation
 	// and generated media. Builders may RegisterDirectory("tmp", ...); the
 	// register helper preserves the framework's caps (the description may
@@ -246,6 +268,16 @@ func New(cfg Config) *Agent {
 	return a
 }
 
+func (a *Agent) runtimeUnavailable(operation string) error {
+	return fmt.Errorf("agentsdk: %s is unavailable when AIRLOCK_AGENT_MODE=job-manifest", operation)
+}
+
+func (a *Agent) requireRuntime(operation string) {
+	if a.jobManifestMode {
+		panic(a.runtimeUnavailable(operation).Error())
+	}
+}
+
 // Logger returns the zap logger for the current handler invocation.
 // Bind it once at handler entry — `log := a.Logger(ctx)` — and use it
 // throughout; the ctx is consumed here to resolve the run, so callers
@@ -275,12 +307,16 @@ func (a *Agent) Logger(ctx context.Context) *zap.Logger {
 // extension point through which the framework can later record query
 // activity onto the run carried by ctx.
 func (a *Agent) DB() *AgentDB {
+	a.requireRuntime("DB")
 	return a.db
 }
 
 // Close releases the database pool owned by the Agent. Serve calls Close when
 // it stops; tests that construct an Agent with New should also close it.
 func (a *Agent) Close() error {
+	if a.jobManifestMode {
+		return a.runtimeUnavailable("Close")
+	}
 	if a.db == nil {
 		return nil
 	}
@@ -309,8 +345,8 @@ func pingDatabase(db *sql.DB) error {
 //
 // caller is the resolved access level for the run; visibleSiblings is
 // the set of sibling IDs this run's user can A2A-call (uuid.Nil
-// excluded). Pass nil to disable the sibling section entirely (e.g.
-// cron/webhook runs with no original user).
+// excluded). Pass nil to disable the sibling section entirely (e.g. system
+// job and webhook runs with no original user).
 //
 // Unknown caller access values panic — they can only happen via a
 // wire-shape bug, and silently mapping would mask it.
@@ -578,7 +614,7 @@ func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prom
 	}
 
 	// Per-user sibling visibility: intersect synced address book with
-	// the visible set passed in. If visibleSiblings is nil (cron /
+	// the visible set passed in. If visibleSiblings is nil (system job or
 	// webhook runs, no original user) the Siblings section is omitted
 	// entirely so the LLM doesn't see bindings it can't invoke.
 	var siblings []prompt.SiblingInfo
