@@ -61,7 +61,7 @@ Read the relevant companion at its build-container path:
 - **[Interactive authentication](reference/auth-web.md)** (`/libs/agentsdk/reference/auth-web.md`) — login flows (one-time
   code / password / click) driven from an admin web page, ending in `Seal`.
 - **[Database](reference/database.md)** (`/libs/agentsdk/reference/database.md`) — Postgres: goose migrations, sqlc
-  queries, Go migrations, build-time validation.
+  queries, database-only Go migrations, build-time validation, and when to use jobs instead.
 
 ## Verifying a build
 
@@ -415,7 +415,7 @@ Typed, versioned jobs provide durable background work, recurring cron enqueue,
 and delayed enqueue. Delivery is at least once. Read
 `/libs/agentsdk/reference/jobs.md` for registration, lifecycle operations,
 idempotency, synchronous durable `JobContext.ReportProgress`, progress snapshots,
-`JobHandle.Cron`, and `JobHandle.EnqueueAt`.
+`JobHandle.Cron`, `JobHandle.EnqueueAt`, and operational data migrations.
 
 ## RegisterRoute — custom HTTP routes
 
@@ -1156,6 +1156,6 @@ queries := internaldb.New(db) // import "agent/internal/db" as internaldb
 users, err := queries.ListActiveUsers(ctx)
 ```
 
-→ Migration file format, numbering, Go migrations (Tx vs NoTx), repeat-safe
-external steps, and build-time validation:
+→ Migration file format, numbering, database-only Go migrations (Tx vs NoTx),
+operational jobs, and build-time validation:
 **`/libs/agentsdk/reference/database.md`**.

@@ -257,15 +257,16 @@ func (h *JobHandle[In, Out]) Cron(cron *JobCron[In]) {
 	}
 }
 
-// Enqueue durably accepts one caller-identified job. Retrying the same ID while
-// Airlock retains the job is idempotent and returns the existing job.
+// Enqueue durably accepts one caller-identified job. Retrying the same work and
+// ID from the same source run while Airlock retains the job is idempotent and
+// returns the existing job.
 func (h *JobHandle[In, Out]) Enqueue(ctx context.Context, id string, input In) (JobResult[Out], error) {
 	return h.enqueue(ctx, id, nil, input, "Enqueue")
 }
 
 // EnqueueAt durably accepts one caller-identified job for delivery at fireAt.
-// Retrying the same ID while Airlock retains the job is idempotent and returns
-// the existing job.
+// Retrying the same work and ID from the same source run while Airlock retains
+// the job is idempotent and returns the existing job.
 func (h *JobHandle[In, Out]) EnqueueAt(ctx context.Context, id string, fireAt time.Time, input In) (JobResult[Out], error) {
 	job := h.registeredJob()
 	h.agent.requireRuntime("JobHandle.EnqueueAt")

@@ -297,8 +297,10 @@ Tests must not load secrets, connection credentials, or MCP credentials from
 ## Database
 
 Migrations live under `db/migrations/`. Use SQL for schema changes and Go
-migrations only for repeat-safe operational side effects that require agent Go
-code or external services. Use sequential goose names
+migrations only for bounded PostgreSQL work that requires Go logic. Storage,
+HTTP, credential, and other external data changes belong in observable durable
+jobs over an expand/migrate/contract layout; never perform them from goose or
+`OnStart`. Use sequential goose names
 (`NNN_short_description.sql` or `.go`). Query files under `db/queries/` are sqlc
 input; each `-- name: FuncName :one|:many|:exec` block becomes a typed Go
 function in `internal/db/`.

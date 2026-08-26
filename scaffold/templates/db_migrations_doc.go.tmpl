@@ -1,4 +1,4 @@
-// Package migrations contains database schema and operational migrations
+// Package migrations contains database schema and bounded data migrations
 // applied at agent startup via goose.
 //
 // SQL migrations: create files like 00002_my_change.sql with
@@ -10,46 +10,34 @@
 //	-- +goose Down
 //	DROP TABLE rooms;
 //
-// Go migrations: for operational work that can't be expressed in SQL
-// (renaming S3 keys, calling external APIs, backfilling data via the
-// agent's own Go code). Create files like 00003_rename_media.go:
+// Go migrations: for bounded PostgreSQL work that requires Go logic. External
+// storage, HTTP, and credential work belongs in a durable registered job so it
+// does not block startup and has observable attempts and progress. Create files
+// like 00003_backfill_rooms.go:
 //
 //	package migrations
 //
 //	import (
 //		"context"
 //		"database/sql"
-//		"path"
 //
-//		"github.com/airlockrun/agentsdk"
+//		db "agent/internal/db"
 //		"github.com/pressly/goose/v3"
 //	)
 //
 //	func init() {
-//		goose.AddMigrationNoTxContext(Up00003, Down00003)
+//		goose.AddMigrationContext(Up00003, Down00003)
 //	}
 //
-//	// Up00003 moves all files under "old/" to "media/" in agent storage.
-//	// External steps have at-least-once execution semantics: goose may run them
-//	// again after an interrupted NoTx migration, so each operation is repeat-safe.
-//	func Up00003(ctx context.Context, db *sql.DB) error {
-//		return agentsdk.MigrationExternalStep(ctx, func(ctx context.Context, agent *agentsdk.Agent) error {
-//			files, err := agent.ListDir(ctx, "old/", agentsdk.ListOpts{Recursive: true})
-//			if err != nil {
-//				return err
-//			}
-//			for _, file := range files {
-//				src := string(file.Path)
-//				dst := "media/" + path.Base(src)
-//				if err := agent.MoveFile(ctx, src, dst); err != nil {
-//					return err
-//				}
-//			}
-//			return nil
-//		})
+//	func Up00003(ctx context.Context, tx *sql.Tx) error {
+//		return db.New(tx).BackfillRoomSlugs(ctx)
 //	}
 //
-//	func Down00003(ctx context.Context, db *sql.DB) error {
-//		return nil // implement a repeat-safe reverse move when rollback requires it
+//	func Down00003(ctx context.Context, tx *sql.Tx) error {
+//		return db.New(tx).ClearBackfilledRoomSlugs(ctx)
 //	}
+//
+// AddMigrationNoTxContext is reserved for PostgreSQL operations that cannot run
+// in a transaction, such as CREATE INDEX CONCURRENTLY. Keep all migrations
+// bounded; large database backfills also belong in jobs over a compatible schema.
 package migrations

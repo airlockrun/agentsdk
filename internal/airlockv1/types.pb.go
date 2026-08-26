@@ -1105,7 +1105,10 @@ type AgentInfo struct {
 	// in the caller's grantee set (directly, or via a group they belong to).
 	// Distinct from your_access: a co-owner (agent_members admin) has admin
 	// access but is_owner=false. Populated alongside owner_name.
-	IsOwner       bool `protobuf:"varint,20,opt,name=is_owner,json=isOwner,proto3" json:"is_owner,omitempty"`
+	IsOwner bool `protobuf:"varint,20,opt,name=is_owner,json=isOwner,proto3" json:"is_owner,omitempty"`
+	// git_mode is empty for internal source, or "read_write" / "read_only" for
+	// a persistent external Git binding.
+	GitMode       string `protobuf:"bytes,21,opt,name=git_mode,json=gitMode,proto3" json:"git_mode,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1278,6 +1281,13 @@ func (x *AgentInfo) GetIsOwner() bool {
 		return x.IsOwner
 	}
 	return false
+}
+
+func (x *AgentInfo) GetGitMode() string {
+	if x != nil {
+		return x.GitMode
+	}
+	return ""
 }
 
 // RunInfo represents a single execution of an agent.
@@ -5687,7 +5697,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	" \x01(\tR\x04kind\x12\x12\n" +
 	"\x04caps\x18\v \x03(\tR\x04caps\x12,\n" +
 	"\x12provider_config_id\x18\f \x01(\tR\x10providerConfigId\x12-\n" +
-	"\x12structured_outputs\x18\r \x01(\bR\x11structuredOutputs\"\x9a\x05\n" +
+	"\x12structured_outputs\x18\r \x01(\bR\x11structuredOutputs\"\xb5\x05\n" +
 	"\tAgentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -5716,7 +5726,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"source_ref\x18\x12 \x01(\tR\tsourceRef\x12\x1d\n" +
 	"\n" +
 	"owner_name\x18\x13 \x01(\tR\townerName\x12\x19\n" +
-	"\bis_owner\x18\x14 \x01(\bR\aisOwner\"\xde\x05\n" +
+	"\bis_owner\x18\x14 \x01(\bR\aisOwner\x12\x19\n" +
+	"\bgit_mode\x18\x15 \x01(\tR\agitMode\"\xde\x05\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +

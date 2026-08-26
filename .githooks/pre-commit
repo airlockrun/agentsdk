@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Version-invariant gate for agentsdk. Enforces:
-#   const Version (in *.go) >= latest git tag
-# Catches "rolled the const back below a published tag." The private HQ
-# `hq release lib agentsdk` command checks that the requested tag equals the const.
+#   const Version (in *.go) > latest git tag
+# The source version identifies an in-progress SDK rather than claiming the
+# bytes of an existing release. The private HQ `hq release lib agentsdk` command
+# checks that the requested tag equals the const.
 #
 # Enable for this clone (one-time):
 #   git config core.hooksPath .githooks

@@ -50,20 +50,6 @@ func isTransientConnError(err error) bool {
 		strings.Contains(msg, "EOF")
 }
 
-type agentCtxKey struct{}
-
-func agentFromMigrationContext(ctx context.Context) *Agent {
-	a, ok := ctx.Value(agentCtxKey{}).(*Agent)
-	if !ok {
-		panic("agentsdk: MigrationExternalStep called outside an SDK-managed migration")
-	}
-	return a
-}
-
-func (a *Agent) migrationContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, agentCtxKey{}, a)
-}
-
 func isValidatingMigrations() bool {
 	return os.Getenv("AGENT_VALIDATE_MIGRATIONS") == "1"
 }
@@ -117,7 +103,7 @@ func (a *Agent) autoMigrate() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(a.migrationContext(context.Background()), migrationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), migrationTimeout)
 	defer cancel()
 	if err := a.runMigrationPass(ctx, dir, mode, downTo); err != nil {
 		panic("agentsdk: run migrations: " + err.Error())

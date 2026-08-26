@@ -55,14 +55,19 @@ reports := agentsdk.RegisterJob(agent, &agentsdk.Job[ReportInput, ReportOutput]{
 ```
 
 Enqueue IDs are canonical non-nil UUIDs chosen by the caller. Retrying the same
-ID while Airlock retains the job is idempotent and returns the existing job.
-Airlock retains terminal jobs for 30 days; reusing an ID after retention creates
-new work, so handlers must retain domain-level effect deduplication for as long
-as their side effects require it. `Get` returns typed output after success.
+work and ID from the same source run while Airlock retains the job is idempotent
+and returns the existing job. A different source run cannot reuse that ID because
+Airlock preserves the original job provenance. Airlock retains terminal jobs for
+30 days; reusing an ID after retention creates new work, so handlers must retain
+domain-level effect deduplication for as long as their side effects require it.
+`Get` returns typed output after success.
 `JobResult.Progress` contains the latest progress snapshot when one has been
-reported. `JobResult.AttemptLimit` is the platform attempt cap, while
-`MaxAttempts` is the contract's normal retry count. `Cancel` requests
-cancellation of queued or running work.
+reported. `MaxAttempts` is the contract's delivery-attempt cap including the
+first attempt; `JobResult.AttemptLimit` is the current effective cap after any
+platform-granted replacement delivery. Ordinary handler errors are terminal;
+platform interruptions and `ErrJobEnqueueUnavailable` can receive another
+delivery within the effective cap. `Cancel` requests cancellation of queued or
+running work.
 
 During a deployment transition, `Enqueue` and `EnqueueAt` can return a
 `*JobEnqueueUnavailableError`. Test it with
@@ -96,3 +101,31 @@ reports.Cron(&agentsdk.JobCron[ReportInput]{
     Description: "Generate the daily report.",
 })
 ```
+
+## Operational data changes
+
+Use jobs, not goose migrations or `OnStart`, for S3 moves, remote API backfills,
+and other external data changes. Jobs keep startup bounded and expose durable
+attempts, errors, cancellation, and progress in Airlock. External effects still
+need domain-level idempotency because delivery is at least once.
+
+For a rare operator-controlled change, expose an admin-only route or tool. Store
+a maintenance row with its generated job ID, call `Enqueue` when no accepted job
+exists, and use `Get` on later requests. A stable ID alone is not duplicate
+suppression across requests because each request has distinct source-run
+provenance. Persist completion and checkpoints in the maintenance row when
+effects must remain deduplicated beyond Airlock's job retention.
+
+Keep the application compatible with both old and new external layouts while
+the job runs:
+
+1. Expand: deploy readers and writers that tolerate both layouts.
+2. Migrate: enqueue the versioned job and report progress as it works.
+3. Contract: remove old-layout support in a later deployment after completion.
+
+Do not use `OnStart` as the maintenance coordinator. It runs independently on
+every replica, only when a process starts, and blocks readiness on failure. It
+does not provide the durable single-owner state needed to close the gap between
+recording an operation and enqueueing it. Use an explicit action with an
+app-owned maintenance row; add a recurring reconciler only when unattended
+initiation and recovery are actual requirements.
