@@ -446,50 +446,14 @@ Other returned errors become a generic 500.
 - `AccessPublic` — anyone, no auth. **Only when the user explicitly asks** for
   a public-facing page. Never default to public.
 
-### Framework asset surface — HTML UI
+### HTML UI
 
-agentsdk bundles htmx and exposes:
-
-- `agentsdk.Assets.HTMX` — versioned URL (e.g. `/__air/assets/htmx-2.0.10.min.js`).
-  Use it in your layout `<head>`: `<script src={ agentsdk.Assets.HTMX }></script>`.
-- `agentsdk.HTMXVersion` — the bundled version string, if you need it
-  programmatically.
-
-**`/__air/assets/*` is framework-reserved.** agentsdk owns this prefix for its
-bundled assets. Register your embedded static files with
-`RegisterStaticAsset`; the SDK serves them publicly from `/static/{name}` with
-`Cache-Control: public, max-age=31536000, immutable` and
-`X-Content-Type-Options: nosniff`. Names are one URL-safe path segment and
-should contain a content hash whenever bytes can change. Unknown names return
-404. Declarations are copied and frozen with all other registrations.
-
-```go
-agent.RegisterStaticAsset(&agentsdk.StaticAsset{
-    Name:        views.AppCSSName, // e.g. app.01234567.css
-    ContentType: "text/css; charset=utf-8",
-    Data:        views.AppCSS,
-})
-```
-
-> UI build, MVC, and design conventions live in the agent's `AGENTS.md`.
-
-```go
-// Registering a templ page (illustrative — the scaffold already
-// wires up `/` to a bound handler method).
-import (
-    "github.com/a-h/templ"
-    "agent/handlers"
-)
-
-pages := handlers.New(handlers.Deps{Spotify: spotifyService})
-agent.RegisterRoute(&agentsdk.Route{
-    Method:  "GET",
-    Path:    "/",
-    Handler: pages.Home,
-    Access:  agentsdk.AccessUser,
-    Description: "Home page",
-})
-```
+agentsdk bundles htmx, the complete Lucide icon catalog, and immutable serving
+for agent-owned static files. Read
+`/libs/agentsdk/reference/html-ui.md` for the asset APIs, inline icon renderer,
+and templ route example. UI structure and design rules live in the agent's
+managed `AGENTS.md`; version-matched templ, htmx, DaisyUI, and Lucide references
+live under `.airlock/toolchain/skills/`.
 
 ## RegisterConnection
 

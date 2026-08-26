@@ -74,5 +74,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 COPY --from=builder /agent /agent
 COPY --from=builder /build/db/migrations /migrations
+COPY --from=builder /build/THIRD_PARTY_NOTICES*.md /licenses/
 
 CMD ["/agent"]

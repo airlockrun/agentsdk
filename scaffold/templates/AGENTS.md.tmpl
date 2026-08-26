@@ -55,6 +55,7 @@ assumption in `NOTES.md`.
 ├── views/             # VIEW — templ templates + view-model types
 │   ├── layout.templ
 │   ├── index.templ
+│   ├── icons.templ    # Lucide idle icon + DaisyUI request spinner slot
 │   ├── viewmodel.go   # HomeView (and any other view-model types)
 │   ├── assets.go      # //go:embed compiled Tailwind + AppCSSPath
 │   └── static/        # Tailwind build output (gitignored)
@@ -338,15 +339,15 @@ sudo run-setup && <new-binary> --version
 ## HTML UI — short
 
 Stack: `templ` (type-safe HTML) + `htmx` (interactivity) + Tailwind v4 +
-DaisyUI (styling). htmx is served same-origin by the framework under
+DaisyUI (styling and busy indicators) + Lucide (icons). htmx is served same-origin by the framework under
 `agentsdk.Assets.HTMX`; the compiled Tailwind stylesheet is served from
 the agent's own `/static/app.{hash}.css` URL after `newAgent` passes its embedded
 bytes to `agentsdk.RegisterStaticAsset`.
 
-**Read the version-matched `agentsdk`, `templ`, `htmx`, and `daisyui` skill
+**Read the version-matched `agentsdk`, `templ`, `htmx`, `daisyui`, and `lucide` skill
 references before writing code** — each carries its API or language/library
 reference. In a plain checkout, `go tool air update` refreshes their entry
-points at `.airlock/toolchain/skills/{agentsdk,templ,htmx,daisyui}/SKILL.md`;
+  points at `.airlock/toolchain/skills/{agentsdk,templ,htmx,daisyui,lucide}/SKILL.md`;
 `go tool air toolchain install` installs them directly. In the airlock
 toolserver, load the UI references through the `skill` tool and read the SDK at
 `/libs/agentsdk/REFERENCE.md`. The gotchas below are the high-frequency traps;
@@ -369,6 +370,17 @@ Design principles:
 - **Show the domain.** Render real data prominently — album art,
   weather illustrations, charts. Emoji-as-title-decoration is a
   placeholder you replaced.
+- **Give action buttons an idle icon.** Use the complete Lucide catalog through
+  `github.com/airlockrun/agentsdk/lucide`; do not paste SVG paths, load an icon
+  CDN, or use emoji as interface icons. Labeled buttons keep their text. Icon-only
+  buttons need an `sr-only` label on the button.
+- **A loading slot is never empty at rest.** For htmx action buttons, render
+  `@ActionIcon("domain-appropriate-name")` before the label and add
+  `hx-disabled-elt="this"`. The component overlays the Lucide idle icon and
+  DaisyUI spinner at identical dimensions. Leave the request indicator on the
+  requesting element so its `htmx-request` class switches the two; do not point
+  `hx-indicator` at a remote element. If `views/icons.templ` is absent, create
+  it from the version-matched Lucide skill.
 - **The web app IS the product — don't explain it, build it.** The web UI
   is the user's web-side control surface over the same domain they also
   drive from chat. They already know both exist and that changes sync, so

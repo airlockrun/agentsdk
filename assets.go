@@ -43,8 +43,9 @@ const HTMXVersion = "2.0.10"
 //
 //	<script src={ agentsdk.Assets.HTMX }></script>
 //
-// /__air/assets/* is framework-reserved. Register your own embedded files
-// (icons, images, page-specific CSS, fonts) with RegisterStaticAsset.
+// /__air/assets/* is framework-reserved. Use the lucide subpackage for the
+// bundled icon catalog. Register other embedded images, page-specific CSS, and
+// fonts with RegisterStaticAsset.
 var Assets = struct {
 	HTMX string // versioned path to the bundled htmx (e.g. /__air/assets/htmx-2.0.10.min.js)
 }{

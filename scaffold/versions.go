@@ -10,7 +10,8 @@ package scaffold
 // stays a literal and the check enforces equality).
 //
 // HTMXVersion lives in the agentsdk root package (assets.go) because htmx ships
-// as an embedded runtime asset, not a build-time fetch.
+// as an embedded runtime asset, not a build-time fetch. The Lucide catalog's
+// runtime Version lives in the lucide package.
 const (
 	// TemplVersion pins the templ CLI and runtime library. The generator and
 	// the linked library MUST match — generated *_templ.go calls runtime
