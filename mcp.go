@@ -24,6 +24,9 @@ type MCPHandle struct {
 //	io.Reader                     — fully read, assumed JSON, sent as-is
 //	anything else                 — JSON-marshalled
 func (h *MCPHandle) CallTool(ctx context.Context, toolName string, args any) (*MCPToolCallResponse, error) {
+	if !h.agent.runtimeAvailable() {
+		return nil, h.agent.runtimeUnavailable("MCPHandle.CallTool")
+	}
 	argsJSON, err := encodeMCPArgs(args)
 	if err != nil {
 		return nil, fmt.Errorf("MCPHandle.CallTool: encode args: %w", err)

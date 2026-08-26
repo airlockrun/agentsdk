@@ -34,10 +34,21 @@ type Config struct {
 	Emoji string
 }
 
-// Agent is a long-lived singleton, one per container.
-// Created once at startup via New(), lives for the lifetime of the process.
+type agentPhase uint8
+
+const (
+	agentDefining agentPhase = iota
+	agentInitializing
+	agentStarting
+	agentRunning
+	agentClosed
+)
+
+// Agent is a long-lived singleton, one per container. New creates it in the
+// definition phase; Serve starts its runtime after registrations are complete.
 type Agent struct {
-	jobManifestMode bool
+	phaseM sync.RWMutex
+	phase  agentPhase
 
 	agentID     string
 	apiURL      string
@@ -69,6 +80,7 @@ type Agent struct {
 
 	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
+	startHooks   []startHook
 
 	// Airlock-owned state: discovered server-side at sync time and pushed
 	// back via syncResponse. /refresh re-runs sync to pick up changes
@@ -96,7 +108,7 @@ var ErrAgentURLUnavailable = errors.New("agentsdk: agent URL is unavailable")
 // AgentURL only when an absolute URL leaves the current request context, such
 // as emails, third-party callbacks, or messages.
 func (a *Agent) AgentURL() (string, error) {
-	if a.jobManifestMode {
+	if !a.runtimeAvailable() {
 		return "", a.runtimeUnavailable("AgentURL")
 	}
 	a.syncMu.RLock()
@@ -156,26 +168,18 @@ func UserFromContext(ctx context.Context) (User, bool) {
 	return User{}, false
 }
 
-// New creates an Agent. When AIRLOCK_AGENT_MODE=job-manifest, New initializes
-// registration state without runtime credentials, an Airlock client, or a
-// database. An unknown nonempty mode panics. In normal mode it panics if
-// AIRLOCK_AGENT_ID, AIRLOCK_API_URL, AIRLOCK_AGENT_TOKEN, or AIRLOCK_DB_URL is missing; the database connection is
-// opened, checked, and migrated before New returns.
-// Panics if Config.Description is empty.
+// New creates an Agent for dependency wiring and registrations. It performs no
+// database, network, credential, migration, or other runtime initialization;
+// Serve starts the runtime after declarations are complete. Panics if
+// Config.Description is empty.
 func New(cfg Config) *Agent {
 	if strings.TrimSpace(cfg.Description) == "" {
 		panic("agentsdk: Config.Description is required")
 	}
-	a := newAgentRegistrationState(cfg)
-	switch mode := os.Getenv("AIRLOCK_AGENT_MODE"); mode {
-	case "job-manifest":
-		a.jobManifestMode = true
-		return a
-	case "":
-	default:
-		panic("agentsdk: unsupported AIRLOCK_AGENT_MODE: " + mode)
-	}
+	return newAgentRegistrationState(cfg)
+}
 
+func (a *Agent) initializeRuntime() {
 	agentID := requireEnv("AIRLOCK_AGENT_ID")
 	apiURL := requireEnv("AIRLOCK_API_URL")
 	token := requireEnv("AIRLOCK_AGENT_TOKEN")
@@ -194,24 +198,16 @@ func New(cfg Config) *Agent {
 	a.apiURL = apiURL
 	a.token = token
 	a.httpClient = &http.Client{}
-	a.db = &AgentDB{db: sqlDB}
-	a.db.agent = a
+	a.db.db = sqlDB
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
-	func() {
-		defer func() {
-			if v := recover(); v != nil {
-				_ = sqlDB.Close()
-				panic(v)
-			}
-		}()
-		a.autoMigrate()
-	}()
-	return a
+	a.runtimeInitialized()
+	a.autoMigrate()
 }
 
 func newAgentRegistrationState(cfg Config) *Agent {
 	a := &Agent{
+		phase:         agentDefining,
 		description:   cfg.Description,
 		emoji:         cfg.Emoji,
 		sensitiveSet:  make(map[string]struct{}),
@@ -227,6 +223,7 @@ func newAgentRegistrationState(cfg Config) *Agent {
 		execEndpoints: make(map[string]*ExecEndpoint),
 		staticAssets:  make(map[string]*StaticAsset),
 	}
+	a.db = &AgentDB{agent: a}
 	// Framework-owned scratch directory — used by run_js output truncation
 	// and generated media. Builders may RegisterDirectory("tmp", ...); the
 	// register helper preserves the framework's caps (the description may
@@ -269,13 +266,53 @@ func newAgentRegistrationState(cfg Config) *Agent {
 }
 
 func (a *Agent) runtimeUnavailable(operation string) error {
-	return fmt.Errorf("agentsdk: %s is unavailable when AIRLOCK_AGENT_MODE=job-manifest", operation)
+	return fmt.Errorf("agentsdk: %s is unavailable before the agent runtime starts", operation)
 }
 
 func (a *Agent) requireRuntime(operation string) {
-	if a.jobManifestMode {
+	if !a.runtimeAvailable() {
 		panic(a.runtimeUnavailable(operation).Error())
 	}
+}
+
+func (a *Agent) runtimeAvailable() bool {
+	a.phaseM.RLock()
+	defer a.phaseM.RUnlock()
+	return a.phase == agentStarting || a.phase == agentRunning
+}
+
+func (a *Agent) beginStart() error {
+	a.phaseM.Lock()
+	defer a.phaseM.Unlock()
+	if a.phase != agentDefining {
+		return errors.New("agentsdk: agent runtime can only start once")
+	}
+	a.phase = agentInitializing
+	return nil
+}
+
+func (a *Agent) runtimeInitialized() {
+	a.phaseM.Lock()
+	defer a.phaseM.Unlock()
+	if a.phase != agentInitializing {
+		panic("agentsdk: invalid runtime initialization transition")
+	}
+	a.phase = agentStarting
+}
+
+func (a *Agent) finishStart() {
+	a.phaseM.Lock()
+	defer a.phaseM.Unlock()
+	if a.phase != agentStarting {
+		panic("agentsdk: invalid runtime start transition")
+	}
+	a.phase = agentRunning
+}
+
+func (a *Agent) markClosed() {
+	a.phaseM.Lock()
+	defer a.phaseM.Unlock()
+	a.phase = agentClosed
 }
 
 // Logger returns the zap logger for the current handler invocation.
@@ -307,20 +344,21 @@ func (a *Agent) Logger(ctx context.Context) *zap.Logger {
 // extension point through which the framework can later record query
 // activity onto the run carried by ctx.
 func (a *Agent) DB() *AgentDB {
-	a.requireRuntime("DB")
 	return a.db
 }
 
-// Close releases the database pool owned by the Agent. Serve calls Close when
-// it stops; tests that construct an Agent with New should also close it.
+// Close releases the database pool owned by a started Agent. Serve calls Close
+// when it stops; tests that call Start directly should also close the Agent.
 func (a *Agent) Close() error {
-	if a.jobManifestMode {
+	if !a.runtimeAvailable() {
 		return a.runtimeUnavailable("Close")
 	}
-	if a.db == nil {
+	if a.db == nil || a.db.db == nil {
 		return nil
 	}
-	return a.db.db.Close()
+	err := a.db.db.Close()
+	a.markClosed()
+	return err
 }
 
 func pingDatabase(db *sql.DB) error {

@@ -27,6 +27,7 @@ func TestMaterialize(t *testing.T) {
 		"main.go",
 		"main_test.go",
 		"handlers/home_test.go",
+		"views/icons.templ",
 		"NOTES.md",
 		"go.mod",
 		"sqlc.yaml",
@@ -43,6 +44,22 @@ func TestMaterialize(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("expected file %s not found: %v", f, err)
 		}
+	}
+	notices, err := os.ReadFile(filepath.Join(dir, NoticesFilename))
+	if err != nil {
+		t.Fatalf("read %s: %v", NoticesFilename, err)
+	}
+	for _, want := range []string{"Lucide Icons 1.34.0", "Lucide Icons and Contributors", "Cole Bemis"} {
+		if !strings.Contains(string(notices), want) {
+			t.Errorf("%s missing %q", NoticesFilename, want)
+		}
+	}
+	lucideLicense, err := os.ReadFile(filepath.Join("..", "lucide", "UPSTREAM_LICENSE"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(notices), string(lucideLicense)) {
+		t.Errorf("%s does not contain the pinned Lucide license verbatim", NoticesFilename)
 	}
 
 	// Verify empty directories exist
@@ -76,6 +93,9 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(string(mainGo), "newAgent().Serve()") {
 		t.Error("main.go missing newAgent().Serve()")
 	}
+	if !strings.Contains(string(mainGo), "newAgent defines the complete agent and wires late-bound SDK handles") {
+		t.Error("main.go missing definition-only lifecycle guidance")
+	}
 	if !strings.Contains(string(mainGo), "pages := handlers.New()") {
 		t.Error("main.go missing handler construction")
 	}
@@ -92,6 +112,76 @@ func TestMaterialize(t *testing.T) {
 	}
 	if !strings.Contains(string(mainTest), "agenttest.WithUser") {
 		t.Error("main_test.go missing authenticated caller helper")
+	}
+	if !strings.Contains(string(mainTest), "agenttest.New invokes") ||
+		!strings.Contains(string(mainTest), "newAgent first, then provisions runtime dependencies") {
+		t.Error("main_test.go missing factory-first agenttest lifecycle guidance")
+	}
+	if strings.Contains(string(mainTest), "applies migrations before newAgent constructs") {
+		t.Error("main_test.go claims migrations run before the definition factory")
+	}
+
+	agentsMD, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	for _, want := range []string{
+		"newAgent()` is the definition-only composition root",
+		"Agent.DB()` and registration APIs return late-bound handles",
+		"AIRLOCK_AGENT_MODE=manifest",
+		"After the factory returns, startup resets the schema",
+	} {
+		if !strings.Contains(string(agentsMD), want) {
+			t.Errorf("AGENTS.md missing lifecycle guidance %q", want)
+		}
+	}
+	for _, stale := range []string{
+		"sets every `AIRLOCK_*` variable before it invokes `newAgent`",
+		"applies source migrations from the enclosing module's `db/migrations` before it returns inside the factory",
+	} {
+		if strings.Contains(string(agentsMD), stale) {
+			t.Errorf("AGENTS.md contains stale lifecycle guidance %q", stale)
+		}
+	}
+	for _, want := range []string{
+		"Give action buttons an idle icon",
+		`@ActionIcon("domain-appropriate-name")`,
+		`hx-disabled-elt="this"`,
+		"github.com/airlockrun/agentsdk/lucide",
+	} {
+		if !strings.Contains(string(agentsMD), want) {
+			t.Errorf("AGENTS.md missing icon guidance %q", want)
+		}
+	}
+
+	iconsTempl, err := os.ReadFile(filepath.Join(dir, "views", "icons.templ"))
+	if err != nil {
+		t.Fatalf("read views/icons.templ: %v", err)
+	}
+	for _, want := range []string{
+		`lucide.Icon(name, "air-action-icon-idle")`,
+		`class="loading loading-spinner air-action-icon-busy"`,
+		`role="status" aria-live="polite"`,
+		`class="sr-only">Working`,
+	} {
+		if !strings.Contains(string(iconsTempl), want) {
+			t.Errorf("views/icons.templ missing %q", want)
+		}
+	}
+
+	appCSS, err := os.ReadFile(filepath.Join(dir, "styles", "app.css"))
+	if err != nil {
+		t.Fatalf("read styles/app.css: %v", err)
+	}
+	for _, want := range []string{
+		".air-action-icon > *",
+		".htmx-request > .air-action-icon > .air-action-icon-idle",
+		".htmx-request > .air-action-icon > .air-action-icon-busy",
+		"animation-play-state: paused",
+	} {
+		if !strings.Contains(string(appCSS), want) {
+			t.Errorf("styles/app.css missing action icon rule %q", want)
+		}
 	}
 
 	homeGo, err := os.ReadFile(filepath.Join(dir, "handlers", "home.go"))
@@ -184,6 +274,9 @@ func TestMaterialize(t *testing.T) {
 	}
 	if !strings.Contains(dockerfileStr, "views/static internal/db db/queries db/migrations") {
 		t.Error("Dockerfile must create optional generated and database directories")
+	}
+	if !strings.Contains(dockerfileStr, "THIRD_PARTY_NOTICES*.md /licenses/") {
+		t.Error("Dockerfile must copy generated and agent-authored third-party notices into the runtime image")
 	}
 	if strings.Contains(dockerfileStr, "--from=libs") {
 		t.Error("Dockerfile must not reference the old libs-owned/libs-ext contexts")
@@ -315,6 +408,7 @@ func TestInstallSkills(t *testing.T) {
 		"manifest.json",
 		"daisyui/SKILL.md",
 		"htmx/reference/docs.md",
+		"lucide/SKILL.md",
 		"templ/reference/03-syntax-and-usage/06-if-else.md",
 	} {
 		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(path))); err != nil {

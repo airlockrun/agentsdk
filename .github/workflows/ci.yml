@@ -21,6 +21,12 @@ jobs:
           cache: true
       - name: Check API compatibility
         run: GOWORK=off ./scripts/check-api-compat.sh
+      - name: Check licenses
+        run: ./scripts/check-licenses.sh
+      - name: Check notices
+        run: ./scripts/check-notices.sh
+      - name: Check UI reference bundle
+        run: GOWORK=off go run ./internal/cmd/syncskills --check
       - name: Vet
         run: GOWORK=off go vet ./...
       - name: Test

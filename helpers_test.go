@@ -31,37 +31,19 @@ func testAgent(t *testing.T) (*Agent, *mockairlock.Mock) {
 	mock, url := mockairlock.New()
 	t.Cleanup(mock.Close)
 
-	a := &Agent{
-		agentID:       "test-agent",
-		apiURL:        url,
-		token:         "test-token",
-		httpClient:    &http.Client{},
-		sensitiveSet:  make(map[string]struct{}),
-		tools:         make(map[string]*registeredTool),
-		webhooks:      make(map[string]*Webhook),
-		jobs:          make(map[jobKey]*registeredJob),
-		jobCrons:      make(map[string]*registeredJobCron),
-		auths:         make(map[string]*Connection),
-		mcps:          make(map[string]*MCP),
-		topics:        make(map[string]*Topic),
-		routes:        make(map[string]*Route),
-		envVars:       make(map[string]*EnvVar),
-		execEndpoints: make(map[string]*ExecEndpoint),
-		staticAssets:  make(map[string]*StaticAsset),
-	}
+	a := newAgentRegistrationState(Config{Description: "test agent"})
+	a.agentID = "test-agent"
+	a.apiURL = url
+	a.token = "test-token"
+	a.httpClient = &http.Client{}
 	db, err := sql.Open("agentsdk-test", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.db = &AgentDB{db: db, agent: a}
+	a.db.db = db
 	t.Cleanup(func() { _ = db.Close() })
-	// Auto-register the framework's /tmp directory the same way New does,
-	// so tests have somewhere to read/write without setting it up by hand.
-	a.directories = append(a.directories, &directory{
-		Path: reservedTmpPath, Read: AccessUser, Write: AccessUser, List: AccessUser,
-		Description: "Framework scratch directory",
-	})
 	a.client = newAirlockClient(url, "test-token", a.httpClient)
 	a.AddSensitive("test-token")
+	a.phase = agentRunning
 	return a, mock
 }

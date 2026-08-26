@@ -817,6 +817,8 @@ func toolchainComplete(prefix string) bool {
 		filepath.Join(prefix, "skills", "daisyui", "SKILL.md"),
 		filepath.Join(prefix, "skills", "templ", "SKILL.md"),
 		filepath.Join(prefix, "skills", "htmx", "SKILL.md"),
+		filepath.Join(prefix, "skills", "lucide", "SKILL.md"),
+		filepath.Join(prefix, "skills", "lucide", "reference", "icons.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			return false

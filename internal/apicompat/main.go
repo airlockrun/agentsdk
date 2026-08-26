@@ -21,17 +21,23 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-var publicPackages = []string{
-	"github.com/airlockrun/agentsdk",
-	"github.com/airlockrun/agentsdk/agenttest",
-	"github.com/airlockrun/goai",
-	"github.com/airlockrun/goai/message",
-	"github.com/airlockrun/goai/model",
-	"github.com/airlockrun/goai/output",
-	"github.com/airlockrun/goai/schema",
-	"github.com/airlockrun/goai/stream",
-	"github.com/airlockrun/goai/tool",
-	"github.com/airlockrun/sol/websearch",
+type publicPackage struct {
+	Path  string
+	Since string
+}
+
+var publicPackages = []publicPackage{
+	{Path: "github.com/airlockrun/agentsdk"},
+	{Path: "github.com/airlockrun/agentsdk/agenttest"},
+	{Path: "github.com/airlockrun/agentsdk/lucide", Since: "v0.5.0-rc.1"},
+	{Path: "github.com/airlockrun/goai"},
+	{Path: "github.com/airlockrun/goai/message"},
+	{Path: "github.com/airlockrun/goai/model"},
+	{Path: "github.com/airlockrun/goai/output"},
+	{Path: "github.com/airlockrun/goai/schema"},
+	{Path: "github.com/airlockrun/goai/stream"},
+	{Path: "github.com/airlockrun/goai/tool"},
+	{Path: "github.com/airlockrun/sol/websearch"},
 }
 
 func main() {
@@ -74,26 +80,33 @@ func run() error {
 	if err := extractTag(root, baseline, oldRoot); err != nil {
 		return err
 	}
-	currentGoWork := "off"
-	workspace := filepath.Join(filepath.Dir(root), "go.work")
-	if _, err := os.Stat(workspace); err == nil {
-		currentGoWork = workspace
+	currentGoWork := os.Getenv("GOWORK")
+	if currentGoWork == "" {
+		currentGoWork = "off"
+		workspace := filepath.Join(filepath.Dir(root), "go.work")
+		if _, err := os.Stat(workspace); err == nil {
+			currentGoWork = workspace
+		}
 	}
 
 	var incompatible []string
-	for _, path := range publicPackages {
-		oldPkg, err := loadPackage(oldRoot, path, "off")
+	for _, public := range publicPackages {
+		newPkg, err := loadPackage(root, public.Path, currentGoWork)
 		if err != nil {
-			return fmt.Errorf("load %s from %s: %w", path, baseline, err)
+			return fmt.Errorf("load current %s: %w", public.Path, err)
 		}
-		newPkg, err := loadPackage(root, path, currentGoWork)
+		if public.Since != "" && semver.Compare(baseline, public.Since) < 0 {
+			fmt.Printf("%s: package added in %s\n", public.Path, public.Since)
+			continue
+		}
+		oldPkg, err := loadPackage(oldRoot, public.Path, "off")
 		if err != nil {
-			return fmt.Errorf("load current %s: %w", path, err)
+			return fmt.Errorf("load %s from %s: %w", public.Path, baseline, err)
 		}
 		report := apidiff.Changes(oldPkg.Types, newPkg.Types)
 		for _, change := range report.Changes {
-			message := fmt.Sprintf("%s: %s", path, change.Message)
-			if change.Compatible || ignoredMetadataChange(path, change.Message) {
+			message := fmt.Sprintf("%s: %s", public.Path, change.Message)
+			if change.Compatible || ignoredMetadataChange(public.Path, change.Message) {
 				fmt.Println(message)
 				continue
 			}
@@ -273,6 +286,8 @@ func ignoredMetadataChange(path, message string) bool {
 	switch path {
 	case "github.com/airlockrun/agentsdk":
 		names = []string{"Version", "HTMXVersion"}
+	case "github.com/airlockrun/agentsdk/lucide":
+		names = []string{"Version"}
 	case "github.com/airlockrun/goai":
 		names = []string{"Version"}
 	default:

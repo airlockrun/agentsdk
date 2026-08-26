@@ -120,13 +120,17 @@ migration exists, use `go tool air build` for source verification. Airlock then
 runs the compiled image through up, down, and up before deployment, which
 validates SQL and registered Go migrations together.
 
-The agent gets its own Postgres schema. `AIRLOCK_DB_URL` is required, and
-`agentsdk.New` opens, checks, and migrates one owned pool before returning.
-`agent.DB()` always returns that `*AgentDB`; pass it straight to generated
-sqlc constructors. `Serve` closes the pool during shutdown.
+The agent gets its own Postgres schema. `agentsdk.New` does not read
+`AIRLOCK_DB_URL`, open a pool, or run migrations. `agent.DB()` returns a stable,
+late-bound `*AgentDB`; pass it straight to generated sqlc constructors while
+wiring dependencies, but do not execute database operations from the factory.
+Operations become available when `Start` opens and checks the owned pool and
+runs migrations. `Serve` calls `Start` and closes the pool during shutdown.
 
-`agenttest.New` resolves source `db/migrations` from the nearest enclosing Go
-module, so DB-backed tests work from subpackages without changing process cwd.
+`agenttest.New` invokes the factory before it provisions runtime dependencies,
+then resolves source `db/migrations` from the nearest enclosing Go module,
+starts the agent, and returns after migrations, sync, and `OnStart` hooks.
+DB-backed tests therefore work from subpackages without changing process cwd.
 The SDK build runs packages serially because package test binaries sharing one
 `TEST_DB_URL` must not reset the same schema concurrently.
 

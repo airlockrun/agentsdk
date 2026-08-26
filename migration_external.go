@@ -29,6 +29,9 @@ func MigrationExternalStep(ctx context.Context, step func(context.Context, *Agen
 // is absent and dst exists, the move is already complete. If neither exists,
 // MoveFile returns ErrNotFound.
 func (a *Agent) MoveFile(ctx context.Context, src, dst string) error {
+	if !a.runtimeAvailable() {
+		return a.runtimeUnavailable("MoveFile")
+	}
 	_, srcErr := a.StatFile(ctx, src)
 	_, dstErr := a.StatFile(ctx, dst)
 	if srcErr != nil && !errors.Is(srcErr, ErrNotFound) {

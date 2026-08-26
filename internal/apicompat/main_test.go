@@ -82,4 +82,7 @@ func TestIgnoredMetadataChange(t *testing.T) {
 	if ignoredMetadataChange("github.com/airlockrun/agentsdk/agenttest", "Version: value changed from 1 to 2") {
 		t.Fatal("metadata exceptions must be package-specific")
 	}
+	if !ignoredMetadataChange("github.com/airlockrun/agentsdk/lucide", "Version: value changed from 1 to 2") {
+		t.Fatal("Lucide Version value changes must be ignored")
+	}
 }

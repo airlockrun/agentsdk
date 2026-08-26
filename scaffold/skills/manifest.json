@@ -2,9 +2,11 @@
   "templ_version": "v0.3.1020",
   "daisyui_version": "v5.5.23",
   "htmx_version": "2.0.10",
+  "lucide_version": "1.34.0",
   "sources": {
     "daisyui": "https://github.com/saadeghi/daisyui/archive/refs/tags/v5.5.23.tar.gz (skills/daisyui, install subskill removed)",
     "htmx": "https://github.com/bigskysoftware/htmx/tree/v2.0.10/www/content",
+    "lucide": "https://unpkg.com/lucide-static@1.34.0/sprite.svg",
     "templ": "https://github.com/a-h/templ/archive/refs/tags/v0.3.1020.tar.gz (docs/docs/03-syntax-and-usage and 04-core-concepts)"
   },
   "files": {
@@ -82,6 +84,9 @@
     "htmx/UPSTREAM_LICENSE": "d3d2456f76414f2456104660ebd65aff1c04cd7966b942bdabd63f3cdb316a38",
     "htmx/reference/docs.md": "f911186074a8d29948d5179e74e7e9f2ec7b408c8a713f1ebf321ed15ced57a0",
     "htmx/reference/reference.md": "a5e8dd0607a43d5fc1dfc3ebe7fefd21f575aadc08ded557a16b1af41c1d8aac",
+    "lucide/SKILL.md": "7c23a774818d421c7d04ef0de40bb9b3b535eb5ba923631b33c4b6a0c61d3503",
+    "lucide/UPSTREAM_LICENSE": "b495047bd93a9b06913511076f504daba17d5bbeb3e0650f3bb53a4220329c57",
+    "lucide/reference/icons.md": "aba6347e6a6534a272f898770e198edef40de1e59430581f79f25242e21265d7",
     "templ/SKILL.md": "d89e3c8af02347e8db20505005eb631bf716353bb631f47d1bdc63509ba7238c",
     "templ/UPSTREAM_LICENSE": "cfab0a75bdb4fb7fb840606bdf7dd00b9c06e45b7f2560a11a8a4a0bf8d72bcc",
     "templ/reference/03-syntax-and-usage/01-basic-syntax.md": "ae1204435a73821898a6794303f21e2e826b5c1517ebd851ad097d9d37970869",

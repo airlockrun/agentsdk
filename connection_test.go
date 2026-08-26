@@ -19,7 +19,7 @@ func TestRequestJSON_EmptyBodyReturnsZero(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}}
+	a := &Agent{httpClient: &http.Client{}, phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &ConnectionHandle{slug: "test", agent: a}
 
@@ -43,7 +43,7 @@ func TestRequestJSON_DecodesBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &Agent{httpClient: &http.Client{}}
+	a := &Agent{httpClient: &http.Client{}, phase: agentRunning}
 	a.client = newAirlockClient(srv.URL, "tok", a.httpClient)
 	h := &ConnectionHandle{slug: "test", agent: a}
 

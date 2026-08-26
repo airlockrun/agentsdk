@@ -213,7 +213,7 @@ func (a *Agent) hasPublicDirCap(op FileOperation) bool {
 // ResolveFilePath authorizes an untrusted path and returns the exact physical
 // path that storage operations must use. Trusted Go storage methods bypass it.
 func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperation) (FilePath, error) {
-	if a.jobManifestMode {
+	if !a.runtimeAvailable() {
 		return "", a.runtimeUnavailable("ResolveFilePath")
 	}
 	if _, ok := dirCap(&directory{}, op); !ok {
@@ -351,6 +351,9 @@ func isScopeSegment(segment string) bool {
 // caller. Trusted: no access check. Used by builder Go code that
 // constructs paths itself.
 func (a *Agent) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
+	if !a.runtimeAvailable() {
+		return nil, a.runtimeUnavailable("OpenFile")
+	}
 	canon, err := normalizePath(path)
 	if err != nil {
 		return nil, err
@@ -362,6 +365,9 @@ func (a *Agent) OpenFile(ctx context.Context, path string) (io.ReadCloser, error
 // (HTTP Range semantics). The returned ReadCloser must be closed by the
 // caller. Trusted: no access check.
 func (a *Agent) OpenFileRange(ctx context.Context, path string, start, end int64) (io.ReadCloser, error) {
+	if !a.runtimeAvailable() {
+		return nil, a.runtimeUnavailable("OpenFileRange")
+	}
 	canon, err := normalizePath(path)
 	if err != nil {
 		return nil, err
@@ -372,6 +378,9 @@ func (a *Agent) OpenFileRange(ctx context.Context, path string, start, end int64
 // ReadRange reads the inclusive byte range [start, end] of a file fully into
 // memory. Trusted: no access check.
 func (a *Agent) ReadRange(ctx context.Context, path string, start, end int64) ([]byte, error) {
+	if !a.runtimeAvailable() {
+		return nil, a.runtimeUnavailable("ReadRange")
+	}
 	if gw := goWallFrom(ctx); gw != nil {
 		gw.enter()
 		defer gw.exit()
@@ -387,6 +396,9 @@ func (a *Agent) ReadRange(ctx context.Context, path string, start, end int64) ([
 // ReadFile reads a file fully into memory. For very large files prefer
 // OpenFile + io.Copy. Trusted: no access check.
 func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
+	if !a.runtimeAvailable() {
+		return nil, a.runtimeUnavailable("ReadFile")
+	}
 	// The body read (io.ReadAll) dominates for large files and happens after
 	// client.do returns headers, so credit the whole op to the go-call
 	// accumulator (nesting-safe with the inner client.do span).
@@ -406,6 +418,9 @@ func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
 // FileInfo (path/filename/contentType/size/lastModified). Trusted: no
 // access check.
 func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, contentType string) (FileInfo, error) {
+	if !a.runtimeAvailable() {
+		return FileInfo{}, a.runtimeUnavailable("WriteFile")
+	}
 	canon, err := normalizePath(path)
 	if err != nil {
 		return FileInfo{}, err
@@ -430,6 +445,9 @@ func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, cont
 
 // StatFile returns metadata for a file. Trusted: no access check.
 func (a *Agent) StatFile(ctx context.Context, path string) (FileInfo, error) {
+	if !a.runtimeAvailable() {
+		return FileInfo{}, a.runtimeUnavailable("StatFile")
+	}
 	canon, err := normalizePath(path)
 	if err != nil {
 		return FileInfo{}, err
@@ -449,6 +467,9 @@ type ListOpts struct {
 // ListDir enumerates files under `path`. Trusted: no access check. The
 // empty string lists the agent root.
 func (a *Agent) ListDir(ctx context.Context, path string, opts ListOpts) ([]FileInfo, error) {
+	if !a.runtimeAvailable() {
+		return nil, a.runtimeUnavailable("ListDir")
+	}
 	// path is a directory prefix; trailing slash is allowed (and expected
 	// for clarity), normalizePath rejects it for files.
 	prefix := strings.TrimRight(path, "/")
@@ -463,6 +484,9 @@ func (a *Agent) ListDir(ctx context.Context, path string, opts ListOpts) ([]File
 // DeleteFile removes a file. Idempotent — missing files do not error.
 // Trusted: no access check.
 func (a *Agent) DeleteFile(ctx context.Context, path string) error {
+	if !a.runtimeAvailable() {
+		return a.runtimeUnavailable("DeleteFile")
+	}
 	canon, err := normalizePath(path)
 	if err != nil {
 		return err
@@ -474,6 +498,9 @@ func (a *Agent) DeleteFile(ctx context.Context, path string) error {
 // absolute and may live under different directories. Trusted: no access
 // check.
 func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
+	if !a.runtimeAvailable() {
+		return a.runtimeUnavailable("CopyFile")
+	}
 	srcCanon, err := normalizePath(src)
 	if err != nil {
 		return err
@@ -497,6 +524,9 @@ func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
 // isn't reachable for the recipient. For showing files in chat, prefer
 // output({type:"file", source:path}).
 func (a *Agent) ShareFileURL(ctx context.Context, path string, ttl time.Duration) (*ShareFileResponse, error) {
+	if !a.runtimeAvailable() {
+		return nil, a.runtimeUnavailable("ShareFileURL")
+	}
 	canon, err := normalizePath(path)
 	if err != nil {
 		return nil, err

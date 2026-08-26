@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"flag"
 	"fmt"
@@ -15,21 +16,24 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/lucide"
 	"github.com/airlockrun/agentsdk/scaffold"
 )
 
 const manifestName = "manifest.json"
 
 type manifest struct {
-	TemplVersion string            `json:"templ_version"`
-	DaisyVersion string            `json:"daisyui_version"`
-	HTMXVersion  string            `json:"htmx_version"`
-	Sources      map[string]string `json:"sources"`
-	Files        map[string]string `json:"files"`
+	TemplVersion  string            `json:"templ_version"`
+	DaisyVersion  string            `json:"daisyui_version"`
+	HTMXVersion   string            `json:"htmx_version"`
+	LucideVersion string            `json:"lucide_version"`
+	Sources       map[string]string `json:"sources"`
+	Files         map[string]string `json:"files"`
 }
 
 var client = &http.Client{Timeout: 5 * time.Minute}
@@ -49,7 +53,7 @@ func main() {
 	if *check {
 		err = checkBundle(dir)
 	} else {
-		err = syncBundle(dir)
+		err = syncBundle(root, dir)
 	}
 	if err != nil {
 		fatal(err)
@@ -84,7 +88,7 @@ func repoRoot() (string, error) {
 	}
 }
 
-func syncBundle(dst string) error {
+func syncBundle(root, dst string) error {
 	parent := filepath.Dir(dst)
 	tmp, err := os.MkdirTemp(parent, ".skills-sync-")
 	if err != nil {
@@ -92,7 +96,7 @@ func syncBundle(dst string) error {
 	}
 	defer os.RemoveAll(tmp)
 
-	for _, skill := range []string{"templ", "htmx"} {
+	for _, skill := range []string{"templ", "htmx", "lucide"} {
 		src := filepath.Join(dst, skill, "SKILL.md")
 		data, err := os.ReadFile(src)
 		if err != nil {
@@ -101,6 +105,9 @@ func syncBundle(dst string) error {
 		if err := writeFile(filepath.Join(tmp, skill, "SKILL.md"), data); err != nil {
 			return err
 		}
+	}
+	if err := writeLucideIconIndex(filepath.Join(root, "lucide", "assets", "sprite.svg.gz"), filepath.Join(tmp, "lucide", "reference", "icons.md")); err != nil {
+		return err
 	}
 
 	daisyArchive := fmt.Sprintf("https://github.com/saadeghi/daisyui/archive/refs/tags/%s.tar.gz", scaffold.DaisyUIVersion)
@@ -152,6 +159,7 @@ func syncBundle(dst string) error {
 		{"daisyui", fmt.Sprintf("https://raw.githubusercontent.com/saadeghi/daisyui/%s/LICENSE", scaffold.DaisyUIVersion)},
 		{"templ", fmt.Sprintf("https://raw.githubusercontent.com/a-h/templ/%s/LICENSE", scaffold.TemplVersion)},
 		{"htmx", fmt.Sprintf("https://raw.githubusercontent.com/bigskysoftware/htmx/%s/LICENSE", htmxTag)},
+		{"lucide", fmt.Sprintf("https://unpkg.com/lucide-static@%s/LICENSE", lucide.Version)},
 	}
 	for _, license := range licenses {
 		data, err := download(license.url)
@@ -167,13 +175,15 @@ func syncBundle(dst string) error {
 		return err
 	}
 	m := manifest{
-		TemplVersion: scaffold.TemplVersion,
-		DaisyVersion: scaffold.DaisyUIVersion,
-		HTMXVersion:  agentsdk.HTMXVersion,
+		TemplVersion:  scaffold.TemplVersion,
+		DaisyVersion:  scaffold.DaisyUIVersion,
+		HTMXVersion:   agentsdk.HTMXVersion,
+		LucideVersion: lucide.Version,
 		Sources: map[string]string{
 			"daisyui": daisyArchive + " (skills/daisyui, install subskill removed)",
 			"templ":   templArchive + " (docs/docs/03-syntax-and-usage and 04-core-concepts)",
 			"htmx":    fmt.Sprintf("https://github.com/bigskysoftware/htmx/tree/%s/www/content", htmxTag),
+			"lucide":  fmt.Sprintf("https://unpkg.com/lucide-static@%s/sprite.svg", lucide.Version),
 		},
 	}
 	m.Files, err = fileHashes(tmp)
@@ -218,11 +228,23 @@ func checkBundle(dir string) error {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("parse manifest: %w", err)
 	}
-	if m.TemplVersion != scaffold.TemplVersion || m.DaisyVersion != scaffold.DaisyUIVersion || m.HTMXVersion != agentsdk.HTMXVersion {
+	if m.TemplVersion != scaffold.TemplVersion || m.DaisyVersion != scaffold.DaisyUIVersion || m.HTMXVersion != agentsdk.HTMXVersion || m.LucideVersion != lucide.Version {
 		return fmt.Errorf("manifest versions are stale; run go run ./internal/cmd/syncskills")
 	}
 	if err := validateRequiredFiles(dir); err != nil {
 		return err
+	}
+	root := filepath.Dir(filepath.Dir(dir))
+	wantIcons, err := lucideIconIndex(filepath.Join(root, "lucide", "assets", "sprite.svg.gz"))
+	if err != nil {
+		return err
+	}
+	gotIcons, err := os.ReadFile(filepath.Join(dir, "lucide", "reference", "icons.md"))
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(gotIcons, wantIcons) {
+		return errors.New("Lucide icon index is stale; run go run ./internal/cmd/syncskills")
 	}
 	got, err := fileHashes(dir)
 	if err != nil {
@@ -248,6 +270,9 @@ func validateRequiredFiles(dir string) error {
 		"htmx/SKILL.md",
 		"htmx/reference/docs.md",
 		"htmx/reference/reference.md",
+		"lucide/SKILL.md",
+		"lucide/UPSTREAM_LICENSE",
+		"lucide/reference/icons.md",
 	}
 	for _, path := range required {
 		if info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(path))); err != nil || info.IsDir() {
@@ -265,8 +290,9 @@ func validateRequiredFiles(dir string) error {
 		return errors.New("daisyui SKILL.md still references the removed install subskill")
 	}
 	versions := map[string]string{
-		"templ": "version: " + scaffold.TemplVersion,
-		"htmx":  "version: v" + strings.TrimPrefix(agentsdk.HTMXVersion, "v"),
+		"templ":  "version: " + scaffold.TemplVersion,
+		"htmx":   "version: v" + strings.TrimPrefix(agentsdk.HTMXVersion, "v"),
+		"lucide": "version: " + lucide.Version,
 	}
 	daisyParts := strings.Split(strings.TrimPrefix(scaffold.DaisyUIVersion, "v"), ".")
 	if len(daisyParts) < 2 {
@@ -283,6 +309,56 @@ func validateRequiredFiles(dir string) error {
 		}
 	}
 	return nil
+}
+
+func writeLucideIconIndex(src, dst string) error {
+	data, err := lucideIconIndex(src)
+	if err != nil {
+		return err
+	}
+	return writeFile(dst, data)
+}
+
+func lucideIconIndex(src string) ([]byte, error) {
+	f, err := os.Open(src)
+	if err != nil {
+		return nil, fmt.Errorf("open Lucide sprite: %w", err)
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, fmt.Errorf("open compressed Lucide sprite: %w", err)
+	}
+	var catalog struct {
+		Symbols []struct {
+			ID string `xml:"id,attr"`
+		} `xml:"defs>symbol"`
+	}
+	decodeErr := xml.NewDecoder(zr).Decode(&catalog)
+	closeErr := zr.Close()
+	if decodeErr != nil {
+		return nil, fmt.Errorf("decode Lucide sprite: %w", decodeErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("close Lucide sprite: %w", closeErr)
+	}
+	if len(catalog.Symbols) == 0 {
+		return nil, errors.New("Lucide sprite contains no symbols")
+	}
+	names := make([]string, len(catalog.Symbols))
+	for i, symbol := range catalog.Symbols {
+		if symbol.ID == "" {
+			return nil, errors.New("Lucide sprite contains an unnamed symbol")
+		}
+		names[i] = symbol.ID
+	}
+	sort.Strings(names)
+	var out strings.Builder
+	fmt.Fprintf(&out, "# Lucide %s icon names\n\nUse these exact kebab-case names with `lucide.Icon`.\n\n", lucide.Version)
+	for _, name := range names {
+		fmt.Fprintf(&out, "- `%s`\n", name)
+	}
+	return []byte(out.String()), nil
 }
 
 func fileHashes(dir string) (map[string]string, error) {

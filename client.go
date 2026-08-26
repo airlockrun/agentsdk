@@ -30,7 +30,7 @@ func newAirlockClient(baseURL, token string, httpClient *http.Client) *airlockCl
 // to customise headers (e.g. Content-Type) before sending.
 func (c *airlockClient) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
 	if c == nil {
-		return nil, fmt.Errorf("agentsdk: %s %s is unavailable when AIRLOCK_AGENT_MODE=job-manifest", method, path)
+		return nil, fmt.Errorf("agentsdk: %s %s is unavailable before the agent runtime starts", method, path)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
@@ -93,6 +93,9 @@ func (c *airlockClient) doJSON(ctx context.Context, method, path string, reqBody
 }
 
 func (c *airlockClient) doJSONWithHeaders(ctx context.Context, method, path string, reqBody, result any, headers http.Header) error {
+	if c == nil {
+		return fmt.Errorf("agentsdk: %s %s is unavailable before the agent runtime starts", method, path)
+	}
 	var body io.Reader
 	if reqBody != nil {
 		b, err := json.Marshal(reqBody)

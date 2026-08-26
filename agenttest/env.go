@@ -24,16 +24,27 @@ type Env struct {
 	URL string
 }
 
-// New configures a mock Airlock and test database before invoking factory.
+// New invokes factory first while runtime environment is cleared, then
+// provisions a mock Airlock and test database and starts the agent. Start opens
+// the database, resolves and applies migrations from the enclosing Go module,
+// synchronizes declarations, and runs named OnStart hooks before New returns.
 // TEST_DB_URL is used when explicitly supplied; otherwise New starts a
-// throwaway pgvector container. agentsdk.New finds db/migrations from the
-// enclosing Go module, then resets and applies them before it returns to the
-// rest of factory, so dependency construction and registrations always see a
-// clean, migrated schema.
+// throwaway pgvector container. The factory may wire Agent.DB()'s late-bound
+// handle, but database operations are unavailable until Start.
 func New(t *testing.T, factory func() *agentsdk.Agent) *Env {
 	t.Helper()
 	if factory == nil {
 		t.Fatal("agenttest: factory is required")
+	}
+
+	t.Setenv("AIRLOCK_AGENT_MODE", "")
+	t.Setenv("AIRLOCK_AGENT_ID", "")
+	t.Setenv("AIRLOCK_API_URL", "")
+	t.Setenv("AIRLOCK_AGENT_TOKEN", "")
+	t.Setenv("AIRLOCK_DB_URL", "")
+	a := factory()
+	if a == nil {
+		t.Fatal("agenttest: factory returned nil")
 	}
 
 	mock, url := NewMockAirlock()
@@ -46,9 +57,7 @@ func New(t *testing.T, factory func() *agentsdk.Agent) *Env {
 	t.Setenv("AGENT_MIGRATE_UP_ONLY", "")
 	t.Setenv("AGENTSDK_TEST_MIGRATIONS", "1")
 
-	// AIRLOCK_DB_URL is production input and may be inherited from the shell.
 	// Tests only opt into an existing database through TEST_DB_URL.
-	t.Setenv("AIRLOCK_DB_URL", "")
 	dsn := os.Getenv("TEST_DB_URL")
 	if dsn == "" {
 		testcontainers.SkipIfProviderIsNotHealthy(t)
@@ -77,9 +86,8 @@ func New(t *testing.T, factory func() *agentsdk.Agent) *Env {
 	}
 	t.Setenv("AIRLOCK_DB_URL", dsn)
 
-	a := factory()
-	if a == nil {
-		t.Fatal("agenttest: factory returned nil")
+	if err := a.Start(t.Context()); err != nil {
+		t.Fatalf("agenttest: start agent: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := a.Close(); err != nil {

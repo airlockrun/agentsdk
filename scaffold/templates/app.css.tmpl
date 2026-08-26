@@ -9,3 +9,37 @@
 @plugin "../.airlock/toolchain/lib/tailwind/daisyui.mjs" {
   themes: light --default, dark --prefersdark;
 }
+
+/* Idle and request indicators share one cell, so button labels never shift. */
+.air-action-icon {
+  display: inline-grid;
+  width: 1.2em;
+  height: 1.2em;
+  flex: none;
+}
+
+.air-action-icon > * {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+}
+
+.air-action-icon-busy {
+  visibility: hidden;
+  animation-play-state: paused;
+}
+
+.htmx-request > .air-action-icon > .air-action-icon-idle {
+  visibility: hidden;
+}
+
+.htmx-request > .air-action-icon > .air-action-icon-busy {
+  visibility: visible;
+  animation-play-state: running;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .air-action-icon-busy {
+    animation: none;
+  }
+}

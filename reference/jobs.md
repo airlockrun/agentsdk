@@ -5,6 +5,14 @@ delivery. Input must be a struct. Use `JobContext.ID` as the idempotency key.
 `JobContext.ScheduledAt` contains the intended occurrence time for cron and
 delayed jobs and is nil for immediate jobs.
 
+Declare jobs and crons in the definition factory. Registration is offline and
+is included in the complete canonical `Agent.Manifest()`; it must not enqueue or
+perform runtime work. Job handles are late-bound: `Enqueue`, `EnqueueAt`, `Get`,
+and `Cancel` are available after `Start`. `Serve` starts and synchronizes the
+runtime before serving deliveries, while `agenttest.New` returns after startup,
+sync, and named `OnStart` hooks. Durable startup work belongs in a job rather
+than a process-local `OnStart` hook.
+
 Handlers can synchronously persist a progress snapshot for their active delivery:
 
 ```go

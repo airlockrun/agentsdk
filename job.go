@@ -268,6 +268,7 @@ func (h *JobHandle[In, Out]) Enqueue(ctx context.Context, id string, input In) (
 // the existing job.
 func (h *JobHandle[In, Out]) EnqueueAt(ctx context.Context, id string, fireAt time.Time, input In) (JobResult[Out], error) {
 	job := h.registeredJob()
+	h.agent.requireRuntime("JobHandle.EnqueueAt")
 	if fireAt.IsZero() {
 		return JobResult[Out]{}, fmt.Errorf("agentsdk: JobHandle(%s@v%d).EnqueueAt: fireAt is required", job.name, job.version)
 	}
@@ -277,6 +278,7 @@ func (h *JobHandle[In, Out]) EnqueueAt(ctx context.Context, id string, fireAt ti
 
 func (h *JobHandle[In, Out]) enqueue(ctx context.Context, id string, scheduledAt *time.Time, input In, operation string) (JobResult[Out], error) {
 	job := h.registeredJob()
+	h.agent.requireRuntime("JobHandle." + operation)
 	if err := validateJobID(id); err != nil {
 		return JobResult[Out]{}, fmt.Errorf("agentsdk: JobHandle(%s@v%d).%s: %w", job.name, job.version, operation, err)
 	}
@@ -309,6 +311,7 @@ func (h *JobHandle[In, Out]) enqueue(ctx context.Context, id string, scheduledAt
 // Get returns the current durable state of a job.
 func (h *JobHandle[In, Out]) Get(ctx context.Context, id string) (JobResult[Out], error) {
 	job := h.registeredJob()
+	h.agent.requireRuntime("JobHandle.Get")
 	if err := validateJobID(id); err != nil {
 		return JobResult[Out]{}, fmt.Errorf("agentsdk: JobHandle(%s@v%d).Get: %w", job.name, job.version, err)
 	}
@@ -322,6 +325,7 @@ func (h *JobHandle[In, Out]) Get(ctx context.Context, id string) (JobResult[Out]
 // Cancel requests cancellation of a queued or running job.
 func (h *JobHandle[In, Out]) Cancel(ctx context.Context, id string) error {
 	job := h.registeredJob()
+	h.agent.requireRuntime("JobHandle.Cancel")
 	if err := validateJobID(id); err != nil {
 		return fmt.Errorf("agentsdk: JobHandle(%s@v%d).Cancel: %w", job.name, job.version, err)
 	}

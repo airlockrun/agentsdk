@@ -102,6 +102,9 @@ type EnvVarHandle struct {
 //
 // Subsequent calls return the cached value until Refresh() is invoked.
 func (h *EnvVarHandle) Get(ctx context.Context) (string, error) {
+	if !h.agent.runtimeAvailable() {
+		return "", h.agent.runtimeUnavailable("EnvVarHandle.Get")
+	}
 	h.mu.Lock()
 	if h.loaded {
 		v := h.cached

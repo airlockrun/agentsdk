@@ -721,6 +721,8 @@ func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 		filepath.Join(prefix, "skills", "daisyui", "SKILL.md"),
 		filepath.Join(prefix, "skills", "templ", "reference", "03-syntax-and-usage", "06-if-else.md"),
 		filepath.Join(prefix, "skills", "htmx", "reference", "docs.md"),
+		filepath.Join(prefix, "skills", "lucide", "SKILL.md"),
+		filepath.Join(prefix, "skills", "lucide", "reference", "icons.md"),
 		filepath.Join(prefix, "skills", "agentsdk", "SKILL.md"),
 		filepath.Join(prefix, "skills", "agentsdk", "reference", "files.md"),
 	} {

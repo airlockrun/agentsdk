@@ -45,7 +45,7 @@ func newRecordingStorageServer(t *testing.T) *recordingStorageServer {
 }
 
 func (r *recordingStorageServer) agent() *Agent {
-	a := &Agent{httpClient: &http.Client{}}
+	a := &Agent{httpClient: &http.Client{}, phase: agentRunning}
 	a.client = newAirlockClient(r.srv.URL, "tok", a.httpClient)
 	return a
 }

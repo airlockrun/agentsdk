@@ -59,13 +59,13 @@ func TestRegisterModel_SyncPayload(t *testing.T) {
 	if len(body.ModelSlots) != 3 {
 		t.Fatalf("ModelSlots len = %d, want 3", len(body.ModelSlots))
 	}
-	if body.ModelSlots[0].Slug != "summarize" || body.ModelSlots[0].Capability != "text" {
+	if body.ModelSlots[0].Slug != "poster" || body.ModelSlots[0].Capability != "image" {
 		t.Errorf("slot[0] = %+v", body.ModelSlots[0])
 	}
-	if body.ModelSlots[1].Slug != "poster" || body.ModelSlots[1].Capability != "image" {
+	if body.ModelSlots[1].Slug != "research" || body.ModelSlots[1].Capability != "search" {
 		t.Errorf("slot[1] = %+v", body.ModelSlots[1])
 	}
-	if body.ModelSlots[2].Slug != "research" || body.ModelSlots[2].Capability != "search" {
+	if body.ModelSlots[2].Slug != "summarize" || body.ModelSlots[2].Capability != "text" {
 		t.Errorf("slot[2] = %+v", body.ModelSlots[2])
 	}
 }

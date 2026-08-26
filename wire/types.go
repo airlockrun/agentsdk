@@ -276,24 +276,33 @@ type MCPContent struct {
 	Data     string `json:"data,omitempty"`
 }
 
-type SyncRequest struct {
+// AgentManifest is the complete canonical declaration of an agent image. The
+// SDK emits it in offline manifest mode and sends the same value during runtime
+// synchronization. Slices are deterministically ordered by their identifiers,
+// except Instructions and StartupHooks, whose registration order is semantic.
+type AgentManifest struct {
 	Version       string            `json:"version"`
-	Description   string            `json:"description,omitempty"`
-	Emoji         string            `json:"emoji,omitempty"`
-	Tools         []ToolDef         `json:"tools,omitempty"`
+	Description   string            `json:"description"`
+	Emoji         string            `json:"emoji"`
+	Tools         []ToolDef         `json:"tools"`
 	Webhooks      []WebhookDef      `json:"webhooks"`
-	JobHandlers   []JobHandlerDef   `json:"jobHandlers,omitempty"`
-	JobCrons      []JobCronDef      `json:"jobCrons,omitempty"`
-	Routes        []RouteDef        `json:"routes,omitempty"`
-	Topics        []TopicDef        `json:"topics,omitempty"`
-	MCPServers    []MCPDef          `json:"mcpServers,omitempty"`
-	Connections   []ConnectionDef   `json:"connections,omitempty"`
-	ExecEndpoints []ExecEndpointDef `json:"execEndpoints,omitempty"`
-	EnvVars       []EnvVarDef       `json:"envVars,omitempty"`
-	Directories   []DirectoryDef    `json:"directories,omitempty"`
-	Instructions  []InstructionDef  `json:"instructions,omitempty"`
-	ModelSlots    []ModelSlotDef    `json:"modelSlots,omitempty"`
+	JobHandlers   []JobHandlerDef   `json:"jobHandlers"`
+	JobCrons      []JobCronDef      `json:"jobCrons"`
+	Routes        []RouteDef        `json:"routes"`
+	Topics        []TopicDef        `json:"topics"`
+	MCPServers    []MCPDef          `json:"mcpServers"`
+	Connections   []ConnectionDef   `json:"connections"`
+	ExecEndpoints []ExecEndpointDef `json:"execEndpoints"`
+	EnvVars       []EnvVarDef       `json:"envVars"`
+	Directories   []DirectoryDef    `json:"directories"`
+	Instructions  []InstructionDef  `json:"instructions"`
+	ModelSlots    []ModelSlotDef    `json:"modelSlots"`
+	StaticAssets  []StaticAssetDef  `json:"staticAssets"`
+	StartupHooks  []StartupHookDef  `json:"startupHooks"`
 }
+
+// SyncRequest is the complete agent declaration accepted by runtime sync.
+type SyncRequest = AgentManifest
 
 type EnvVarDef struct {
 	Slug        string `json:"slug,omitempty"`
@@ -363,6 +372,17 @@ type ModelSlotDef struct {
 	Slug        string `json:"slug"`
 	Capability  string `json:"capability"`
 	Description string `json:"description,omitempty"`
+}
+
+type StaticAssetDef struct {
+	Name        string `json:"name"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256"`
+}
+
+type StartupHookDef struct {
+	Name string `json:"name"`
 }
 
 type SyncResponse struct {

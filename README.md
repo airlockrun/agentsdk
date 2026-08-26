@@ -83,6 +83,30 @@ func main() {
 
 In a real agent you'd also call `RegisterTool`, `RegisterWebhook`, `RegisterJob`, `RegisterConnection`, and so on. The [API reference](REFERENCE.md) documents the full surface.
 
+## Lifecycle
+
+`agentsdk.New` creates a definition-only agent. Construct services, wire the
+late-bound handles returned by APIs such as `Agent.DB()`, and register every
+declaration in your factory. This phase does not read runtime environment
+variables, open the database, make network calls, or run migrations. Database
+operations through the `Agent.DB()` handle are unavailable until startup.
+
+`Agent.Manifest()` freezes declarations and returns the complete canonical
+manifest without starting runtime dependencies. Running the agent with
+`AIRLOCK_AGENT_MODE=manifest` emits that manifest as one JSON line and exits, so
+Airlock can inspect an agent offline.
+
+In normal mode, `Agent.Serve()` freezes declarations, starts the runtime and
+runs migrations, synchronizes the manifest with Airlock, runs named
+process-local `OnStart` hooks, then serves HTTP until shutdown. Keep durable
+startup work in registered jobs; `OnStart` is for disposable process-local
+state.
+
+Tests use `agenttest.New(t, factory)`. It invokes the factory first while the
+agent is definition-only, then provisions the mock Airlock and test database,
+starts the runtime, applies migrations, synchronizes declarations, runs
+`OnStart` hooks, and returns a ready agent.
+
 ## Companion projects
 
 - [airlock](https://github.com/airlockrun/airlock) (AGPL-3.0) — the self-hosted platform that runs agents built with this SDK

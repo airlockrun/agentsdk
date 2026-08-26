@@ -69,13 +69,19 @@ Check the author-facing API against the latest published compatibility baseline:
     GOWORK=off ./scripts/check-api-compat.sh
 
 The version-matched UI references under `scaffold/skills/` are checked-in
-generated assets. After changing the templ, DaisyUI, or htmx version, refresh
+generated assets. After changing the templ, DaisyUI, htmx, or Lucide version, refresh
 them explicitly (this downloads pinned upstream documentation):
 
     go run ./internal/cmd/syncskills
 
 The pre-commit hook verifies the bundle offline with the command's `--check`
 mode and never rewrites it.
+
+After dependency or bundled-asset changes, regenerate and verify the notices:
+
+    ./scripts/gen-notices.sh
+    ./scripts/check-licenses.sh
+    ./scripts/check-notices.sh
 
 ## Contributions involving AI
 

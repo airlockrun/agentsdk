@@ -19,6 +19,9 @@ import (
 // registered for redaction (heuristic-gated, like a Secret env var) so it is
 // stripped from LLM input.
 func (a *Agent) Seal(ctx context.Context, plaintext string) (string, error) {
+	if !a.runtimeAvailable() {
+		return "", a.runtimeUnavailable("Seal")
+	}
 	a.maybeAddSensitive(plaintext)
 	var resp wire.SealResponse
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/seal",
@@ -32,6 +35,9 @@ func (a *Agent) Seal(ctx context.Context, plaintext string) (string, error) {
 // sealed value was produced for a different agent or is corrupt. The recovered
 // plaintext is registered for redaction.
 func (a *Agent) Unseal(ctx context.Context, sealed string) (string, error) {
+	if !a.runtimeAvailable() {
+		return "", a.runtimeUnavailable("Unseal")
+	}
 	var resp wire.UnsealResponse
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/unseal",
 		wire.UnsealRequest{Sealed: sealed}, &resp); err != nil {

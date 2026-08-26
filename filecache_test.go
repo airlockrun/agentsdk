@@ -144,6 +144,7 @@ func storageAgent(t *testing.T) (*Agent, *storageMock, *run) {
 	mock := newStorageMock()
 	t.Cleanup(func() { mock.server.Close() })
 	a := &Agent{
+		phase:      agentRunning,
 		agentID:    "test-agent",
 		apiURL:     mock.server.URL,
 		token:      "test-token",

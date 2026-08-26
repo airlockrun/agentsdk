@@ -1,0 +1,14 @@
+package views
+
+import "github.com/airlockrun/agentsdk/lucide"
+
+// ActionIcon keeps a domain-appropriate idle icon and the DaisyUI request
+// spinner in the same slot. htmx adds htmx-request to the requesting element.
+templ ActionIcon(name string) {
+	<span class="air-action-icon">
+		@lucide.Icon(name, "air-action-icon-idle")
+		<span class="loading loading-spinner air-action-icon-busy" role="status" aria-live="polite">
+			<span class="sr-only">Working</span>
+		</span>
+	</span>
+}

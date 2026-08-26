@@ -215,6 +215,10 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 		m.record(r)
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("PUT /api/agent/env-vars/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("PUT /api/agent/sync", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/json")

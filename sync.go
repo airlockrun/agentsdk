@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,62 +17,75 @@ import (
 // Called by Serve() at startup (via syncOrPanic) and by the /refresh handler.
 // Returns the error so /refresh can propagate it; startup panics via the wrapper.
 func (a *Agent) syncWithAirlock(ctx context.Context) error {
-	if a.jobManifestMode {
-		return a.runtimeUnavailable("sync")
-	}
+	a.requireRuntime("sync")
 	a.freeze()
-	// Declare each connection as a need in the sync batch. The agent declares
-	// the shape; operators create + bind the backing resource.
+	manifest := a.buildManifest()
+	// Environment declarations retain their dedicated reconciliation endpoint;
+	// they are also present in the complete manifest so offline inspection and
+	// runtime sync describe the same agent.
+	for _, def := range manifest.EnvVars {
+		if err := a.client.doJSON(ctx, "PUT", "/api/agent/env-vars/"+def.Slug, def, nil); err != nil {
+			return fmt.Errorf("register env var %s: %w", def.Slug, err)
+		}
+	}
+
+	var syncResp wire.SyncResponse
+	if err := a.client.doJSON(ctx, "PUT", "/api/agent/sync", manifest, &syncResp); err != nil {
+		// 409 Conflict from Airlock means agentsdk-version incompatibility —
+		// surface a pointer to the remediation so the operator sees it in
+		// docker logs alongside the error persisted in the agent's UI.
+		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "incompatible") {
+			return fmt.Errorf("sync rejected by Airlock (%w); this container is out of date — rebuild the agent from the admin UI", err)
+		}
+		return fmt.Errorf("sync with Airlock: %w", err)
+	}
+
+	a.applySyncResponse(syncResp)
+
+	// Log MCP auth issues.
+	for _, status := range syncResp.MCPAuthStatus {
+		if !status.Authorized {
+			agentLogger().Warn("MCP server authorization required", zap.String("slug", status.Slug), zap.String("auth_url", status.AuthURL))
+		}
+	}
+	return nil
+}
+
+// Manifest freezes registrations and returns the complete canonical agent
+// declaration used by both offline inspection and runtime synchronization.
+func (a *Agent) Manifest() wire.AgentManifest {
+	a.freeze()
+	return a.buildManifest()
+}
+
+func (a *Agent) buildManifest() wire.AgentManifest {
 	connections := make([]wire.ConnectionDef, 0, len(a.auths))
-	for slug, c := range a.auths {
+	for _, slug := range sortedKeys(a.auths) {
+		c := a.auths[slug]
 		connections = append(connections, wire.ConnectionDef{
-			Slug:              slug,
-			Name:              c.Name,
-			Description:       c.Description,
-			BaseURL:           c.BaseURL,
-			AuthMode:          wire.ConnectionAuth(c.AuthMode),
-			AuthURL:           c.AuthURL,
-			TokenURL:          c.TokenURL,
-			Scopes:            c.Scopes,
-			AuthParams:        c.AuthParams,
-			Headers:           c.Headers,
-			AuthInjection:     toWireAuthInjection(c.AuthInjection),
-			SetupInstructions: c.SetupInstructions,
-			LLMHint:           c.LLMHint,
-			Access:            toWireAccess(c.Access),
+			Slug: slug, Name: c.Name, Description: c.Description, BaseURL: c.BaseURL,
+			AuthMode: wire.ConnectionAuth(c.AuthMode), AuthURL: c.AuthURL, TokenURL: c.TokenURL,
+			Scopes: append([]string(nil), c.Scopes...), AuthParams: cloneStringMap(c.AuthParams), Headers: cloneStringMap(c.Headers),
+			AuthInjection: toWireAuthInjection(c.AuthInjection), SetupInstructions: c.SetupInstructions,
+			LLMHint: c.LLMHint, Access: toWireAccess(c.Access),
 		})
 	}
 
-	// Declare each exec endpoint as a need in the sync batch. Operators set
-	// transport, host, user, and credentials on the backing resource via the
-	// admin UI; we only declare the slug+description+access here.
 	execEndpoints := make([]wire.ExecEndpointDef, 0, len(a.execEndpoints))
-	for slug, e := range a.execEndpoints {
-		execEndpoints = append(execEndpoints, wire.ExecEndpointDef{
-			Slug:        slug,
-			Description: e.Description,
-			LLMHint:     e.LLMHint,
-			Access:      toWireAccess(e.Access),
-		})
+	for _, slug := range sortedKeys(a.execEndpoints) {
+		e := a.execEndpoints[slug]
+		execEndpoints = append(execEndpoints, wire.ExecEndpointDef{Slug: slug, Description: e.Description, LLMHint: e.LLMHint, Access: toWireAccess(e.Access)})
 	}
 
-	// Register each env var slot. Operators set values separately via the
-	// admin UI; we only declare the slot here.
-	for slug, e := range a.envVars {
-		def := wire.EnvVarDef{
-			Description: e.Description,
-			Secret:      e.Secret,
-			Default:     e.Default,
-			Pattern:     e.Pattern,
-		}
-		if err := a.client.doJSON(ctx, "PUT", "/api/agent/env-vars/"+slug, def, nil); err != nil {
-			return fmt.Errorf("register env var %s: %w", slug, err)
-		}
+	envVars := make([]wire.EnvVarDef, 0, len(a.envVars))
+	for _, slug := range sortedKeys(a.envVars) {
+		e := a.envVars[slug]
+		envVars = append(envVars, wire.EnvVarDef{Slug: slug, Description: e.Description, Secret: e.Secret, Default: e.Default, Pattern: e.Pattern})
 	}
 
-	// Build sync payload — convert builder structs to wire formats.
 	webhooks := make([]wire.WebhookDef, 0, len(a.webhooks))
-	for _, w := range a.webhooks {
+	for _, path := range sortedKeys(a.webhooks) {
+		w := a.webhooks[path]
 		timeout := w.Timeout
 		if timeout == 0 {
 			timeout = defaultTimeout
@@ -90,7 +104,8 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		routeCount++
 	}
 	routes := make([]wire.RouteDef, 0, routeCount)
-	for _, r := range a.routes {
+	for _, key := range sortedKeys(a.routes) {
+		r := a.routes[key]
 		routes = append(routes, wire.RouteDef{
 			Path:        r.Path,
 			Method:      r.Method,
@@ -106,9 +121,16 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: "Immutable static assets registered by the agent",
 		})
 	}
+	sort.Slice(routes, func(i, j int) bool {
+		if routes[i].Method == routes[j].Method {
+			return routes[i].Path < routes[j].Path
+		}
+		return routes[i].Method < routes[j].Method
+	})
 
 	topics := make([]wire.TopicDef, 0, len(a.topics))
-	for _, t := range a.topics {
+	for _, slug := range sortedKeys(a.topics) {
+		t := a.topics[slug]
 		topics = append(topics, wire.TopicDef{
 			Slug:        t.Slug,
 			Description: t.Description,
@@ -119,24 +141,26 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	}
 
 	tools := make([]wire.ToolDef, 0, len(a.tools))
-	for _, t := range a.tools {
+	for _, name := range sortedKeys(a.tools) {
+		t := a.tools[name]
 		examples := make([]json.RawMessage, len(t.InputExamples))
 		for i, ex := range t.InputExamples {
-			examples[i] = ex.Input
+			examples[i] = append(json.RawMessage(nil), ex.Input...)
 		}
 		tools = append(tools, wire.ToolDef{
 			Name:          t.Name,
 			Description:   t.Description,
 			LLMHint:       t.llmHint,
 			Access:        toWireAccess(t.access),
-			InputSchema:   t.InputSchema,
-			OutputSchema:  t.OutputSchema,
+			InputSchema:   append(json.RawMessage(nil), t.InputSchema...),
+			OutputSchema:  append(json.RawMessage(nil), t.OutputSchema...),
 			InputExamples: examples,
 		})
 	}
 
 	mcpServers := make([]wire.MCPDef, 0, len(a.mcps))
-	for _, m := range a.mcps {
+	for _, slug := range sortedKeys(a.mcps) {
+		m := a.mcps[slug]
 		mcpServers = append(mcpServers, wire.MCPDef{
 			Slug:          m.Slug,
 			Name:          m.Name,
@@ -144,7 +168,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			AuthMode:      wire.MCPAuth(m.AuthMode),
 			AuthURL:       m.AuthURL,
 			TokenURL:      m.TokenURL,
-			Scopes:        m.Scopes,
+			Scopes:        append([]string(nil), m.Scopes...),
 			AuthInjection: toWireAuthInjection(m.AuthInjection),
 			Access:        toWireAccess(m.Access),
 		})
@@ -171,6 +195,7 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Scope:          wire.DirectoryScope(d.Scope),
 		})
 	}
+	sort.Slice(directories, func(i, j int) bool { return directories[i].Path < directories[j].Path })
 
 	modelSlots := make([]wire.ModelSlotDef, 0, len(a.modelSlots))
 	for _, s := range a.modelSlots {
@@ -180,8 +205,22 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 			Description: s.Description,
 		})
 	}
+	sort.Slice(modelSlots, func(i, j int) bool { return modelSlots[i].Slug < modelSlots[j].Slug })
 
-	syncBody := wire.SyncRequest{
+	staticAssets := make([]wire.StaticAssetDef, 0, len(a.staticAssets))
+	for _, name := range sortedKeys(a.staticAssets) {
+		asset := a.staticAssets[name]
+		digest := sha256.Sum256(asset.Data)
+		staticAssets = append(staticAssets, wire.StaticAssetDef{
+			Name: name, ContentType: asset.ContentType, Size: int64(len(asset.Data)), SHA256: fmt.Sprintf("%x", digest),
+		})
+	}
+	startupHooks := make([]wire.StartupHookDef, 0, len(a.startHooks))
+	for _, hook := range a.startHooks {
+		startupHooks = append(startupHooks, wire.StartupHookDef{Name: hook.name})
+	}
+
+	return wire.AgentManifest{
 		Version:       Version,
 		Description:   a.description,
 		Emoji:         a.emoji,
@@ -194,31 +233,22 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		MCPServers:    mcpServers,
 		Connections:   connections,
 		ExecEndpoints: execEndpoints,
+		EnvVars:       envVars,
 		Directories:   directories,
 		Instructions:  instructions,
 		ModelSlots:    modelSlots,
+		StaticAssets:  staticAssets,
+		StartupHooks:  startupHooks,
 	}
+}
 
-	var syncResp wire.SyncResponse
-	if err := a.client.doJSON(ctx, "PUT", "/api/agent/sync", syncBody, &syncResp); err != nil {
-		// 409 Conflict from Airlock means agentsdk-version incompatibility —
-		// surface a pointer to the remediation so the operator sees it in
-		// docker logs alongside the error persisted in the agent's UI.
-		if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "incompatible") {
-			return fmt.Errorf("sync rejected by Airlock (%w); this container is out of date — rebuild the agent from the admin UI", err)
-		}
-		return fmt.Errorf("sync with Airlock: %w", err)
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
 	}
-
-	a.applySyncResponse(syncResp)
-
-	// Log MCP auth issues.
-	for _, status := range syncResp.MCPAuthStatus {
-		if !status.Authorized {
-			agentLogger().Warn("MCP server authorization required", zap.String("slug", status.Slug), zap.String("auth_url", status.AuthURL))
-		}
-	}
-	return nil
+	sort.Strings(keys)
+	return keys
 }
 
 func (a *Agent) buildJobManifest() wire.JobManifest {
@@ -242,8 +272,8 @@ func (a *Agent) buildJobManifest() wire.JobManifest {
 			TimeoutMs:        job.timeout.Milliseconds(),
 			MaxAttempts:      int32(job.maxAttempts),
 			MaxConcurrency:   int32(job.maxConcurrency),
-			InputSchema:      job.inputSchema,
-			OutputSchema:     job.outputSchema,
+			InputSchema:      append(json.RawMessage(nil), job.inputSchema...),
+			OutputSchema:     append(json.RawMessage(nil), job.outputSchema...),
 			InputSchemaHash:  job.inputSchemaHash,
 			OutputSchemaHash: job.outputSchemaHash,
 		})
@@ -264,17 +294,8 @@ func (a *Agent) buildJobManifest() wire.JobManifest {
 			HandlerVersion:   int32(cron.handlerVersion),
 			InputSchemaHash:  cron.inputSchemaHash,
 			OutputSchemaHash: cron.outputSchemaHash,
-			Input:            cron.input,
+			Input:            append(json.RawMessage(nil), cron.input...),
 		})
 	}
 	return wire.JobManifest{JobHandlers: jobHandlers, JobCrons: jobCrons}
-}
-
-// syncOrPanic is the startup wrapper that turns sync failures into panics —
-// preserves the historical "container exits if it can't register" behaviour
-// so a misconfigured agent fails loud instead of running in a degraded state.
-func (a *Agent) syncOrPanic(ctx context.Context) {
-	if err := a.syncWithAirlock(ctx); err != nil {
-		panic("agentsdk: " + err.Error())
-	}
 }
