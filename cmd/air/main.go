@@ -80,8 +80,6 @@ func run(args []string) error {
 		return cmdIntegrations(args[1:])
 	case "connection":
 		return cmdConnection(args[1:])
-	case "exec":
-		return cmdExec(args[1:])
 	case "mcp":
 		return cmdMCP(args[1:])
 	case "login":
@@ -112,7 +110,6 @@ Usage:
   air build [dir]                 run the local build chain
   air integrations list [flags]   list configured external integrations
   air connection request ...      call a target's HTTP connection
-  air exec run ...                 run a command on a target's exec endpoint
   air mcp probe|tools|call ...     inspect or call MCP servers
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials

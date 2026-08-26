@@ -181,65 +181,6 @@ func cmdConnection(args []string) error {
 	return nil
 }
 
-func cmdExec(args []string) error {
-	if len(args) < 4 || args[0] != "run" {
-		return errors.New("exec requires: run <slug> [--timeout <duration>] -- <command> [args...]")
-	}
-	slug := args[1]
-	timeout := time.Duration(0)
-	var targetFlags integrationTargetFlags
-	separator := -1
-	for i := 2; i < len(args); i++ {
-		if args[i] == "--" {
-			separator = i
-			break
-		}
-		if handled, err := consumeIntegrationTargetFlag(args, &i, &targetFlags); handled || err != nil {
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if args[i] != "--timeout" || i+1 >= len(args) {
-			return fmt.Errorf("unknown exec flag %q", args[i])
-		}
-		parsed, err := time.ParseDuration(args[i+1])
-		if err != nil {
-			return fmt.Errorf("invalid timeout: %w", err)
-		}
-		if parsed <= 0 || parsed > 10*time.Minute {
-			return errors.New("timeout must be greater than zero and at most 10m")
-		}
-		timeout = parsed
-		i++
-	}
-	if separator < 0 || separator+1 >= len(args) {
-		return errors.New("exec command must follow --")
-	}
-	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx, targetFlags)
-	if err != nil {
-		return err
-	}
-	var resp airlockv1.InvokeExecResponse
-	err = doProto(ctx, target.baseURL, http.MethodPost, target.path("/exec/"+url.PathEscape(slug)+"/run"), target.token, &airlockv1.InvokeExecRequest{
-		Command: args[separator+1], Args: args[separator+2:], TimeoutMs: timeout.Milliseconds(),
-	}, &resp)
-	if err != nil {
-		return err
-	}
-	if _, err := os.Stdout.Write(resp.Stdout); err != nil {
-		return err
-	}
-	if _, err := os.Stderr.Write(resp.Stderr); err != nil {
-		return err
-	}
-	if resp.ExitCode != 0 {
-		return fmt.Errorf("remote command exited %d", resp.ExitCode)
-	}
-	return nil
-}
-
 func cmdMCP(args []string) error {
 	if len(args) == 0 {
 		return errors.New("mcp requires: probe, tools, or call")

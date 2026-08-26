@@ -3,21 +3,17 @@ package agentsdk
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 )
 
 const (
-	// spillInlineThreshold is the size below which a response body (or
-	// stdout/stderr stream) is returned inline to the JS VM rather than
-	// spilled to storage. Matches httpRequest's httpAutoSaveThreshold so
-	// the LLM sees one consistent inline/overflow boundary across the
-	// httpRequest, conn_{slug}, and exec_{slug} bindings.
+	// spillInlineThreshold is the size below which a response body is returned
+	// inline to the JS VM rather than spilled to storage. Matches httpRequest's
+	// httpAutoSaveThreshold so HTTP bindings share one overflow boundary.
 	spillInlineThreshold = 8 * 1024
 
-	// spillPreviewBytes is the head of the body kept as bodyPreview /
-	// stdoutPreview / stderrPreview after spill so the LLM can sniff
-	// content type / shape without a follow-up fileRead.
+	// spillPreviewBytes is the head of the body kept as bodyPreview after spill
+	// so the LLM can inspect its shape without a follow-up fileRead.
 	spillPreviewBytes = 1024
 )
 
@@ -28,8 +24,7 @@ const (
 // savedTo + total size.
 //
 // On any error, peekAndSpill drains the rest of r into io.Discard before
-// returning so the underlying transport (HTTP body / SSH session pipe) isn't
-// wedged by unread bytes.
+// returning so the underlying transport isn't wedged by unread bytes.
 func peekAndSpill(
 	ctx context.Context,
 	agent *Agent,
@@ -77,37 +72,7 @@ func (c *spillCountingReader) Read(p []byte) (int, error) {
 
 // newCallID returns an 8-char hex id used to label spill files. Per call,
 // not per run, so successive bindings within the same run don't overwrite
-// each other and the two halves of an exec call (stdout + stderr) share
-// the same id.
+// each other.
 func newCallID() string {
 	return randomHex(4)
-}
-
-// spillFields is the result shape both stdout and stderr of an exec call
-// reduce to before being projected onto the JS envelope.
-type spillFields struct {
-	inline  []byte
-	savedTo string
-	size    int64
-	err     error
-}
-
-// spillFor reads r through peekAndSpill, packaging the result. Used by the
-// exec_{slug}.run JS binding which drains stdout and stderr concurrently.
-func spillFor(ctx context.Context, agent *Agent, r io.Reader, dstPath string) spillFields {
-	inline, savedTo, size, err := peekAndSpill(ctx, agent, r, dstPath, "application/octet-stream")
-	return spillFields{inline: inline, savedTo: savedTo, size: size, err: err}
-}
-
-// execOverflowNote is the LLM-readable explanation appended when at least
-// one of stdout/stderr was spilled.
-func execOverflowNote(outR, errR spillFields) string {
-	switch {
-	case outR.savedTo != "" && errR.savedTo != "":
-		return fmt.Sprintf("stdout (%d bytes) and stderr (%d bytes) exceeded inline threshold; saved to %s and %s. Use air.fileRead to read.", outR.size, errR.size, outR.savedTo, errR.savedTo)
-	case outR.savedTo != "":
-		return fmt.Sprintf("stdout (%d bytes) exceeded inline threshold; saved to %s. Use air.fileRead(stdoutSavedTo) to read.", outR.size, outR.savedTo)
-	default:
-		return fmt.Sprintf("stderr (%d bytes) exceeded inline threshold; saved to %s. Use air.fileRead(stderrSavedTo) to read.", errR.size, errR.savedTo)
-	}
 }

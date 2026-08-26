@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/airlockrun/agentsdk/internal/binding"
 	"github.com/airlockrun/agentsdk/wire"
@@ -13,8 +12,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Per-instance direct-tool factories: connections, exec endpoints,
-// topics, MCP servers, sibling agents. Each registered instance fans
+// Per-instance direct-tool factories: connections, topics, MCP servers,
+// sibling agents. Each registered instance fans
 // out into one or more typed tools whose names are flat underscores
 // (e.g. `mcp_github_search_repos`). Schemas for MCP/sibling tools come
 // from sync; everything else is a fixed Go input struct.
@@ -25,7 +24,6 @@ import (
 // object methods.
 func addNamespacedTools(ts tool.Set, agent *Agent, run *run) {
 	addConnectionTools(ts, agent, run)
-	addExecTools(ts, agent, run)
 	addTopicTools(ts, agent, run)
 	addMCPTools(ts, agent, run)
 	addSiblingTools(ts, agent, run)
@@ -116,77 +114,6 @@ func buildConnRequestTool(name, desc, connSlug string, handle *ConnectionHandle,
 			}
 			return jsonResult(out)
 		}).Build()
-}
-
-// --- exec endpoints ---
-
-type execRunInput struct {
-	Command   string   `json:"command" jsonschema:"description=Command string. Shell features (pipes, redirection) live here."`
-	Args      []string `json:"args,omitempty" jsonschema:"description=Positional args appended to command. Quoted before being sent to the remote shell."`
-	Stdin     string   `json:"stdin,omitempty"`
-	TimeoutMs int64    `json:"timeoutMs,omitempty"`
-}
-
-func addExecTools(ts tool.Set, agent *Agent, run *run) {
-	for slug, ep := range agent.execEndpoints {
-		if !accessSatisfies(run.callerAccess, ep.Access) {
-			continue
-		}
-		handle := &ExecHandle{slug: slug, agent: run.agent}
-		epSlug := slug
-		desc := ep.Description
-		if desc == "" {
-			desc = "Run a command on " + slug
-		}
-		desc += " — returns {stdout, stderr, exitCode, durationMs}. Non-zero exitCode is not an error; inspect it yourself. Stdout/stderr over 20 MiB spill to tmp/."
-		path := binding.Local(binding.Exec, slug, "run")
-		direct := tool.New(path.Direct()).
-			Description(desc).
-			SchemaFromStruct(execRunInput{}).
-			Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
-				var in execRunInput
-				if err := json.Unmarshal(input, &in); err != nil {
-					return tool.Result{}, err
-				}
-				cmd := ExecCommand{Command: in.Command, Args: in.Args}
-				if in.Stdin != "" {
-					cmd.Stdin = []byte(in.Stdin)
-				}
-				if in.TimeoutMs > 0 {
-					cmd.Timeout = time.Duration(in.TimeoutMs) * time.Millisecond
-				}
-				stream, err := handle.RunStream(run.ctx, cmd)
-				if err != nil {
-					return tool.Result{}, err
-				}
-				defer stream.Stdout.Close()
-				defer stream.Stderr.Close()
-
-				callID := newCallID()
-				prefix := fmt.Sprintf("tmp/exec-%s-%s", epSlug, callID)
-				outCh := make(chan spillFields, 1)
-				errCh := make(chan spillFields, 1)
-				go func() {
-					outCh <- spillFor(run.ctx, run.agent, stream.Stdout, prefix+"-stdout.bin")
-				}()
-				go func() {
-					errCh <- spillFor(run.ctx, run.agent, stream.Stderr, prefix+"-stderr.bin")
-				}()
-				outR := <-outCh
-				errR := <-errCh
-				exit, waitErr := stream.Wait()
-				switch {
-				case outR.err != nil:
-					return tool.Result{}, outR.err
-				case errR.err != nil:
-					return tool.Result{}, errR.err
-				case waitErr != nil:
-					return tool.Result{}, waitErr
-				}
-				return jsonResult(buildExecRunOutput(outR, errR, exit))
-			}).Build()
-		addDirectBinding(ts, path, direct)
-	}
 }
 
 // --- topics ---

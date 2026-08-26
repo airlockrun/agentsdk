@@ -41,7 +41,6 @@ func TestSyncWithAirlock(t *testing.T) {
 	a.RegisterDirectory("cache", DirectoryOpts{
 		Read: AccessAdmin, Write: AccessAdmin, List: AccessAdmin, Description: "Local cache",
 	})
-	a.RegisterExecEndpoint(&ExecEndpoint{Slug: "runner", Description: "Build runner", Access: AccessAdmin})
 	a.RegisterMCP(&MCP{
 		Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthNone, Access: AccessUser,
 	})
@@ -113,9 +112,6 @@ func TestSyncWithAirlock(t *testing.T) {
 	}
 	if !foundCache {
 		t.Fatalf("directories = %+v", body.Directories)
-	}
-	if len(body.ExecEndpoints) != 1 || body.ExecEndpoints[0].Slug != "runner" {
-		t.Fatalf("exec endpoints = %+v", body.ExecEndpoints)
 	}
 	if len(body.MCPServers) != 1 || body.MCPServers[0].Slug != "docs" {
 		t.Fatalf("MCP servers = %+v", body.MCPServers)

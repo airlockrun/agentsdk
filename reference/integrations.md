@@ -7,7 +7,6 @@ credentials:
 ```bash
 go tool air integrations list
 go tool air connection request spotify --path /v1/me
-go tool air exec run ci_runner -- kick-build --branch main
 go tool air mcp probe https://example.com/mcp
 go tool air mcp tools github
 go tool air mcp call github search_repos --args '{"query":"airlock"}'
@@ -34,7 +33,6 @@ different instances:
 go tool air deploy --remote dev --url https://airlock.example.com --agent my-agent-dev -m "Configure development integrations"
 go tool air integrations list --remote dev
 go tool air connection request spotify --remote dev --path /v1/me
-go tool air exec run ci_runner --remote dev -- kick-build --branch main
 go tool air mcp tools github --remote dev
 ```
 
@@ -45,14 +43,13 @@ default. An existing remote cannot be rebound to another URL or agent; use a
 different remote name so source synchronization state stays attached to one
 deployment target.
 
-Airlock injects connection and MCP credentials and performs SSH authentication.
+Airlock injects connection and MCP credentials.
 Local calls require agent-admin access. Hosted codegen receives a short-lived
 integration token that cannot deploy, update source, configure credentials, or
 call unrelated agent APIs. Hosted codegen is fixed to its build-bound target and
 does not accept local target-selection flags.
 
-Connection response bodies are written to stdout. Exec preserves remote stdout
-and stderr and returns a non-zero local status when the remote command fails.
-`mcp tools` prints Airlock's cached input schemas; `mcp call` invokes the live
+Connection response bodies are written to stdout. `mcp tools` prints Airlock's
+cached input schemas; `mcp call` invokes the live
 server. Both print JSON so their output can become sanitized test fixtures.
-Connection, exec-stream, and MCP results are capped at 20 MiB.
+Connection and MCP results are capped at 20 MiB.

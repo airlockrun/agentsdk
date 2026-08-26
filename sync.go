@@ -71,12 +71,6 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 		})
 	}
 
-	execEndpoints := make([]wire.ExecEndpointDef, 0, len(a.execEndpoints))
-	for _, slug := range sortedKeys(a.execEndpoints) {
-		e := a.execEndpoints[slug]
-		execEndpoints = append(execEndpoints, wire.ExecEndpointDef{Slug: slug, Description: e.Description, LLMHint: e.LLMHint, Access: toWireAccess(e.Access)})
-	}
-
 	envVars := make([]wire.EnvVarDef, 0, len(a.envVars))
 	for _, slug := range sortedKeys(a.envVars) {
 		e := a.envVars[slug]
@@ -221,24 +215,23 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 	}
 
 	return wire.AgentManifest{
-		Version:       Version,
-		Description:   a.description,
-		Emoji:         a.emoji,
-		Tools:         tools,
-		Webhooks:      webhooks,
-		JobHandlers:   jobManifest.JobHandlers,
-		JobCrons:      jobManifest.JobCrons,
-		Routes:        routes,
-		Topics:        topics,
-		MCPServers:    mcpServers,
-		Connections:   connections,
-		ExecEndpoints: execEndpoints,
-		EnvVars:       envVars,
-		Directories:   directories,
-		Instructions:  instructions,
-		ModelSlots:    modelSlots,
-		StaticAssets:  staticAssets,
-		StartupHooks:  startupHooks,
+		Version:      Version,
+		Description:  a.description,
+		Emoji:        a.emoji,
+		Tools:        tools,
+		Webhooks:     webhooks,
+		JobHandlers:  jobManifest.JobHandlers,
+		JobCrons:     jobManifest.JobCrons,
+		Routes:       routes,
+		Topics:       topics,
+		MCPServers:   mcpServers,
+		Connections:  connections,
+		EnvVars:      envVars,
+		Directories:  directories,
+		Instructions: instructions,
+		ModelSlots:   modelSlots,
+		StaticAssets: staticAssets,
+		StartupHooks: startupHooks,
 	}
 }
 

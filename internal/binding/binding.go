@@ -20,7 +20,6 @@ const (
 	Air Kind = iota + 1
 	Tool
 	Connection
-	Exec
 	Topic
 	MCP
 	Agent
@@ -114,8 +113,6 @@ func (p Path) JSParts() []string {
 		return []string{"tools", p.operationAlias}
 	case Connection:
 		return []string{"conn", p.namespaceAlias, builtinJSName(p.operationAlias)}
-	case Exec:
-		return []string{"exec", p.namespaceAlias, builtinJSName(p.operationAlias)}
 	case Topic:
 		return []string{"topic", p.namespaceAlias, builtinJSName(p.operationAlias)}
 	case MCP:
@@ -210,8 +207,6 @@ func kindName(kind Kind) string {
 		return "tool"
 	case Connection:
 		return "conn"
-	case Exec:
-		return "exec"
 	case Topic:
 		return "topic"
 	case MCP:

@@ -53,11 +53,8 @@ Read the relevant companion at its build-container path:
 - **[Object storage](reference/files.md)** (`/libs/agentsdk/reference/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
   `ResolveFilePath`, shelling out to CLIs over storage, presigned URLs.
-- **[Remote execution](reference/exec.md)** (`/libs/agentsdk/reference/exec.md`) — `RegisterExecEndpoint`: running commands
-  on a remote machine over SSH, plus the shared overflow-response shape
-  (`*SavedTo` + `fileRead`) used by connections, exec, and `httpRequest`.
 - **[Live integrations](reference/integrations.md)** (`/libs/agentsdk/reference/integrations.md`) — validate configured
-  connections, exec endpoints, and MCP servers without retrieving credentials.
+  connections and MCP servers without retrieving credentials.
 - **[Interactive authentication](reference/auth-web.md)** (`/libs/agentsdk/reference/auth-web.md`) — login flows (one-time
   code / password / click) driven from an admin web page, ending in `Seal`.
 - **[Database](reference/database.md)** (`/libs/agentsdk/reference/database.md`) — Postgres: goose migrations, sqlc
@@ -513,8 +510,7 @@ non-obvious conventions (path prefixes, special headers).
 `conn.<slug>.requestJSON(...)`. Both return an envelope: small responses
 (≤ 8 KiB) come back inline (`body` / `data`); larger ones auto-spill to
 `tmp/conn-{slug}-{callID}.bin` with `bodyPreview` + `bodySavedTo` set
-(no `body`/`data`). Read the spilled payload with `air.fileRead(bodySavedTo)` —
-see the shared overflow shape in **`/libs/agentsdk/reference/exec.md`**.
+(no `body`/`data`). Read the spilled payload with `air.fileRead(bodySavedTo)`.
 
 ## RegisterMCP
 
@@ -560,30 +556,6 @@ agent.RegisterMCP(&agentsdk.MCP{
     AuthInjection: agentsdk.AuthInjection{Type: agentsdk.AuthInjectQueryParam, Name: "apiKey"},
 })
 ```
-
-## RegisterExecEndpoint — remote commands
-
-Declare a slug for running commands on a server the container can't reach as a
-built-in tool (a VPS over SSH, a CI runner, a homelab box). Airlock owns the
-SSH transport and credentials; the operator configures host/user in the UI; you
-wrap calls in typed tools. The handle's `Run(ctx, ExecCommand{...})` returns a
-structured small result; `RunStream(...)` streams a data download. `Access` is
-required and must be `AccessAdmin` or `AccessUser`; `AccessPublic` is rejected.
-
-```go
-ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
-    Slug:        "ci_runner",
-    Description: "Self-hosted GitHub Actions runner",
-    LLMHint:     "use `kick-build --branch <name>` to start a build",
-    Access:      agentsdk.AccessAdmin,
-})
-res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build", Args: []string{"--branch", "main"}})
-```
-
-→ Full API (Run vs RunStream, the `exec.<slug>.run` JS binding, shell features,
-errors, and the shared `*SavedTo` overflow handling): **`/libs/agentsdk/reference/exec.md`**.
-
-Live connection, exec, and MCP validation CLI: **`/libs/agentsdk/reference/integrations.md`**.
 
 ## RegisterEnvVar — operator-configured environment variables
 
@@ -998,7 +970,6 @@ as `output` without colliding with framework operations.
 | `air.*` / `air__*` | framework operations |
 | `tools.*` / `tool__*` | `RegisterTool` |
 | `conn.*` / `conn__*` | `RegisterConnection` |
-| `exec.*` / `exec__*` | `RegisterExecEndpoint` |
 | `topic.*` / `topic__*` | `RegisterTopic` |
 | `mcp.*` / `mcp__*` | `RegisterMCP` |
 | `agent.*` / `agent__*` | A2A sibling capabilities |

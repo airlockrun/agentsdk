@@ -26,9 +26,6 @@ func TestRender_DirectTools_Shape(t *testing.T) {
 		MCPServers: []MCPServerStatus{
 			{Slug: "github", Name: "GitHub", Status: "connected", Access: "user"},
 		},
-		ExecEndpoints: []ExecEndpointInfo{
-			{Slug: "ci", Description: "CI host", Access: "user"},
-		},
 		Topics: []TopicInfo{
 			{Slug: "build_done", Description: "fires on CI build", Access: "user"},
 		},
@@ -44,7 +41,6 @@ func TestRender_DirectTools_Shape(t *testing.T) {
 		"## Custom JavaScript functions",
 		"## Service connections",
 		"## MCP servers",
-		"## Remote command endpoints",
 		"## Notification topics",
 		"declare function",
 		"declare const",
@@ -52,7 +48,6 @@ func TestRender_DirectTools_Shape(t *testing.T) {
 		"`var` for top-level names",
 		"conn.slack.requestJSON",
 		"mcp.github.search_repos",
-		"exec.ci.run",
 		"topic.build_done.subscribe()",
 	}
 	for _, s := range mustNotContain {

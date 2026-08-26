@@ -43,7 +43,6 @@ type AgentData struct {
 	MCPServers          []MCPServerStatus
 	Siblings            []SiblingInfo
 	Directories         []DirInfo
-	ExecEndpoints       []ExecEndpointInfo
 
 	// Per-turn environment, rendered into the <env> block. Each is set
 	// explicitly by the dispatch path (never inferred) and omitted from
@@ -162,17 +161,6 @@ type RouteInfo struct {
 	Path        string
 	Access      string
 	Description string
-}
-
-// ExecEndpointInfo carries one registered exec endpoint for the prompt.
-// Bind-time access gating happens in vm.go; the prompt block also
-// access-filters via filterExecEndpoints below so a non-admin caller
-// never sees an admin-only endpoint listed.
-type ExecEndpointInfo struct {
-	Slug        string
-	Description string
-	LLMHint     string
-	Access      string
 }
 
 // DirInfo describes one registered storage directory for the prompt.
@@ -338,7 +326,6 @@ func filterAgentData(data AgentData, caller string) AgentData {
 	out.Routes = filterRoutes(data.Routes, caller)
 	out.MCPServers = filterMCPs(data.MCPServers, caller)
 	out.Directories = filterDirs(data.Directories, caller)
-	out.ExecEndpoints = filterExecEndpoints(data.ExecEndpoints, caller)
 	// Siblings are not access-filtered by caller tier — visibility for
 	// siblings is per-user (visible-set intersection) and that filter
 	// is applied by the agent BEFORE calling Render. The caller here
@@ -409,19 +396,6 @@ func filterDirs(in []DirInfo, caller string) []DirInfo {
 	for _, d := range in {
 		if callerSatisfies(caller, d.Read) || callerSatisfies(caller, d.Write) || callerSatisfies(caller, d.List) {
 			out = append(out, d)
-		}
-	}
-	return out
-}
-
-func filterExecEndpoints(in []ExecEndpointInfo, caller string) []ExecEndpointInfo {
-	if len(in) == 0 {
-		return in
-	}
-	out := make([]ExecEndpointInfo, 0, len(in))
-	for _, e := range in {
-		if callerSatisfies(caller, e.Access) {
-			out = append(out, e)
 		}
 	}
 	return out

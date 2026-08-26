@@ -93,9 +93,6 @@ func (a *Agent) validateRegistrations() {
 	for _, d := range a.directories {
 		validateDirectory(d)
 	}
-	for _, e := range a.execEndpoints {
-		validateExecEndpoint(e)
-	}
 	for _, asset := range a.staticAssets {
 		validateStaticAsset(asset)
 	}
@@ -390,20 +387,6 @@ func validateDirectory(d *directory) {
 	case ScopeNone, ScopeRun, ScopeConversation, ScopeUser:
 	default:
 		panic(fmt.Sprintf("agentsdk: RegisterDirectory(%q): invalid Scope %q", d.Path, d.Scope))
-	}
-}
-
-func validateExecEndpoint(e *ExecEndpoint) {
-	if e == nil {
-		panic("agentsdk: RegisterExecEndpoint: nil *ExecEndpoint")
-	}
-	validateBindingSlug("RegisterExecEndpoint", e.Slug)
-	if strings.TrimSpace(e.Description) == "" {
-		panic("agentsdk: RegisterExecEndpoint(" + e.Slug + "): Description is required")
-	}
-	validateAccess(fmt.Sprintf("RegisterExecEndpoint(%q)", e.Slug), e.Access)
-	if e.Access == AccessPublic {
-		panic("agentsdk: RegisterExecEndpoint(" + e.Slug + "): AccessPublic is not allowed")
 	}
 }
 

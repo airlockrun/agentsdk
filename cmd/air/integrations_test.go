@@ -176,51 +176,6 @@ func TestConnectionRequestCodegen(t *testing.T) {
 	}
 }
 
-func TestExecNamedRemotePreservesCommandFlags(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	const prodID = "11111111-1111-1111-1111-111111111111"
-	const devID = "22222222-2222-2222-2222-222222222222"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/v1/agents/" + devID:
-			encoded, _ := protojson.Marshal(&airlockv1.GetAgentDetailResponse{Agent: &airlockv1.AgentInfo{Id: devID, Slug: "dev"}})
-			_, _ = w.Write(encoded)
-		case "/api/v1/agents/" + devID + "/integrations/exec/shell/run":
-			var req airlockv1.InvokeExecRequest
-			raw, _ := io.ReadAll(r.Body)
-			if err := protojson.Unmarshal(raw, &req); err != nil {
-				t.Fatalf("decode request: %v", err)
-			}
-			if req.Command != "runner" || len(req.Args) != 2 || req.Args[0] != "--remote" || req.Args[1] != "inside" {
-				t.Errorf("command = %q, args = %q", req.Command, req.Args)
-			}
-			encoded, _ := protojson.Marshal(&airlockv1.InvokeExecResponse{Stdout: []byte("ok")})
-			_, _ = w.Write(encoded)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	if err := saveLoginCredentials(server.URL, "dev@example.com", "user-token", ""); err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	binding := agentBinding{}
-	binding.putRemote("prod", agentRemoteBinding{AirlockURL: server.URL, AgentID: prodID, Slug: "prod"})
-	binding.putRemote("dev", agentRemoteBinding{AirlockURL: server.URL, AgentID: devID, Slug: "dev"})
-	if err := writeAgentBinding(dir, binding); err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(dir)
-	output := captureCommandStdout(t, func() error {
-		return cmdExec([]string{"run", "shell", "--remote", "dev", "--", "runner", "--remote", "inside"})
-	})
-	if output != "ok" {
-		t.Fatalf("stdout = %q", output)
-	}
-}
-
 func TestDeployRejectsIntegrationToken(t *testing.T) {
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "integration-token")
 	err := cmdDeploy(nil)

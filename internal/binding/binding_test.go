@@ -16,7 +16,6 @@ func TestLocalPaths(t *testing.T) {
 		{Local(Air, "", "http_request"), "air.httpRequest", "air__http_request"},
 		{Local(Tool, "", "calculate"), "tools.calculate", "tool__calculate"},
 		{Local(Connection, "gmail", "request_json"), "conn.gmail.requestJSON", "conn__gmail__request_json"},
-		{Local(Exec, "ci_runner", "run"), "exec.ci_runner.run", "exec__ci_runner__run"},
 		{Local(Topic, "alerts", "subscribe"), "topic.alerts.subscribe", "topic__alerts__subscribe"},
 		{Local(MCP, "github", "search_issues"), "mcp.github.search_issues", "mcp__github__search_issues"},
 		{Local(Agent, "sales_app", "create_lead"), "agent.sales_app.create_lead", "agent__sales_app__create_lead"},

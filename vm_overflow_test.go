@@ -68,19 +68,18 @@ func (f *fakeAirlock) storageWriteCount() int {
 func setupConnAgent(t *testing.T, f *fakeAirlock, connSlug string) (*Agent, *run) {
 	t.Helper()
 	a := &Agent{
-		agentID:       "test-agent",
-		apiURL:        f.srv.URL,
-		token:         "test-token",
-		httpClient:    &http.Client{},
-		sensitiveSet:  make(map[string]struct{}),
-		tools:         make(map[string]*registeredTool),
-		webhooks:      make(map[string]*Webhook),
-		auths:         make(map[string]*Connection),
-		mcps:          make(map[string]*MCP),
-		topics:        make(map[string]*Topic),
-		routes:        make(map[string]*Route),
-		execEndpoints: make(map[string]*ExecEndpoint),
-		phase:         agentRunning,
+		agentID:      "test-agent",
+		apiURL:       f.srv.URL,
+		token:        "test-token",
+		httpClient:   &http.Client{},
+		sensitiveSet: make(map[string]struct{}),
+		tools:        make(map[string]*registeredTool),
+		webhooks:     make(map[string]*Webhook),
+		auths:        make(map[string]*Connection),
+		mcps:         make(map[string]*MCP),
+		topics:       make(map[string]*Topic),
+		routes:       make(map[string]*Route),
+		phase:        agentRunning,
 	}
 	a.client = newAirlockClient(f.srv.URL, "test-token", a.httpClient)
 	a.auths[connSlug] = &Connection{Slug: connSlug, Access: AccessAdmin}

@@ -17,6 +17,9 @@ type ConnectionHandle struct {
 	agent *Agent
 }
 
+// MaxBufferedResponseBytes is the cap Request enforces for buffered responses.
+const MaxBufferedResponseBytes = 20 << 20 // 20 MiB
+
 // Request sends an HTTP request through Airlock's credential-injecting
 // proxy and returns the raw response body. See RequestOpts for the call
 // shape and field semantics.

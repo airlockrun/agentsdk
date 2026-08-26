@@ -364,28 +364,6 @@ These are served to end users in their browser, not for you to call — your cod
 {{ range .Routes }}- `{{ .Method }} {{ .Path }}`{{ if .Description }} — {{ .Description }}{{ end }} ({{ .Access }})
 {{ end }}
 {{- end }}
-{{- if and .ExecEndpoints (not .DirectTools) }}
-
-## Remote command endpoints
-
-Each endpoint runs a command on a remote target via SSH. Call as
-`exec.<slug>.run(command, args?, opts?)` inside `run_js`. Returns
-`{stdout, stderr, exitCode, durationMs}` (strings + numbers). Non-zero
-exit codes are not errors — inspect `exitCode` and `stderr`. Buffered
-to 20 MiB per stream; if you need more, ask the agent author to expose
-a typed Go tool that wraps the streaming primitive.
-
-Put shell features (pipes, redirection) in `command`; use `args` for
-safe multi-arg invocation (args are quoted before being sent to the
-remote shell):
-
-```javascript
-exec.ci.run("kick-build", ["--branch", "main"])
-exec.vps.run("kubectl get pods -o json | jq '.items[] | .metadata.name'")
-```
-{{ range .ExecEndpoints }}- `exec.{{ .Slug }}` — {{ .Description }}{{ if .LLMHint }} [{{ .LLMHint }}]{{ end }}
-{{ end }}
-{{- end }}
 {{- if and .MCPServers (not .DirectTools) }}
 
 ## MCP servers

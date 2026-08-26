@@ -132,7 +132,7 @@ func TestRegistrationValidation(t *testing.T) {
 			name: "binding slug length",
 			want: "1-44 characters",
 			call: func(a *Agent) {
-				a.RegisterExecEndpoint(&ExecEndpoint{Slug: "a" + strings.Repeat("b", maxBindingSlugLength), Description: "Runner", Access: AccessUser})
+				a.RegisterConnection(&Connection{Slug: "a" + strings.Repeat("b", maxBindingSlugLength), Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, Access: AccessUser})
 			},
 		},
 		{

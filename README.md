@@ -45,8 +45,7 @@ to `go tool air`; the repository's `go.mod` remains the version source of truth.
 
 For package-level SDK details and runtime contracts, read the
 [agentsdk reference](REFERENCE.md). Its focused companions cover
-[object storage](reference/files.md), [remote execution](reference/exec.md),
-[interactive authentication](reference/auth-web.md), and
+[object storage](reference/files.md), [interactive authentication](reference/auth-web.md), and
 [Postgres-backed agents](reference/database.md).
 
 ## Hello-world agent

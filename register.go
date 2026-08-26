@@ -226,35 +226,6 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 	a.directories = append(a.directories, d)
 }
 
-// RegisterExecEndpoint declares a remote command target the agent can
-// reach (e.g. a VPS via SSH, a CI runner). Airlock owns the transport
-// and credentials — the agent's main() only declares slug/description/
-// access. Returns an *ExecHandle for compile-time-bound calls:
-//
-//	ci := agent.RegisterExecEndpoint(&agentsdk.ExecEndpoint{
-//	    Slug:        "ci_runner",
-//	    Description: "Self-hosted GitHub Actions runner",
-//	    Access:      agentsdk.AccessAdmin,
-//	})
-//	res, err := ci.Run(ctx, agentsdk.ExecCommand{Command: "kick-build"})
-//
-// Access must be explicit. AccessPublic is rejected because exec endpoints are
-// never reachable by unauthenticated callers.
-func (a *Agent) RegisterExecEndpoint(e *ExecEndpoint) *ExecHandle {
-	done := a.beginRegistration("RegisterExecEndpoint")
-	defer done()
-	if e == nil {
-		panic("agentsdk: RegisterExecEndpoint: nil *ExecEndpoint")
-	}
-	copy := *e
-	validateExecEndpoint(&copy)
-	if _, exists := a.execEndpoints[copy.Slug]; exists {
-		panic("agentsdk: duplicate RegisterExecEndpoint: " + copy.Slug)
-	}
-	a.execEndpoints[copy.Slug] = &copy
-	return &ExecHandle{slug: copy.Slug, agent: a}
-}
-
 // RegisterMCP registers a remote MCP server dependency and returns a handle
 // for calling its tools. Synced to Airlock on Serve(). Use the returned
 // handle for compile-time-bound tool calls:

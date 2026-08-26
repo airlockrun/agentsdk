@@ -67,7 +67,6 @@ func TestDefinitionOnlyAgentRejectsRuntimeOperationsBeforeWork(t *testing.T) {
 		Slug: "tools", Name: "Tools", URL: "https://example.com/mcp",
 		AuthMode: MCPAuthNone, Access: AccessAdmin,
 	})
-	exec := a.RegisterExecEndpoint(&ExecEndpoint{Slug: "runner", Description: "Runner", Access: AccessAdmin})
 	topic := a.RegisterTopic(&Topic{Slug: "alerts", Description: "Alerts", Access: AccessUser, PerUser: true})
 	env := a.RegisterEnvVar(&EnvVar{Slug: "api_key", Description: "API key"})
 
@@ -84,8 +83,6 @@ func TestDefinitionOnlyAgentRejectsRuntimeOperationsBeforeWork(t *testing.T) {
 	assertUnavailable("ConnectionHandle.RequestStream", err)
 	_, err = mcp.CallTool(ctx, "query", panicReader{})
 	assertUnavailable("MCPHandle.CallTool", err)
-	_, err = exec.RunStream(ctx, ExecCommand{Stdin: make([]byte, 1024)})
-	assertUnavailable("ExecHandle.RunStream", err)
 	assertUnavailable("TopicHandle.Publish", topic.Publish(ctx, nil))
 	_, err = env.Get(ctx)
 	assertUnavailable("EnvVarHandle.Get", err)

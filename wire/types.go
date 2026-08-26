@@ -73,13 +73,6 @@ type ConnectionDef struct {
 	Access            Access            `json:"access,omitempty"`
 }
 
-type ExecEndpointDef struct {
-	Slug        string `json:"slug,omitempty"`
-	Description string `json:"description"`
-	LLMHint     string `json:"llmHint,omitempty"`
-	Access      Access `json:"access,omitempty"`
-}
-
 type Action struct {
 	Type       string    `json:"type"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -281,24 +274,23 @@ type MCPContent struct {
 // synchronization. Slices are deterministically ordered by their identifiers,
 // except Instructions and StartupHooks, whose registration order is semantic.
 type AgentManifest struct {
-	Version       string            `json:"version"`
-	Description   string            `json:"description"`
-	Emoji         string            `json:"emoji"`
-	Tools         []ToolDef         `json:"tools"`
-	Webhooks      []WebhookDef      `json:"webhooks"`
-	JobHandlers   []JobHandlerDef   `json:"jobHandlers"`
-	JobCrons      []JobCronDef      `json:"jobCrons"`
-	Routes        []RouteDef        `json:"routes"`
-	Topics        []TopicDef        `json:"topics"`
-	MCPServers    []MCPDef          `json:"mcpServers"`
-	Connections   []ConnectionDef   `json:"connections"`
-	ExecEndpoints []ExecEndpointDef `json:"execEndpoints"`
-	EnvVars       []EnvVarDef       `json:"envVars"`
-	Directories   []DirectoryDef    `json:"directories"`
-	Instructions  []InstructionDef  `json:"instructions"`
-	ModelSlots    []ModelSlotDef    `json:"modelSlots"`
-	StaticAssets  []StaticAssetDef  `json:"staticAssets"`
-	StartupHooks  []StartupHookDef  `json:"startupHooks"`
+	Version      string           `json:"version"`
+	Description  string           `json:"description"`
+	Emoji        string           `json:"emoji"`
+	Tools        []ToolDef        `json:"tools"`
+	Webhooks     []WebhookDef     `json:"webhooks"`
+	JobHandlers  []JobHandlerDef  `json:"jobHandlers"`
+	JobCrons     []JobCronDef     `json:"jobCrons"`
+	Routes       []RouteDef       `json:"routes"`
+	Topics       []TopicDef       `json:"topics"`
+	MCPServers   []MCPDef         `json:"mcpServers"`
+	Connections  []ConnectionDef  `json:"connections"`
+	EnvVars      []EnvVarDef      `json:"envVars"`
+	Directories  []DirectoryDef   `json:"directories"`
+	Instructions []InstructionDef `json:"instructions"`
+	ModelSlots   []ModelSlotDef   `json:"modelSlots"`
+	StaticAssets []StaticAssetDef `json:"staticAssets"`
+	StartupHooks []StartupHookDef `json:"startupHooks"`
 }
 
 // SyncRequest is the complete agent declaration accepted by runtime sync.
@@ -314,13 +306,6 @@ type EnvVarDef struct {
 
 type EnvVarValueResponse struct {
 	Value string `json:"value"`
-}
-
-type ExecRequest struct {
-	Command   string   `json:"command"`
-	Args      []string `json:"args,omitempty"`
-	StdinB64  string   `json:"stdinB64,omitempty"`
-	TimeoutMs int64    `json:"timeoutMs,omitempty"`
 }
 
 type SealRequest struct {

@@ -4670,246 +4670,6 @@ func (x *A2ASettings) GetAllowPublicRoutes() bool {
 	return false
 }
 
-// ExecEndpointInfo is one row from ListExecEndpoints — the
-// operator-visible projection that strips the secrets-store
-// private-key reference and surfaces only the host-key SHA256
-// fingerprint (not the full blob).
-type ExecEndpointInfo struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	Id                 string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Slug               string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	Description        string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
-	LlmHint            string                 `protobuf:"bytes,4,opt,name=llm_hint,json=llmHint,proto3" json:"llm_hint,omitempty"`
-	Access             string                 `protobuf:"bytes,5,opt,name=access,proto3" json:"access,omitempty"`
-	Transport          string                 `protobuf:"bytes,6,opt,name=transport,proto3" json:"transport,omitempty"`
-	Host               string                 `protobuf:"bytes,7,opt,name=host,proto3" json:"host,omitempty"`
-	Port               int32                  `protobuf:"varint,8,opt,name=port,proto3" json:"port,omitempty"`
-	SshUser            string                 `protobuf:"bytes,9,opt,name=ssh_user,json=sshUser,proto3" json:"ssh_user,omitempty"`
-	PublicKeyOpenssh   string                 `protobuf:"bytes,10,opt,name=public_key_openssh,json=publicKeyOpenssh,proto3" json:"public_key_openssh,omitempty"`
-	PublicKeyComment   string                 `protobuf:"bytes,11,opt,name=public_key_comment,json=publicKeyComment,proto3" json:"public_key_comment,omitempty"`
-	HostKeyFingerprint string                 `protobuf:"bytes,12,opt,name=host_key_fingerprint,json=hostKeyFingerprint,proto3" json:"host_key_fingerprint,omitempty"`
-	HostKeyPinnedAt    *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=host_key_pinned_at,json=hostKeyPinnedAt,proto3" json:"host_key_pinned_at,omitempty"`
-	LastUsedAt         *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=last_used_at,json=lastUsedAt,proto3" json:"last_used_at,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
-}
-
-func (x *ExecEndpointInfo) Reset() {
-	*x = ExecEndpointInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[43]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExecEndpointInfo) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExecEndpointInfo) ProtoMessage() {}
-
-func (x *ExecEndpointInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[43]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExecEndpointInfo.ProtoReflect.Descriptor instead.
-func (*ExecEndpointInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{43}
-}
-
-func (x *ExecEndpointInfo) GetId() string {
-	if x != nil {
-		return x.Id
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetSlug() string {
-	if x != nil {
-		return x.Slug
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetDescription() string {
-	if x != nil {
-		return x.Description
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetLlmHint() string {
-	if x != nil {
-		return x.LlmHint
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetAccess() string {
-	if x != nil {
-		return x.Access
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetTransport() string {
-	if x != nil {
-		return x.Transport
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetHost() string {
-	if x != nil {
-		return x.Host
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetPort() int32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
-}
-
-func (x *ExecEndpointInfo) GetSshUser() string {
-	if x != nil {
-		return x.SshUser
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetPublicKeyOpenssh() string {
-	if x != nil {
-		return x.PublicKeyOpenssh
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetPublicKeyComment() string {
-	if x != nil {
-		return x.PublicKeyComment
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetHostKeyFingerprint() string {
-	if x != nil {
-		return x.HostKeyFingerprint
-	}
-	return ""
-}
-
-func (x *ExecEndpointInfo) GetHostKeyPinnedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.HostKeyPinnedAt
-	}
-	return nil
-}
-
-func (x *ExecEndpointInfo) GetLastUsedAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.LastUsedAt
-	}
-	return nil
-}
-
-// ExecEndpointTestResult is the parsed outcome of running `whoami`
-// over the configured SSH transport. ok signals success at the
-// transport+auth+host-key layer; non-zero exit_code with ok=true
-// means the connection worked but the command failed.
-type ExecEndpointTestResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
-	ExitCode      int32                  `protobuf:"varint,2,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
-	DurationMs    int64                  `protobuf:"varint,3,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
-	Stdout        string                 `protobuf:"bytes,4,opt,name=stdout,proto3" json:"stdout,omitempty"`
-	Stderr        string                 `protobuf:"bytes,5,opt,name=stderr,proto3" json:"stderr,omitempty"`
-	Error         string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *ExecEndpointTestResult) Reset() {
-	*x = ExecEndpointTestResult{}
-	mi := &file_airlock_v1_types_proto_msgTypes[44]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *ExecEndpointTestResult) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*ExecEndpointTestResult) ProtoMessage() {}
-
-func (x *ExecEndpointTestResult) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[44]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use ExecEndpointTestResult.ProtoReflect.Descriptor instead.
-func (*ExecEndpointTestResult) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{44}
-}
-
-func (x *ExecEndpointTestResult) GetOk() bool {
-	if x != nil {
-		return x.Ok
-	}
-	return false
-}
-
-func (x *ExecEndpointTestResult) GetExitCode() int32 {
-	if x != nil {
-		return x.ExitCode
-	}
-	return 0
-}
-
-func (x *ExecEndpointTestResult) GetDurationMs() int64 {
-	if x != nil {
-		return x.DurationMs
-	}
-	return 0
-}
-
-func (x *ExecEndpointTestResult) GetStdout() string {
-	if x != nil {
-		return x.Stdout
-	}
-	return ""
-}
-
-func (x *ExecEndpointTestResult) GetStderr() string {
-	if x != nil {
-		return x.Stderr
-	}
-	return ""
-}
-
-func (x *ExecEndpointTestResult) GetError() string {
-	if x != nil {
-		return x.Error
-	}
-	return ""
-}
-
 // SetupCountsInfo aggregates the setup-completeness counters
 // across an agent's connections, MCP servers, and env vars. Used
 // by the agent-card progress bar to flag agents whose operator
@@ -4919,14 +4679,13 @@ type SetupCountsInfo struct {
 	Connections   int32                  `protobuf:"varint,1,opt,name=connections,proto3" json:"connections,omitempty"`
 	McpServers    int32                  `protobuf:"varint,2,opt,name=mcp_servers,json=mcpServers,proto3" json:"mcp_servers,omitempty"`
 	EnvVars       int32                  `protobuf:"varint,3,opt,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty"`
-	ExecEndpoints int32                  `protobuf:"varint,4,opt,name=exec_endpoints,json=execEndpoints,proto3" json:"exec_endpoints,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SetupCountsInfo) Reset() {
 	*x = SetupCountsInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[45]
+	mi := &file_airlock_v1_types_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4938,7 +4697,7 @@ func (x *SetupCountsInfo) String() string {
 func (*SetupCountsInfo) ProtoMessage() {}
 
 func (x *SetupCountsInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[45]
+	mi := &file_airlock_v1_types_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4951,7 +4710,7 @@ func (x *SetupCountsInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetupCountsInfo.ProtoReflect.Descriptor instead.
 func (*SetupCountsInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{45}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *SetupCountsInfo) GetConnections() int32 {
@@ -4971,13 +4730,6 @@ func (x *SetupCountsInfo) GetMcpServers() int32 {
 func (x *SetupCountsInfo) GetEnvVars() int32 {
 	if x != nil {
 		return x.EnvVars
-	}
-	return 0
-}
-
-func (x *SetupCountsInfo) GetExecEndpoints() int32 {
-	if x != nil {
-		return x.ExecEndpoints
 	}
 	return 0
 }
@@ -5007,7 +4759,7 @@ type JobHandlerInfo struct {
 
 func (x *JobHandlerInfo) Reset() {
 	*x = JobHandlerInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[46]
+	mi := &file_airlock_v1_types_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5019,7 +4771,7 @@ func (x *JobHandlerInfo) String() string {
 func (*JobHandlerInfo) ProtoMessage() {}
 
 func (x *JobHandlerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[46]
+	mi := &file_airlock_v1_types_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5032,7 +4784,7 @@ func (x *JobHandlerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobHandlerInfo.ProtoReflect.Descriptor instead.
 func (*JobHandlerInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{46}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *JobHandlerInfo) GetAgentId() string {
@@ -5155,7 +4907,7 @@ type JobProgressInfo struct {
 
 func (x *JobProgressInfo) Reset() {
 	*x = JobProgressInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[47]
+	mi := &file_airlock_v1_types_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5167,7 +4919,7 @@ func (x *JobProgressInfo) String() string {
 func (*JobProgressInfo) ProtoMessage() {}
 
 func (x *JobProgressInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[47]
+	mi := &file_airlock_v1_types_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5180,7 +4932,7 @@ func (x *JobProgressInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobProgressInfo.ProtoReflect.Descriptor instead.
 func (*JobProgressInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{47}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *JobProgressInfo) GetPhase() string {
@@ -5260,7 +5012,7 @@ type JobInfo struct {
 
 func (x *JobInfo) Reset() {
 	*x = JobInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[48]
+	mi := &file_airlock_v1_types_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5272,7 +5024,7 @@ func (x *JobInfo) String() string {
 func (*JobInfo) ProtoMessage() {}
 
 func (x *JobInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[48]
+	mi := &file_airlock_v1_types_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5285,7 +5037,7 @@ func (x *JobInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobInfo.ProtoReflect.Descriptor instead.
 func (*JobInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{48}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *JobInfo) GetId() string {
@@ -5496,7 +5248,7 @@ type JobAttemptInfo struct {
 
 func (x *JobAttemptInfo) Reset() {
 	*x = JobAttemptInfo{}
-	mi := &file_airlock_v1_types_proto_msgTypes[49]
+	mi := &file_airlock_v1_types_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5508,7 +5260,7 @@ func (x *JobAttemptInfo) String() string {
 func (*JobAttemptInfo) ProtoMessage() {}
 
 func (x *JobAttemptInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_types_proto_msgTypes[49]
+	mi := &file_airlock_v1_types_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5521,7 +5273,7 @@ func (x *JobAttemptInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobAttemptInfo.ProtoReflect.Descriptor instead.
 func (*JobAttemptInfo) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_types_proto_rawDescGZIP(), []int{49}
+	return file_airlock_v1_types_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *JobAttemptInfo) GetJobId() string {
@@ -6082,38 +5834,12 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x10allow_public_mcp\x18\x02 \x01(\bR\x0eallowPublicMcp\x12\x1f\n" +
 	"\vmcp_enabled\x18\x03 \x01(\bR\n" +
 	"mcpEnabled\x12.\n" +
-	"\x13allow_public_routes\x18\x04 \x01(\bR\x11allowPublicRoutesJ\x04\b\x01\x10\x02\"\x81\x04\n" +
-	"\x10ExecEndpointInfo\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
-	"\x04slug\x18\x02 \x01(\tR\x04slug\x12 \n" +
-	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x19\n" +
-	"\bllm_hint\x18\x04 \x01(\tR\allmHint\x12\x16\n" +
-	"\x06access\x18\x05 \x01(\tR\x06access\x12\x1c\n" +
-	"\ttransport\x18\x06 \x01(\tR\ttransport\x12\x12\n" +
-	"\x04host\x18\a \x01(\tR\x04host\x12\x12\n" +
-	"\x04port\x18\b \x01(\x05R\x04port\x12\x19\n" +
-	"\bssh_user\x18\t \x01(\tR\asshUser\x12,\n" +
-	"\x12public_key_openssh\x18\n" +
-	" \x01(\tR\x10publicKeyOpenssh\x12,\n" +
-	"\x12public_key_comment\x18\v \x01(\tR\x10publicKeyComment\x120\n" +
-	"\x14host_key_fingerprint\x18\f \x01(\tR\x12hostKeyFingerprint\x12G\n" +
-	"\x12host_key_pinned_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\x0fhostKeyPinnedAt\x12<\n" +
-	"\flast_used_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastUsedAt\"\xac\x01\n" +
-	"\x16ExecEndpointTestResult\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x1b\n" +
-	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12\x1f\n" +
-	"\vduration_ms\x18\x03 \x01(\x03R\n" +
-	"durationMs\x12\x16\n" +
-	"\x06stdout\x18\x04 \x01(\tR\x06stdout\x12\x16\n" +
-	"\x06stderr\x18\x05 \x01(\tR\x06stderr\x12\x14\n" +
-	"\x05error\x18\x06 \x01(\tR\x05error\"\x96\x01\n" +
+	"\x13allow_public_routes\x18\x04 \x01(\bR\x11allowPublicRoutesJ\x04\b\x01\x10\x02\"\x85\x01\n" +
 	"\x0fSetupCountsInfo\x12 \n" +
 	"\vconnections\x18\x01 \x01(\x05R\vconnections\x12\x1f\n" +
 	"\vmcp_servers\x18\x02 \x01(\x05R\n" +
 	"mcpServers\x12\x19\n" +
-	"\benv_vars\x18\x03 \x01(\x05R\aenvVars\x12%\n" +
-	"\x0eexec_endpoints\x18\x04 \x01(\x05R\rexecEndpoints\"\xf7\x04\n" +
+	"\benv_vars\x18\x03 \x01(\x05R\aenvVarsJ\x04\b\x04\x10\x05R\x0eexec_endpoints\"\xf7\x04\n" +
 	"\x0eJobHandlerInfo\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -6229,7 +5955,7 @@ func file_airlock_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_airlock_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
+var file_airlock_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
 var file_airlock_v1_types_proto_goTypes = []any{
 	(TenantRole)(0),                         // 0: airlock.v1.TenantRole
 	(MessageRole)(0),                        // 1: airlock.v1.MessageRole
@@ -6277,92 +6003,88 @@ var file_airlock_v1_types_proto_goTypes = []any{
 	(*InboundSiblingInfo)(nil),              // 43: airlock.v1.InboundSiblingInfo
 	(*AddableSiblingInfo)(nil),              // 44: airlock.v1.AddableSiblingInfo
 	(*A2ASettings)(nil),                     // 45: airlock.v1.A2ASettings
-	(*ExecEndpointInfo)(nil),                // 46: airlock.v1.ExecEndpointInfo
-	(*ExecEndpointTestResult)(nil),          // 47: airlock.v1.ExecEndpointTestResult
-	(*SetupCountsInfo)(nil),                 // 48: airlock.v1.SetupCountsInfo
-	(*JobHandlerInfo)(nil),                  // 49: airlock.v1.JobHandlerInfo
-	(*JobProgressInfo)(nil),                 // 50: airlock.v1.JobProgressInfo
-	(*JobInfo)(nil),                         // 51: airlock.v1.JobInfo
-	(*JobAttemptInfo)(nil),                  // 52: airlock.v1.JobAttemptInfo
-	(*structpb.Struct)(nil),                 // 53: google.protobuf.Struct
-	(*timestamppb.Timestamp)(nil),           // 54: google.protobuf.Timestamp
-	(*structpb.ListValue)(nil),              // 55: google.protobuf.ListValue
+	(*SetupCountsInfo)(nil),                 // 46: airlock.v1.SetupCountsInfo
+	(*JobHandlerInfo)(nil),                  // 47: airlock.v1.JobHandlerInfo
+	(*JobProgressInfo)(nil),                 // 48: airlock.v1.JobProgressInfo
+	(*JobInfo)(nil),                         // 49: airlock.v1.JobInfo
+	(*JobAttemptInfo)(nil),                  // 50: airlock.v1.JobAttemptInfo
+	(*structpb.Struct)(nil),                 // 51: google.protobuf.Struct
+	(*timestamppb.Timestamp)(nil),           // 52: google.protobuf.Timestamp
+	(*structpb.ListValue)(nil),              // 53: google.protobuf.ListValue
 }
 var file_airlock_v1_types_proto_depIdxs = []int32{
-	53, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
-	54, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	54, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	51, // 0: airlock.v1.Tenant.settings:type_name -> google.protobuf.Struct
+	52, // 1: airlock.v1.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	52, // 2: airlock.v1.Tenant.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 3: airlock.v1.User.tenant_role:type_name -> airlock.v1.TenantRole
-	54, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	54, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
-	54, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 8: airlock.v1.ProviderModel.created_at:type_name -> google.protobuf.Timestamp
-	54, // 9: airlock.v1.ProviderModel.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 10: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 11: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
-	53, // 12: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
-	55, // 13: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
-	54, // 14: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
-	54, // 15: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
-	54, // 16: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
-	54, // 17: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
+	52, // 4: airlock.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	52, // 5: airlock.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 6: airlock.v1.Provider.created_at:type_name -> google.protobuf.Timestamp
+	52, // 7: airlock.v1.Provider.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 8: airlock.v1.ProviderModel.created_at:type_name -> google.protobuf.Timestamp
+	52, // 9: airlock.v1.ProviderModel.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 10: airlock.v1.AgentInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 11: airlock.v1.AgentInfo.updated_at:type_name -> google.protobuf.Timestamp
+	51, // 12: airlock.v1.RunInfo.input_payload:type_name -> google.protobuf.Struct
+	53, // 13: airlock.v1.RunInfo.actions:type_name -> google.protobuf.ListValue
+	52, // 14: airlock.v1.RunInfo.started_at:type_name -> google.protobuf.Timestamp
+	52, // 15: airlock.v1.RunInfo.finished_at:type_name -> google.protobuf.Timestamp
+	52, // 16: airlock.v1.AgentBuildInfo.started_at:type_name -> google.protobuf.Timestamp
+	52, // 17: airlock.v1.AgentBuildInfo.finished_at:type_name -> google.protobuf.Timestamp
 	27, // 18: airlock.v1.AgentBuildInfo.todos:type_name -> airlock.v1.TodoItem
 	2,  // 19: airlock.v1.AgentBuildInfo.deployment_phase:type_name -> airlock.v1.AgentBuildDeploymentPhase
-	54, // 20: airlock.v1.AgentBuildInfo.deployment_paused_at:type_name -> google.protobuf.Timestamp
-	54, // 21: airlock.v1.AgentBuildInfo.deployment_drain_deadline:type_name -> google.protobuf.Timestamp
+	52, // 20: airlock.v1.AgentBuildInfo.deployment_paused_at:type_name -> google.protobuf.Timestamp
+	52, // 21: airlock.v1.AgentBuildInfo.deployment_drain_deadline:type_name -> google.protobuf.Timestamp
 	14, // 22: airlock.v1.AgentBuildInfo.job_blockers:type_name -> airlock.v1.AgentBuildJobBlockerSummary
-	54, // 23: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 24: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 25: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 26: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
-	54, // 27: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 28: airlock.v1.ScheduleInfo.last_fired_at:type_name -> google.protobuf.Timestamp
-	54, // 29: airlock.v1.ScheduleInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 30: airlock.v1.ScheduleInfo.next_fire_at:type_name -> google.protobuf.Timestamp
-	54, // 31: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	52, // 23: airlock.v1.ConversationInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 24: airlock.v1.ConversationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 25: airlock.v1.AgentMessageInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 26: airlock.v1.WebhookInfo.last_received_at:type_name -> google.protobuf.Timestamp
+	52, // 27: airlock.v1.WebhookInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 28: airlock.v1.ScheduleInfo.last_fired_at:type_name -> google.protobuf.Timestamp
+	52, // 29: airlock.v1.ScheduleInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 30: airlock.v1.ScheduleInfo.next_fire_at:type_name -> google.protobuf.Timestamp
+	52, // 31: airlock.v1.ConnectionInfo.token_expires_at:type_name -> google.protobuf.Timestamp
 	5,  // 32: airlock.v1.BridgeInfo.owner:type_name -> airlock.v1.UserSummary
-	54, // 33: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 34: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 35: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 33: airlock.v1.BridgeInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 34: airlock.v1.BridgeInfo.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 35: airlock.v1.PlatformIdentityInfo.created_at:type_name -> google.protobuf.Timestamp
 	27, // 36: airlock.v1.AgentBuildTodoEvent.todos:type_name -> airlock.v1.TodoItem
-	54, // 37: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
-	54, // 38: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
-	54, // 39: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
-	54, // 40: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
-	54, // 41: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
-	54, // 42: airlock.v1.UserSession.created_at:type_name -> google.protobuf.Timestamp
-	54, // 43: airlock.v1.UserSession.last_used_at:type_name -> google.protobuf.Timestamp
-	54, // 44: airlock.v1.UserSession.expires_at:type_name -> google.protobuf.Timestamp
-	54, // 45: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
-	54, // 46: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
-	54, // 47: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 48: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 49: airlock.v1.InboundSiblingInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 50: airlock.v1.ExecEndpointInfo.host_key_pinned_at:type_name -> google.protobuf.Timestamp
-	54, // 51: airlock.v1.ExecEndpointInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	53, // 52: airlock.v1.JobHandlerInfo.input_schema:type_name -> google.protobuf.Struct
-	53, // 53: airlock.v1.JobHandlerInfo.output_schema:type_name -> google.protobuf.Struct
-	54, // 54: airlock.v1.JobHandlerInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 55: airlock.v1.JobHandlerInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 56: airlock.v1.JobProgressInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 57: airlock.v1.JobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
-	54, // 58: airlock.v1.JobInfo.started_at:type_name -> google.protobuf.Timestamp
-	54, // 59: airlock.v1.JobInfo.completed_at:type_name -> google.protobuf.Timestamp
-	54, // 60: airlock.v1.JobInfo.created_at:type_name -> google.protobuf.Timestamp
-	54, // 61: airlock.v1.JobInfo.updated_at:type_name -> google.protobuf.Timestamp
-	54, // 62: airlock.v1.JobInfo.scheduled_at:type_name -> google.protobuf.Timestamp
-	50, // 63: airlock.v1.JobInfo.progress:type_name -> airlock.v1.JobProgressInfo
-	54, // 64: airlock.v1.JobInfo.next_attempt_at:type_name -> google.protobuf.Timestamp
-	54, // 65: airlock.v1.JobAttemptInfo.leased_at:type_name -> google.protobuf.Timestamp
-	54, // 66: airlock.v1.JobAttemptInfo.started_at:type_name -> google.protobuf.Timestamp
-	54, // 67: airlock.v1.JobAttemptInfo.completed_at:type_name -> google.protobuf.Timestamp
-	54, // 68: airlock.v1.JobAttemptInfo.lease_expires_at:type_name -> google.protobuf.Timestamp
-	69, // [69:69] is the sub-list for method output_type
-	69, // [69:69] is the sub-list for method input_type
-	69, // [69:69] is the sub-list for extension type_name
-	69, // [69:69] is the sub-list for extension extendee
-	0,  // [0:69] is the sub-list for field type_name
+	52, // 37: airlock.v1.CreateManagedBotSessionResponse.expires_at:type_name -> google.protobuf.Timestamp
+	52, // 38: airlock.v1.GitCredential.created_at:type_name -> google.protobuf.Timestamp
+	52, // 39: airlock.v1.GitCredential.last_used_at:type_name -> google.protobuf.Timestamp
+	52, // 40: airlock.v1.Passkey.created_at:type_name -> google.protobuf.Timestamp
+	52, // 41: airlock.v1.Passkey.last_used_at:type_name -> google.protobuf.Timestamp
+	52, // 42: airlock.v1.UserSession.created_at:type_name -> google.protobuf.Timestamp
+	52, // 43: airlock.v1.UserSession.last_used_at:type_name -> google.protobuf.Timestamp
+	52, // 44: airlock.v1.UserSession.expires_at:type_name -> google.protobuf.Timestamp
+	52, // 45: airlock.v1.MCPServerInfo.token_expires_at:type_name -> google.protobuf.Timestamp
+	52, // 46: airlock.v1.MCPServerInfo.last_synced_at:type_name -> google.protobuf.Timestamp
+	52, // 47: airlock.v1.EnvVarInfo.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 48: airlock.v1.SiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 49: airlock.v1.InboundSiblingInfo.created_at:type_name -> google.protobuf.Timestamp
+	51, // 50: airlock.v1.JobHandlerInfo.input_schema:type_name -> google.protobuf.Struct
+	51, // 51: airlock.v1.JobHandlerInfo.output_schema:type_name -> google.protobuf.Struct
+	52, // 52: airlock.v1.JobHandlerInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 53: airlock.v1.JobHandlerInfo.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 54: airlock.v1.JobProgressInfo.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 55: airlock.v1.JobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	52, // 56: airlock.v1.JobInfo.started_at:type_name -> google.protobuf.Timestamp
+	52, // 57: airlock.v1.JobInfo.completed_at:type_name -> google.protobuf.Timestamp
+	52, // 58: airlock.v1.JobInfo.created_at:type_name -> google.protobuf.Timestamp
+	52, // 59: airlock.v1.JobInfo.updated_at:type_name -> google.protobuf.Timestamp
+	52, // 60: airlock.v1.JobInfo.scheduled_at:type_name -> google.protobuf.Timestamp
+	48, // 61: airlock.v1.JobInfo.progress:type_name -> airlock.v1.JobProgressInfo
+	52, // 62: airlock.v1.JobInfo.next_attempt_at:type_name -> google.protobuf.Timestamp
+	52, // 63: airlock.v1.JobAttemptInfo.leased_at:type_name -> google.protobuf.Timestamp
+	52, // 64: airlock.v1.JobAttemptInfo.started_at:type_name -> google.protobuf.Timestamp
+	52, // 65: airlock.v1.JobAttemptInfo.completed_at:type_name -> google.protobuf.Timestamp
+	52, // 66: airlock.v1.JobAttemptInfo.lease_expires_at:type_name -> google.protobuf.Timestamp
+	67, // [67:67] is the sub-list for method output_type
+	67, // [67:67] is the sub-list for method input_type
+	67, // [67:67] is the sub-list for extension type_name
+	67, // [67:67] is the sub-list for extension extendee
+	0,  // [0:67] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }
@@ -6376,7 +6098,7 @@ func file_airlock_v1_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_types_proto_rawDesc), len(file_airlock_v1_types_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   50,
+			NumMessages:   48,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
