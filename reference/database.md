@@ -116,10 +116,14 @@ runs migrations. `Serve` calls `Start` and closes the pool during shutdown.
 
 `agenttest.New` invokes the factory before it provisions runtime dependencies,
 then resolves source `db/migrations` from the nearest enclosing Go module,
-starts the agent, and returns after migrations, sync, and `OnStart` hooks.
-DB-backed tests therefore work from subpackages without changing process cwd.
-The SDK build runs packages serially because package test binaries sharing one
-`TEST_DB_URL` must not reset the same schema concurrently.
+starts the agent, validates migrations with an up, down-to-zero, up cycle, and
+returns after sync and `OnStart` hooks. DB-backed tests therefore work from
+subpackages without changing process cwd. The final up leaves the schema ready
+for the test. The SDK build runs packages serially because package test binaries
+sharing one `TEST_DB_URL` must not reset the same schema concurrently. `go tool
+air build` provisions one throwaway pgvector container and supplies its URL to
+that serial test run; direct `go test` calls without `TEST_DB_URL` let each
+`agenttest.New` provision its own container.
 
 Each startup migration pass has a bounded context and holds a PostgreSQL
 advisory lock keyed by agent ID from its first goose operation through its last.

@@ -248,8 +248,9 @@ Tests must not load secrets, connection credentials, or MCP credentials from
   `httptest` so a small request set proves the complete dependency graph,
   routes, and static declarations are wired. The helper stands up a mock
   Airlock and selects a test database only after it invokes `newAgent` with
-  runtime environment cleared. It then starts the runtime, applies migrations,
-  syncs declarations, runs named `OnStart` hooks, and returns a ready agent:
+  runtime environment cleared. It then starts the runtime, validates migrations
+  with an up, down-to-zero, up cycle, syncs declarations, runs named `OnStart`
+  hooks, and returns a ready agent:
 
   ```go
   func TestAgentComposition(t *testing.T) {
@@ -277,9 +278,11 @@ Tests must not load secrets, connection credentials, or MCP credentials from
   otherwise it starts a throwaway `pgvector/pgvector:pg17` container. It never
   connects to an inherited `$AIRLOCK_DB_URL`. The factory may wire the
   late-bound `agent.DB()` into dependency constructors but must not query it.
-  After the factory returns, startup resets the schema and applies source
-  migrations from the enclosing module's `db/migrations`, including when the
-  test belongs to a subpackage. Never change process cwd to find migrations.
+  `go tool air build` supplies one shared throwaway database to the serial
+  package test run, avoiding one container per `agenttest.New` call.
+  After the factory returns, startup validates source migrations with an up,
+  down-to-zero, up cycle from the enclosing module's `db/migrations`, including
+  when the test belongs to a subpackage. Never change process cwd to find migrations.
   `agenttest.New` returns only after sync and `OnStart` hooks, so tests can use
   the migrated database immediately. The helper closes the pool and test
   services during cleanup.

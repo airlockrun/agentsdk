@@ -760,6 +760,14 @@ func TestBuildStepsWritesBinaryOutsideRepository(t *testing.T) {
 	if strings.Join(gotTest, "\x00") != strings.Join(wantTest, "\x00") {
 		t.Fatalf("test command = %q, want %q", gotTest, wantTest)
 	}
+	if !steps[len(steps)-2].sharedTestDatabase {
+		t.Fatal("test step does not request a shared test database")
+	}
+	for i, step := range steps {
+		if i != len(steps)-2 && step.sharedTestDatabase {
+			t.Fatalf("steps[%d] %q unexpectedly requests a shared test database", i, step.name)
+		}
+	}
 	want := []string{"go", "build", "-buildvcs=false", "-o", output, "."}
 	got := steps[len(steps)-1].cmd
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {

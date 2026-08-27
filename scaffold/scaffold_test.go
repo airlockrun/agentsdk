@@ -114,7 +114,8 @@ func TestMaterialize(t *testing.T) {
 		t.Error("main_test.go missing authenticated caller helper")
 	}
 	if !strings.Contains(string(mainTest), "agenttest.New invokes") ||
-		!strings.Contains(string(mainTest), "newAgent first, then provisions runtime dependencies") {
+		!strings.Contains(string(mainTest), "newAgent first, then provisions runtime dependencies") ||
+		!strings.Contains(string(mainTest), "up, down-to-zero, up cycle") {
 		t.Error("main_test.go missing factory-first agenttest lifecycle guidance")
 	}
 	if strings.Contains(string(mainTest), "applies migrations before newAgent constructs") {
@@ -129,7 +130,8 @@ func TestMaterialize(t *testing.T) {
 		"newAgent()` is the definition-only composition root",
 		"Agent.DB()` and registration APIs return late-bound handles",
 		"AIRLOCK_AGENT_MODE=manifest",
-		"After the factory returns, startup resets the schema",
+		"After the factory returns, startup validates source migrations with an up",
+		"down-to-zero, up cycle",
 	} {
 		if !strings.Contains(string(agentsMD), want) {
 			t.Errorf("AGENTS.md missing lifecycle guidance %q", want)

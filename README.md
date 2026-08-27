@@ -103,8 +103,10 @@ state.
 
 Tests use `agenttest.New(t, factory)`. It invokes the factory first while the
 agent is definition-only, then provisions the mock Airlock and test database,
-starts the runtime, applies migrations, synchronizes declarations, runs
-`OnStart` hooks, and returns a ready agent.
+starts the runtime, validates migrations with an up, down-to-zero, up cycle,
+synchronizes declarations, runs `OnStart` hooks, and returns a ready agent.
+`go tool air build` provisions one throwaway PostgreSQL container for the serial
+test run instead of starting one per `agenttest.New` call.
 
 ## Companion projects
 

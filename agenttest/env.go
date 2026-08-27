@@ -26,11 +26,13 @@ type Env struct {
 
 // New invokes factory first while runtime environment is cleared, then
 // provisions a mock Airlock and test database and starts the agent. Start opens
-// the database, resolves and applies migrations from the enclosing Go module,
-// synchronizes declarations, and runs named OnStart hooks before New returns.
+// the database, validates migrations with an up, down-to-zero, up cycle from the
+// enclosing Go module, synchronizes declarations, and runs named OnStart hooks
+// before New returns.
 // TEST_DB_URL is used when explicitly supplied; otherwise New starts a
 // throwaway pgvector container. The factory may wire Agent.DB()'s late-bound
-// handle, but database operations are unavailable until Start.
+// handle, but database operations are unavailable until Start. `go tool air
+// build` supplies one shared throwaway database to its serial package tests.
 func New(t *testing.T, factory func() *agentsdk.Agent) *Env {
 	t.Helper()
 	if factory == nil {

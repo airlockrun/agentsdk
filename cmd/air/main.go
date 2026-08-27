@@ -23,6 +23,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -39,11 +40,13 @@ import (
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/internal/bootstrap"
 	"github.com/airlockrun/agentsdk/scaffold"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"golang.org/x/mod/modfile"
 )
 
 const (
 	defaultBaseImage     = "ghcr.io/airlockrun/airlock-agent-base:latest"
+	buildTestDatabase    = "pgvector/pgvector:pg17"
 	localToolchainPrefix = ".airlock/toolchain"
 	toolchainMarkerFile  = "air-toolchain.version"
 )
@@ -541,29 +544,72 @@ func runBuild(dir string) error {
 		cmd.Dir = dir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("%s: %w", step.name, err)
+		var stopTestDatabase func() error
+		if step.sharedTestDatabase && os.Getenv("TEST_DB_URL") == "" {
+			dsn, stop, err := startBuildTestDatabase()
+			if err != nil {
+				return fmt.Errorf("start shared test database: %w", err)
+			}
+			cmd.Env = append(os.Environ(), "TEST_DB_URL="+dsn)
+			stopTestDatabase = stop
+		}
+		runErr := cmd.Run()
+		if stopTestDatabase != nil {
+			if err := stopTestDatabase(); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("stop shared test database: %w", err))
+			}
+		}
+		if runErr != nil {
+			return fmt.Errorf("%s: %w", step.name, runErr)
 		}
 	}
 	return nil
 }
 
 type buildStep struct {
-	name string
-	cmd  []string
+	name               string
+	cmd                []string
+	sharedTestDatabase bool
 }
 
 func buildSteps(sqlcCmd, tailwindCmd, outputPath string, generateSQLC bool) []buildStep {
-	steps := []buildStep{{"go mod tidy", []string{"go", "mod", "tidy"}}}
+	steps := []buildStep{{name: "go mod tidy", cmd: []string{"go", "mod", "tidy"}}}
 	if generateSQLC {
-		steps = append(steps, buildStep{"sqlc generate", []string{sqlcCmd, "generate"}})
+		steps = append(steps, buildStep{name: "sqlc generate", cmd: []string{sqlcCmd, "generate"}})
 	}
 	return append(steps,
-		buildStep{"go tool templ generate", []string{"go", "tool", "templ", "generate"}},
-		buildStep{"tailwindcss", []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
-		buildStep{"go test -p=1 -count=1 ./...", []string{"go", "test", "-p=1", "-count=1", "./..."}},
-		buildStep{"go build", []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
+		buildStep{name: "go tool templ generate", cmd: []string{"go", "tool", "templ", "generate"}},
+		buildStep{name: "tailwindcss", cmd: []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
+		buildStep{name: "go test -p=1 -count=1 ./...", cmd: []string{"go", "test", "-p=1", "-count=1", "./..."}, sharedTestDatabase: true},
+		buildStep{name: "go build", cmd: []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
 	)
+}
+
+func startBuildTestDatabase() (string, func() error, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	container, err := postgres.Run(ctx, buildTestDatabase,
+		postgres.WithDatabase("agent_test"),
+		postgres.WithUsername("agent"),
+		postgres.WithPassword("agent"),
+		postgres.BasicWaitStrategies(),
+	)
+	if err != nil {
+		if container != nil {
+			_ = container.Terminate(context.Background())
+		}
+		return "", nil, err
+	}
+	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		_ = container.Terminate(context.Background())
+		return "", nil, err
+	}
+	return dsn, func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return container.Terminate(ctx)
+	}, nil
 }
 
 func hasSQLQueries(dir string) bool {

@@ -25,7 +25,9 @@ func TestNewDefinesBeforeRuntimeAndStartsMigratedDatabase(t *testing.T) {
 	}
 	migration := `-- +goose Up
 CREATE TABLE bootstrap_order (id integer PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS migration_cycle_probe (id integer PRIMARY KEY);
 -- +goose Down
+INSERT INTO migration_cycle_probe (id) VALUES (1);
 DROP TABLE bootstrap_order;
 `
 	if err := os.WriteFile(filepath.Join(migrations, "00001_bootstrap.sql"), []byte(migration), 0o644); err != nil {
@@ -78,6 +80,13 @@ DROP TABLE bootstrap_order;
 
 	if migratedTable != "bootstrap_order" {
 		t.Fatalf("migrated table = %q, want bootstrap_order", migratedTable)
+	}
+	var migrationCycles int
+	if err := env.Agent.DB().QueryRowContext(t.Context(), "SELECT count(*) FROM migration_cycle_probe").Scan(&migrationCycles); err != nil {
+		t.Fatalf("count migration validation cycles: %v", err)
+	}
+	if migrationCycles != 1 {
+		t.Fatalf("migration down executions = %d, want 1", migrationCycles)
 	}
 }
 

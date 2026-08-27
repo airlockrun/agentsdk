@@ -42,10 +42,10 @@ func TestAgentComposition(t *testing.T) {
 // TestDBMigratesAndConnects is the worked example for DB-backed tests.
 // agenttest.New uses TEST_DB_URL when supplied or starts pgvector with Docker.
 // It invokes newAgent while Agent.DB() is only a late-bound handle, then starts
-// the runtime, finds db/migrations at the enclosing module root, resets and
-// migrates the schema, syncs, and runs OnStart hooks. Once you add tables, query
-// through Agent.DB() after agenttest.New returns and assert on the results; this
-// run checks that the migrated pool is reachable.
+// the runtime, finds db/migrations at the enclosing module root, validates an
+// up, down-to-zero, up cycle, syncs, and runs OnStart hooks. Once you add tables,
+// query through Agent.DB() after agenttest.New returns and assert on the results;
+// this run checks that the migrated pool is reachable.
 func TestDBMigratesAndConnects(t *testing.T) {
 	env := agenttest.New(t, newAgent)
 	if err := env.Agent.DB().PingContext(context.Background()); err != nil {

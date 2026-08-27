@@ -159,28 +159,29 @@ func (a *Agent) runMigrationPass(ctx context.Context, dir string, mode migration
 		switch mode {
 		case migrationValidate:
 			agentLogger().Info("validating migrations (up, down, up)")
-			if err := goose.UpContext(ctx, a.db.db, dir); err != nil {
-				return fmt.Errorf("validate up: %w", err)
-			}
-			if err := goose.DownToContext(ctx, a.db.db, dir, 0); err != nil {
-				return fmt.Errorf("validate down: %w", err)
-			}
-			if err := goose.UpContext(ctx, a.db.db, dir); err != nil {
-				return fmt.Errorf("validate re-up: %w", err)
-			}
-			return nil
+			return runMigrationValidation(ctx, a.db.db, dir, "validate")
 		case migrationDownTo:
 			agentLogger().Info("migrating down", zap.Int64("to_version", downTo))
 			return goose.DownToContext(ctx, a.db.db, dir, downTo)
 		case migrationTestReset:
-			if err := goose.DownToContext(ctx, a.db.db, dir, 0); err != nil {
-				return fmt.Errorf("test reset: %w", err)
-			}
-			return goose.UpContext(ctx, a.db.db, dir)
+			return runMigrationValidation(ctx, a.db.db, dir, "test validation")
 		default:
 			return goose.UpContext(ctx, a.db.db, dir)
 		}
 	})
+}
+
+func runMigrationValidation(ctx context.Context, db *sql.DB, dir, operation string) error {
+	if err := goose.UpContext(ctx, db, dir); err != nil {
+		return fmt.Errorf("%s up: %w", operation, err)
+	}
+	if err := goose.DownToContext(ctx, db, dir, 0); err != nil {
+		return fmt.Errorf("%s down: %w", operation, err)
+	}
+	if err := goose.UpContext(ctx, db, dir); err != nil {
+		return fmt.Errorf("%s re-up: %w", operation, err)
+	}
+	return nil
 }
 
 // migrationLockKey is stable across replicas of the same agent while allowing
