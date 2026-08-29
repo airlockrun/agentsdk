@@ -81,6 +81,8 @@ func run(args []string) error {
 		return cmdBuild(args[1:])
 	case "integrations":
 		return cmdIntegrations(args[1:])
+	case "connectors":
+		return cmdConnectors(args[1:])
 	case "connection":
 		return cmdConnection(args[1:])
 	case "mcp":
@@ -112,6 +114,8 @@ Usage:
   air toolchain install           ensure the pinned build tools and references
   air build [dir]                 run the local build chain
   air integrations list [flags]   list configured external integrations
+  air connectors list [--json]    list connector resources visible to you
+  air connectors inspect <id>     inspect one connector interface
   air connection request ...      call a target's HTTP connection
   air mcp probe|tools|call ...     inspect or call MCP servers
   air login <airlock-url>         store CLI credentials outside the repo
@@ -562,6 +566,9 @@ func runBuild(dir string) error {
 		if runErr != nil {
 			return fmt.Errorf("%s: %w", step.name, runErr)
 		}
+	}
+	if err := buildConnectors(dir, outputDir); err != nil {
+		return err
 	}
 	return nil
 }

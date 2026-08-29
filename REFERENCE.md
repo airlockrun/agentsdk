@@ -59,6 +59,8 @@ Read the relevant companion at its build-container path:
   code / password / click) driven from an admin web page, ending in `Seal`.
 - **[Database](reference/database.md)** (`/libs/agentsdk/reference/database.md`) — Postgres: goose migrations, sqlc
   queries, database-only Go migrations, build-time validation, and when to use jobs instead.
+- **[Connectors](reference/connectors.md)** (`/libs/agentsdk/reference/connectors.md`) — typed remote-machine
+  contracts, `RegisterConnector`, command and directory clients, connector runtime, settings, activation, and services.
 
 ## Verifying a build
 

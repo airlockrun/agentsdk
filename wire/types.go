@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/connector/protocol"
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/sol/session"
 	"github.com/airlockrun/sol/websearch"
@@ -274,23 +275,66 @@ type MCPContent struct {
 // synchronization. Slices are deterministically ordered by their identifiers,
 // except Instructions and StartupHooks, whose registration order is semantic.
 type AgentManifest struct {
-	Version      string           `json:"version"`
-	Description  string           `json:"description"`
-	Emoji        string           `json:"emoji"`
-	Tools        []ToolDef        `json:"tools"`
-	Webhooks     []WebhookDef     `json:"webhooks"`
-	JobHandlers  []JobHandlerDef  `json:"jobHandlers"`
-	JobCrons     []JobCronDef     `json:"jobCrons"`
-	Routes       []RouteDef       `json:"routes"`
-	Topics       []TopicDef       `json:"topics"`
-	MCPServers   []MCPDef         `json:"mcpServers"`
-	Connections  []ConnectionDef  `json:"connections"`
-	EnvVars      []EnvVarDef      `json:"envVars"`
-	Directories  []DirectoryDef   `json:"directories"`
-	Instructions []InstructionDef `json:"instructions"`
-	ModelSlots   []ModelSlotDef   `json:"modelSlots"`
-	StaticAssets []StaticAssetDef `json:"staticAssets"`
-	StartupHooks []StartupHookDef `json:"startupHooks"`
+	Version      string             `json:"version"`
+	Description  string             `json:"description"`
+	Emoji        string             `json:"emoji"`
+	Tools        []ToolDef          `json:"tools"`
+	Webhooks     []WebhookDef       `json:"webhooks"`
+	JobHandlers  []JobHandlerDef    `json:"jobHandlers"`
+	JobCrons     []JobCronDef       `json:"jobCrons"`
+	Routes       []RouteDef         `json:"routes"`
+	Topics       []TopicDef         `json:"topics"`
+	MCPServers   []MCPDef           `json:"mcpServers"`
+	Connections  []ConnectionDef    `json:"connections"`
+	EnvVars      []EnvVarDef        `json:"envVars"`
+	Directories  []DirectoryDef     `json:"directories"`
+	Instructions []InstructionDef   `json:"instructions"`
+	ModelSlots   []ModelSlotDef     `json:"modelSlots"`
+	StaticAssets []StaticAssetDef   `json:"staticAssets"`
+	StartupHooks []StartupHookDef   `json:"startupHooks"`
+	Connectors   []ConnectorNeedDef `json:"connectors"`
+}
+
+type ConnectorNeedDef struct {
+	Slug        string               `json:"slug"`
+	Description string               `json:"description"`
+	Multiple    bool                 `json:"multiple,omitempty"`
+	Requirement protocol.Requirement `json:"requirement"`
+}
+
+type ConnectorJobInfo struct {
+	JobID      string                 `json:"jobId"`
+	ResourceID string                 `json:"resourceId,omitempty"`
+	Status     string                 `json:"status"`
+	Output     json.RawMessage        `json:"output,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	Progress   *ConnectorJobProgress  `json:"progress,omitempty"`
+	History    []ConnectorJobProgress `json:"history"`
+}
+
+type ConnectorJobProgress struct {
+	Sequence        int64     `json:"sequence"`
+	AttemptSequence int64     `json:"attemptSequence"`
+	Phase           string    `json:"phase"`
+	Message         string    `json:"message,omitempty"`
+	Completed       int64     `json:"completed,omitempty"`
+	Total           int64     `json:"total,omitempty"`
+	Time            time.Time `json:"time"`
+}
+
+type ConnectorOrchestrationRequest struct {
+	CommandName string                        `json:"commandName"`
+	Request     protocol.OrchestrationRequest `json:"request"`
+}
+
+type ConnectorOrchestrationInfo struct {
+	ID                   string             `json:"id"`
+	Status               string             `json:"status"`
+	Strategy             string             `json:"strategy"`
+	CanaryPhase          string             `json:"canaryPhase"`
+	CanaryCount          int32              `json:"canaryCount"`
+	CanarySucceededCount int32              `json:"canarySucceededCount"`
+	Targets              []ConnectorJobInfo `json:"targets"`
 }
 
 // SyncRequest is the complete agent declaration accepted by runtime sync.

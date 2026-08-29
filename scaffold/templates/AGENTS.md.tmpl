@@ -65,6 +65,8 @@ assumption in `NOTES.md`.
 │   ├── migrations/    # goose migrations (you create; doc.go pre-scaffolded)
 │   └── queries/       # sqlc query files (you create)
 ├── internal/db/       # sqlc-generated code
+├── connectors/        # optional immediate connector main packages
+├── <contract>/        # shared typed connector definitions
 ├── Dockerfile         # Generated — do not edit
 ├── setup.sh           # (optional) system setup — runs as root at image build
 ├── go.mod
@@ -90,6 +92,35 @@ process-local initialization that needs the started and synchronized runtime;
 durable work belongs in a registered job. `Agent.Manifest()` freezes and returns
 the complete canonical declaration, and `AIRLOCK_AGENT_MODE=manifest` emits it
 without runtime environment, database, migrations, or network.
+
+Connected-machine integrations put each executable in `connectors/<slug>` and
+shared typed definitions in an importable non-`main` contract package. Declare
+a distinctive reverse-domain contract ID and explicit targets; support Linux,
+macOS, and Windows on amd64 and arm64 unless the integration is inherently
+platform-specific. Airlock-built connectors must be pure Go and compile with
+`CGO_ENABLED=0`. Use direct Go APIs or typed process arguments, never shell
+interpolation. Expose only narrow commands and selected roots through
+`connector.LocalDirectory`; settings, credentials, machine paths, and
+installation tokens remain local and never enter source or artifacts. Every
+connector must explicitly select `connector.ServiceUser` or
+`connector.ServiceSystem`; system-mode configuration and self-test run as the
+eventual service identity before activation. macOS targets require
+`connector.ServiceUser`; macOS system services are unsupported. Runtime
+manifests and heartbeats
+report the actual executable SHA-256. Upgrades retain a local binary/state
+rollback, migrate compatible settings through candidate-typed flags, and
+validate staged settings under the service identity before replacement. Never
+write a candidate schema with `configure` before `upgrade`; noninteractive
+upgrades must provide every reported required flag. The retained state is
+exposed through the connector's `rollback` lifecycle command. Read
+`reference/connectors.md` before adding a connector.
+
+macOS artifacts produced by this build are unsigned and not notarized. Publish
+their SHA-256 values and instruct users to verify the exact artifact before any
+narrow `xattr -d com.apple.quarantine <file>` operation; never recommend a
+recursive quarantine removal. Use `ServiceUser` for TCC-sensitive desktop
+integrations. A user LaunchAgent can request permissions in the graphical user
+session, subject to macOS privacy approval for the installed executable.
 
 ## MVC: handlers are the integration point
 
@@ -202,6 +233,7 @@ go tool templ generate
 .airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify
 go test -p=1 -count=1 ./...
 go build -buildvcs=false -o <temporary-path> .
+discover immediate connectors/<slug>, validate each native manifest, and cross-compile declared targets with CGO_ENABLED=0
 ```
 
 The temporary binary is removed after compilation, so the source tree stays

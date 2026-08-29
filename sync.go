@@ -59,6 +59,11 @@ func (a *Agent) Manifest() wire.AgentManifest {
 }
 
 func (a *Agent) buildManifest() wire.AgentManifest {
+	connectors := make([]wire.ConnectorNeedDef, 0, len(a.connectors))
+	for _, slug := range sortedKeys(a.connectors) {
+		need := a.connectors[slug]
+		connectors = append(connectors, wire.ConnectorNeedDef{Slug: slug, Description: need.Description, Multiple: need.Multiple, Requirement: cloneConnectorRequirement(need.Requires)})
+	}
 	connections := make([]wire.ConnectionDef, 0, len(a.auths))
 	for _, slug := range sortedKeys(a.auths) {
 		c := a.auths[slug]
@@ -232,6 +237,7 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 		ModelSlots:   modelSlots,
 		StaticAssets: staticAssets,
 		StartupHooks: startupHooks,
+		Connectors:   connectors,
 	}
 }
 

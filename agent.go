@@ -76,6 +76,7 @@ type Agent struct {
 	topics       map[string]*Topic
 	staticAssets map[string]*StaticAsset
 	directories  []*directory // registration order; longest-prefix wins at lookup
+	connectors   map[string]*Connector
 
 	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
@@ -220,6 +221,7 @@ func newAgentRegistrationState(cfg Config) *Agent {
 		envVars:      make(map[string]*EnvVar),
 		topics:       make(map[string]*Topic),
 		staticAssets: make(map[string]*StaticAsset),
+		connectors:   make(map[string]*Connector),
 	}
 	a.db = &AgentDB{agent: a}
 	// Framework-owned scratch directory — used by run_js output truncation
