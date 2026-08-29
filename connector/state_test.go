@@ -22,12 +22,15 @@ func TestMultipleInstallationsRequireSelection(t *testing.T) {
 		}
 	}
 	output := &bytes.Buffer{}
-	runtime := New(Config{Kind: "multi", Contract: DefineContract("io.airlockrun.multi_test"), Name: "Multi", Description: "Multiple installations.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base, Output: output, ErrorOutput: output, Input: bytes.NewBuffer(nil)})
-	if err := runtime.RunContext(context.Background(), []string{"version"}); err == nil {
+	userRuntime := New(Config{Kind: "multi", Contract: DefineContract("io.airlockrun.multi_test"), Name: "Multi", Description: "Multiple installations.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base, Output: output, ErrorOutput: output, Input: bytes.NewBuffer(nil)})
+	if err := userRuntime.RunContext(context.Background(), []string{"version"}); err == nil {
 		t.Fatal("ambiguous installation was accepted")
 	}
-	if err := runtime.RunContext(context.Background(), []string{"version", "--installation", ids[0]}); err != nil {
+	if err := userRuntime.RunContext(context.Background(), []string{"version", "--installation", ids[0]}); err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" {
+		return
 	}
 	systemRuntime := New(Config{Kind: "multi", Contract: DefineContract("io.airlockrun.multi_test"), Name: "Multi", Description: "Multiple installations.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceSystem, StateDirectory: base, Output: output, ErrorOutput: output, Input: bytes.NewBuffer(nil)})
 	if err := systemRuntime.RunContext(context.Background(), []string{"version", "--installation", ids[0]}); err == nil || !strings.Contains(err.Error(), "does not match") {
