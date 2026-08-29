@@ -1,6 +1,7 @@
 package agenttest
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 
 	"github.com/airlockrun/agentsdk/internal/mockairlock"
@@ -11,6 +12,17 @@ type MockRequest struct {
 	Method string
 	Path   string
 	Body   []byte
+}
+
+// SetConnectorCommandResponse configures the typed JSON output returned for a
+// connector command name.
+func (m *MockAirlock) SetConnectorCommandResponse(name string, output any) error {
+	body, err := json.Marshal(output)
+	if err != nil {
+		return err
+	}
+	m.mock.SetConnectorCommandResponse(name, body)
+	return nil
 }
 
 // MockAirlock is an in-process Airlock API used by agent tests.

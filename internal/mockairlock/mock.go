@@ -3,12 +3,14 @@ package mockairlock
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"time"
 
+	"github.com/airlockrun/agentsdk/connector/protocol"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/sol/websearch"
 )
@@ -33,11 +35,13 @@ type Mock struct {
 	// response headers or events are written.
 	BeforeLLMResponse func()
 	// EnqueueJobResponse and GetJobResponse override the default job responses.
-	EnqueueJobResponse *wire.EnqueueJobResponse
-	EnqueueJobError    *wire.EnqueueJobErrorResponse
-	GetJobResponse     *wire.GetJobResponse
-	RunCompleteStatus  int
-	JobProgressStatus  int
+	EnqueueJobResponse        *wire.EnqueueJobResponse
+	EnqueueJobError           *wire.EnqueueJobErrorResponse
+	GetJobResponse            *wire.GetJobResponse
+	RunCompleteStatus         int
+	JobProgressStatus         int
+	ConnectorCommandResponses map[string]json.RawMessage
+	ConnectorJobResponses     map[string]json.RawMessage
 }
 
 // New creates a mock Airlock server and returns it with its base URL.
@@ -230,9 +234,75 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 		m.record(r)
 		w.WriteHeader(http.StatusAccepted)
 	})
+	mux.HandleFunc("POST /api/agent/connectors/{need}/commands/{command}", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		var request protocol.CommandCallRequest
+		if err := strictJSON(r.Body, &request); err != nil || request.Mode != protocol.CommandModeUnary || request.Revision < 1 || request.InputSchemaHash == "" || request.OutputSchemaHash == "" || !json.Valid(request.Input) {
+			http.Error(w, "invalid connector command request", http.StatusBadRequest)
+			return
+		}
+		output, ok := m.ConnectorCommandResponses[r.PathValue("command")]
+		if !ok {
+			http.Error(w, "connector command response is not configured", http.StatusNotFound)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(wireResponse("mock-connector-job", output))
+	})
+	mux.HandleFunc("POST /api/agent/connectors/{need}/jobs/{command}", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		var request protocol.CommandCallRequest
+		if err := strictJSON(r.Body, &request); err != nil || request.Mode != protocol.CommandModeJob || request.Revision < 1 || request.InputSchemaHash == "" || request.OutputSchemaHash == "" || !json.Valid(request.Input) {
+			http.Error(w, "invalid connector job request", http.StatusBadRequest)
+			return
+		}
+		m.mu.Lock()
+		if m.ConnectorJobResponses == nil {
+			m.ConnectorJobResponses = make(map[string]json.RawMessage)
+		}
+		m.ConnectorJobResponses["mock-connector-job"] = append(json.RawMessage(nil), m.ConnectorCommandResponses[r.PathValue("command")]...)
+		m.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]string{"jobId": "mock-connector-job", "status": "queued"})
+	})
+	mux.HandleFunc("GET /api/agent/connectors/{need}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		m.mu.Lock()
+		output := append(json.RawMessage(nil), m.ConnectorJobResponses[r.PathValue("job")]...)
+		m.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"jobId": r.PathValue("job"), "status": "success", "output": output})
+	})
+	mux.HandleFunc("DELETE /api/agent/connectors/{need}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	m.Server = httptest.NewServer(mux)
 	return m, m.Server.URL
+}
+
+func wireResponse(jobID string, output json.RawMessage) map[string]any {
+	return map[string]any{"jobId": jobID, "status": "success", "output": output}
+}
+
+func strictJSON(reader io.Reader, destination any) error {
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("trailing JSON")
+	}
+	return nil
+}
+
+func (m *Mock) SetConnectorCommandResponse(name string, output json.RawMessage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.ConnectorCommandResponses == nil {
+		m.ConnectorCommandResponses = make(map[string]json.RawMessage)
+	}
+	m.ConnectorCommandResponses[name] = append(json.RawMessage(nil), output...)
 }
 
 // Requests returns all recorded requests.

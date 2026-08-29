@@ -29,5 +29,26 @@ jobs:
         run: GOWORK=off go run ./internal/cmd/syncskills --check
       - name: Vet
         run: GOWORK=off go vet ./...
+      - name: Cross-compile connector SDK
+        run: |
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 GOWORK=off go build ./connector/...
+          done
+      - name: Cross-compile SDK for macOS
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=darwin GOARCH="$arch" CGO_ENABLED=0 GOWORK=off go build ./...
+          done
+      - name: Test
+        run: GOWORK=off go test -count=1 ./...
+
+  test-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
       - name: Test
         run: GOWORK=off go test -count=1 ./...
