@@ -114,8 +114,8 @@ func TestInstallationDirectoryRejectsSymlink(t *testing.T) {
 
 func TestServiceModeIsExplicitAndPersisted(t *testing.T) {
 	stateDir := t.TempDir()
-	runtime := New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: &struct{}{}, ServiceMode: ServiceUser, StateDirectory: stateDir, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
-	if err := runtime.RunContext(context.Background(), []string{"configure", "--non-interactive"}); err != nil {
+	userRuntime := New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: &struct{}{}, ServiceMode: ServiceUser, StateDirectory: stateDir, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
+	if err := userRuntime.RunContext(context.Background(), []string{"configure", "--non-interactive"}); err != nil {
 		t.Fatal(err)
 	}
 	state, err := loadInstallation(filepath.Join(draftStateDirectory(stateDir), "installation.json"), false)
@@ -126,7 +126,11 @@ func TestServiceModeIsExplicitAndPersisted(t *testing.T) {
 		t.Fatalf("service mode = %q", state.ServiceMode)
 	}
 
-	assertPanicContains(t, "does not match", func() {
+	wantModeError := "does not match"
+	if runtime.GOOS == "darwin" {
+		wantModeError = "macOS system services are unsupported"
+	}
+	assertPanicContains(t, wantModeError, func() {
 		New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceSystem, StateDirectory: stateDir})
 	})
 	assertPanicContains(t, "must explicitly select", func() {
