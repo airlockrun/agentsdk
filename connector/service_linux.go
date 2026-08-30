@@ -252,7 +252,8 @@ func (s *linuxService) Stop(ctx context.Context) error {
 		args = append([]string{"--user"}, args...)
 	}
 	body, err := s.ops.Execute(ctx, "systemctl", args...)
-	if strings.TrimSpace(string(body)) == "inactive" {
+	status := strings.TrimSpace(string(body))
+	if status == "inactive" || status == "failed" {
 		return nil
 	}
 	if err != nil {

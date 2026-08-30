@@ -4,8 +4,10 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -48,6 +50,17 @@ func (o *lifecycleOperations) Execute(_ context.Context, name string, args ...st
 
 func (o *lifecycleOperations) Executable() (string, error) { return o.executable, nil }
 
+type failedServiceOperations struct{}
+
+func (failedServiceOperations) Execute(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && slices.Contains(args, "is-active") {
+		return []byte("failed\n"), errors.New("exit status 3")
+	}
+	return nil, nil
+}
+
+func (failedServiceOperations) Executable() (string, error) { return "", nil }
+
 func TestLinuxUserServiceLifecycle(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -74,6 +87,13 @@ func TestLinuxUserServiceLifecycle(t *testing.T) {
 		if !strings.Contains(joined, expected) {
 			t.Fatalf("calls %q do not contain %q", joined, expected)
 		}
+	}
+}
+
+func TestLinuxStopAcceptsFailedService(t *testing.T) {
+	manager := newServiceManager("sample", t.TempDir(), ServiceUser, failedServiceOperations{}, nil)
+	if err := manager.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
