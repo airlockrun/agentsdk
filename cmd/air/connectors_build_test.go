@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -30,24 +31,26 @@ func TestDiscoverConnectors(t *testing.T) {
 
 func TestConnectorBuildTarget(t *testing.T) {
 	tests := []struct {
-		target, goos, goarch string
+		target, goos, goarch, suffix string
+		environment                  []string
 	}{
-		{protocol.PlatformLinuxAMD64, "linux", "amd64"},
-		{protocol.PlatformLinuxARM64, "linux", "arm64"},
-		{protocol.PlatformDarwinAMD64, "darwin", "amd64"},
-		{protocol.PlatformDarwinARM64, "darwin", "arm64"},
-		{protocol.PlatformWindowsAMD64, "windows", "amd64"},
-		{protocol.PlatformWindowsARM64, "windows", "arm64"},
+		{protocol.PlatformLinuxAMD64, "linux", "amd64", "", []string{"GOOS=linux", "GOARCH=amd64"}},
+		{protocol.PlatformLinuxARM64, "linux", "arm64", "", []string{"GOOS=linux", "GOARCH=arm64"}},
+		{protocol.PlatformLinuxARMv7, "linux", "arm", "", []string{"GOOS=linux", "GOARCH=arm", "GOARM=7"}},
+		{protocol.PlatformDarwinAMD64, "darwin", "amd64", "", []string{"GOOS=darwin", "GOARCH=amd64"}},
+		{protocol.PlatformDarwinARM64, "darwin", "arm64", "", []string{"GOOS=darwin", "GOARCH=arm64"}},
+		{protocol.PlatformWindowsAMD64, "windows", "amd64", ".exe", []string{"GOOS=windows", "GOARCH=amd64"}},
+		{protocol.PlatformWindowsARM64, "windows", "arm64", ".exe", []string{"GOOS=windows", "GOARCH=arm64"}},
 	}
 	for _, test := range tests {
 		t.Run(test.target, func(t *testing.T) {
-			goos, goarch, err := connectorBuildTarget(test.target)
-			if err != nil || goos != test.goos || goarch != test.goarch {
-				t.Fatalf("connectorBuildTarget(%q) = %q, %q, %v", test.target, goos, goarch, err)
+			target, err := connectorBuildTarget(test.target)
+			if err != nil || target.GOOS != test.goos || target.GOARCH != test.goarch || target.ExecutableSuffix != test.suffix || !reflect.DeepEqual(target.GoEnv(), test.environment) {
+				t.Fatalf("connectorBuildTarget(%q) = %+v, %v", test.target, target, err)
 			}
 		})
 	}
-	if _, _, err := connectorBuildTarget("plan9-amd64"); err == nil {
+	if _, err := connectorBuildTarget("plan9-amd64"); err == nil {
 		t.Fatal("connectorBuildTarget accepted an unsupported target")
 	}
 }

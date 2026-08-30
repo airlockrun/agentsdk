@@ -36,15 +36,6 @@ const (
 	MaxActiveAttempts       = 256
 )
 
-const (
-	PlatformLinuxAMD64   = "linux-amd64"
-	PlatformLinuxARM64   = "linux-arm64"
-	PlatformDarwinAMD64  = "darwin-amd64"
-	PlatformDarwinARM64  = "darwin-arm64"
-	PlatformWindowsAMD64 = "windows-amd64"
-	PlatformWindowsARM64 = "windows-arm64"
-)
-
 var (
 	contractIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*\.[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*)+$`)
 	namePattern       = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
@@ -463,24 +454,21 @@ func ValidateManifest(m Manifest) error {
 		return err
 	}
 	seenTargets := make(map[string]bool)
-	hasDarwinTarget := false
-	for _, target := range m.Targets {
-		switch target {
-		case PlatformLinuxAMD64, PlatformLinuxARM64, PlatformDarwinAMD64, PlatformDarwinARM64, PlatformWindowsAMD64, PlatformWindowsARM64:
-		default:
-			return fmt.Errorf("connector protocol: unsupported target %q", target)
+	for _, targetID := range m.Targets {
+		target, ok := LookupTarget(targetID)
+		if !ok {
+			return fmt.Errorf("connector protocol: unsupported target %q", targetID)
 		}
-		if seenTargets[target] {
-			return fmt.Errorf("connector protocol: duplicate target %q", target)
+		if seenTargets[targetID] {
+			return fmt.Errorf("connector protocol: duplicate target %q", targetID)
 		}
-		seenTargets[target] = true
-		hasDarwinTarget = hasDarwinTarget || target == PlatformDarwinAMD64 || target == PlatformDarwinARM64
+		seenTargets[targetID] = true
+		if !target.SupportsServiceMode(m.ServiceMode) {
+			return fmt.Errorf("connector protocol: target %q does not support %s service mode", targetID, m.ServiceMode)
+		}
 	}
 	if len(m.Targets) == 0 {
 		return errors.New("connector protocol: at least one target is required")
-	}
-	if m.ServiceMode == "system" && hasDarwinTarget {
-		return errors.New("connector protocol: macOS targets support only user service mode")
 	}
 	seenFeatures := make(map[string]bool, len(m.Features))
 	for _, feature := range m.Features {

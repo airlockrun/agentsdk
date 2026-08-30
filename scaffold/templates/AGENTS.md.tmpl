@@ -95,9 +95,9 @@ without runtime environment, database, migrations, or network.
 
 Connected-machine integrations put each executable in `connectors/<slug>` and
 shared typed definitions in an importable non-`main` contract package. Declare
-a distinctive reverse-domain contract ID and explicit targets; support Linux,
-macOS, and Windows on amd64 and arm64 unless the integration is inherently
-platform-specific. Airlock-built connectors must be pure Go and compile with
+a distinctive reverse-domain contract ID and explicit targets; support Linux
+on amd64, arm64, and ARMv7 plus macOS and Windows on amd64 and arm64 unless the
+integration is inherently platform-specific. Airlock-built connectors must be pure Go and compile with
 `CGO_ENABLED=0`. Use direct Go APIs or typed process arguments, never shell
 interpolation. Expose only narrow commands and selected roots through
 `connector.LocalDirectory`; settings, credentials, machine paths, and

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/airlockrun/agentsdk/connector/protocol"
@@ -28,7 +30,7 @@ type rawFields struct {
 	Data json.RawMessage `json:"data"`
 }
 type stringOption struct {
-	Count int `json:"count,string"`
+	Count int64 `json:"count,string"`
 }
 type interfaceField struct {
 	Value any `json:"value"`
@@ -45,7 +47,7 @@ type customTextFields struct {
 
 type contractInput struct {
 	Name  string `json:"name"`
-	Limit int    `json:"limit,omitempty"`
+	Limit int64  `json:"limit,omitempty"`
 }
 
 func TestCommandSchemaRejectsEncodingAmbiguity(t *testing.T) {
@@ -101,13 +103,57 @@ func TestCommandSchemaRejectsEncodingAmbiguity(t *testing.T) {
 func TestCommandSchemaMatchesJSONNamesAndOptionalFields(t *testing.T) {
 	type input struct {
 		Required string `json:"required"`
-		Optional int    `json:"optional,omitempty"`
+		Optional int64  `json:"optional,omitempty"`
 		Zero     bool   `json:"zero,omitzero"`
 	}
 	command := DefineCommand[input, contractOutput](DefineContract("io.airlockrun.schema_match"), "run", CommandOptions{Revision: 1})
 	if !bytes.Contains(command.Descriptor().InputSchema, []byte(`"required":["required"]`)) {
 		t.Fatalf("schema = %s", command.Descriptor().InputSchema)
 	}
+}
+
+func TestCommandSchemaRejectsArchitectureSizedIntegers(t *testing.T) {
+	type namedInt int
+	type nested struct {
+		Value int `json:"value"`
+	}
+	tests := []struct {
+		name   string
+		define func()
+	}{
+		{name: "int input", define: func() { schemaFor(reflect.TypeOf(int(0))) }},
+		{name: "uint output", define: func() {
+			DefineCommand[contractInput, uint](DefineContract("io.airlockrun.integer_test"), "run", CommandOptions{Revision: 1})
+		}},
+		{name: "uintptr", define: func() { schemaFor(reflect.TypeOf(uintptr(0))) }},
+		{name: "named int", define: func() { schemaFor(reflect.TypeOf(namedInt(0))) }},
+		{name: "nested", define: func() { schemaFor(reflect.TypeOf(nested{})) }},
+		{name: "pointer", define: func() { schemaFor(reflect.TypeOf((*int)(nil))) }},
+		{name: "slice", define: func() { schemaFor(reflect.TypeOf([]int{})) }},
+		{name: "map value", define: func() { schemaFor(reflect.TypeOf(map[string]int{})) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			defer func() {
+				message := fmt.Sprint(recover())
+				if !strings.Contains(message, "architecture-sized integer") || !strings.Contains(message, "fixed-width integer") {
+					t.Fatalf("panic = %q", message)
+				}
+			}()
+			test.define()
+		})
+	}
+}
+
+func TestCommandSchemaAcceptsFixedWidthIntegers(t *testing.T) {
+	type fixedWidth struct {
+		Signed   int32             `json:"signed"`
+		Unsigned uint64            `json:"unsigned"`
+		Values   []int64           `json:"values"`
+		ByName   map[string]uint32 `json:"byName"`
+		Ignored  int               `json:"-"`
+	}
+	schemaFor(reflect.TypeOf(fixedWidth{}))
 }
 
 type contractOutput struct {
