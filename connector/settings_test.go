@@ -106,6 +106,43 @@ func TestConfigureSettingsAllowsExplicitEmptyAndTrimsCRLF(t *testing.T) {
 	}
 }
 
+func TestSettingNamesPreserveInitialisms(t *testing.T) {
+	for value, want := range map[string]string{
+		"BrokerURL":     "broker-url",
+		"HTTPServerURL": "http-server-url",
+		"TLSConfig":     "tls-config",
+		"Version2URL":   "version2-url",
+	} {
+		t.Run(value, func(t *testing.T) {
+			if got := kebab(value); got != want {
+				t.Fatalf("kebab(%q) = %q, want %q", value, got, want)
+			}
+		})
+	}
+}
+
+func TestUpgradePromptsOnlyForMissingRequiredSettings(t *testing.T) {
+	settings := &struct {
+		BrokerURL string `json:"broker_url" connector:"url,required"`
+		Username  string `json:"username" connector:"string,required"`
+		Label     string `json:"label" connector:"string"`
+	}{BrokerURL: "mqtt://127.0.0.1:1883", Label: "existing"}
+	_, fields, err := settingsSchema(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := configureSettingsCommand(context.Background(), "upgrade", settings, fields, nil, bytes.NewBufferString("zigbee\n"), &output, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != "username: " {
+		t.Fatalf("prompts = %q, want %q", output.String(), "username: ")
+	}
+	if settings.BrokerURL != "mqtt://127.0.0.1:1883" || settings.Username != "zigbee" || settings.Label != "existing" {
+		t.Fatalf("settings = %+v", settings)
+	}
+}
+
 func TestSettingsSchemaRejectsDuplicateJSONNames(t *testing.T) {
 	typeOf := reflect.StructOf([]reflect.StructField{
 		{Name: "First", Type: reflect.TypeOf(""), Tag: `json:"same"`},

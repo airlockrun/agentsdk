@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/airlockrun/agentsdk/connector/protocol"
 )
@@ -371,7 +372,8 @@ func configureSettingsCommand(ctx context.Context, command string, settings any,
 		if !provided && isZero(fieldValue) && field.defaultValue != "" {
 			raw, provided = field.defaultValue, true
 		}
-		if !provided && interactive && !*nonInteractive && field.kind != "secret" {
+		promptForUpgrade := command != "upgrade" || (field.required && isZero(fieldValue))
+		if !provided && interactive && !*nonInteractive && field.kind != "secret" && promptForUpgrade {
 			_, _ = fmt.Fprintf(output, "%s: ", field.name)
 			line, err := reader.ReadString('\n')
 			if err != nil && !errors.Is(err, io.EOF) {
@@ -463,11 +465,12 @@ func isZero(value reflect.Value) bool { return value.IsZero() }
 
 func kebab(value string) string {
 	var result strings.Builder
-	for i, r := range value {
-		if i > 0 && r >= 'A' && r <= 'Z' {
+	runes := []rune(value)
+	for i, r := range runes {
+		if i > 0 && unicode.IsUpper(r) && (unicode.IsLower(runes[i-1]) || unicode.IsDigit(runes[i-1]) || (i+1 < len(runes) && unicode.IsLower(runes[i+1]))) {
 			result.WriteByte('-')
 		}
-		result.WriteRune(r)
+		result.WriteRune(unicode.ToLower(r))
 	}
-	return strings.ToLower(result.String())
+	return result.String()
 }
