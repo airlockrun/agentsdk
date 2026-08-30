@@ -15,7 +15,7 @@ import (
 type testSettings struct {
 	Endpoint string        `connector:"url,required"`
 	Token    Secret        `connector:"secret,required"`
-	Workers  int           `connector:"integer,default=2"`
+	Workers  int64         `connector:"integer,default=2"`
 	Timeout  time.Duration `connector:"duration,default=5s"`
 }
 
@@ -68,6 +68,45 @@ func TestSettingsSchemaRejectsDuplicateJSONNames(t *testing.T) {
 	}
 }
 
+func TestSettingsSchemaRejectsArchitectureSizedIntegers(t *testing.T) {
+	type namedInt int
+	tests := []struct {
+		name     string
+		settings any
+	}{
+		{name: "inferred int", settings: &struct{ Workers int }{}},
+		{name: "tagged int", settings: &struct {
+			Workers int `connector:"integer"`
+		}{}},
+		{name: "uint", settings: &struct {
+			Workers uint `connector:"integer"`
+		}{}},
+		{name: "uintptr", settings: &struct {
+			Workers uintptr `connector:"integer"`
+		}{}},
+		{name: "named int", settings: &struct{ Workers namedInt }{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := settingsSchema(test.settings)
+			if err == nil || !strings.Contains(err.Error(), "setting Workers") || !strings.Contains(err.Error(), "architecture-sized integer") || !strings.Contains(err.Error(), "fixed-width signed integer") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+func TestSettingsSchemaAcceptsFixedWidthIntegers(t *testing.T) {
+	_, _, err := settingsSchema(&struct {
+		Small   int32
+		Large   int64
+		Timeout time.Duration
+	}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDirectoryRootBindingsTrackConfiguredDirectorySettings(t *testing.T) {
 	oldRoot, newRoot := filepath.Join(t.TempDir(), "old"), filepath.Join(t.TempDir(), "new")
 	settings := &struct {
@@ -96,7 +135,7 @@ func TestDirectoryRootBindingsTrackConfiguredDirectorySettings(t *testing.T) {
 type upgradeOldSettings struct {
 	Endpoint string `connector:"url,required"`
 	Removed  string `connector:"string"`
-	Changed  int    `connector:"integer"`
+	Changed  int64  `connector:"integer"`
 }
 
 type upgradeCandidateSettings struct {

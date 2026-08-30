@@ -34,6 +34,7 @@ jobs:
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             GOOS="${target%/*}" GOARCH="${target#*/}" CGO_ENABLED=0 GOWORK=off go build ./connector/...
           done
+          GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 GOWORK=off go build ./connector/...
       - name: Cross-compile SDK for macOS
         run: |
           for arch in amd64 arm64; do

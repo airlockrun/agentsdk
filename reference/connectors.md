@@ -62,6 +62,9 @@ Contract types deliberately reject custom JSON/text marshalers, anonymous or
 conflicting fields, `json:",string"`, interfaces, `[]byte`, and
 `json.RawMessage`. These shapes make reflected schemas diverge from
 `encoding/json`; transfer bytes through connector directories instead.
+Wire-visible command types also reject architecture-sized `int`, `uint`, and
+`uintptr` values. Use explicit-width integer types throughout command inputs
+and outputs, including nested structs, pointers, arrays, slices, and map values.
 
 ## Agent declaration and calls
 
@@ -106,7 +109,7 @@ func main() {
         ArtifactVersion: "1.0.0",
         ServiceMode: connector.ServiceUser,
         Targets: []string{
-            connector.PlatformLinuxAMD64, connector.PlatformLinuxARM64,
+            connector.PlatformLinuxAMD64, connector.PlatformLinuxARM64, connector.PlatformLinuxARMv7,
             connector.PlatformDarwinAMD64, connector.PlatformDarwinARM64,
             connector.PlatformWindowsAMD64, connector.PlatformWindowsARM64,
         },
@@ -133,6 +136,9 @@ and `enum`. Options include `required`, `default=`, `enum=a|b`, `name=`, and
 configuration accepts only `--<name>-file` or `--<name>-stdin` for them.
 Secrets cannot declare defaults, and setting names cannot shadow lifecycle or
 generated secret flags.
+Settings are flat direct struct fields; nested structs and collection types are
+unsupported. Integer settings use fixed-width signed types such as `int32` or
+`int64`; architecture-sized `int`, `uint`, and `uintptr` values are rejected.
 
 `ServiceMode` is required: select `connector.ServiceUser` for a user systemd
 unit, macOS LaunchAgent, or Windows logon task, or `connector.ServiceSystem` for

@@ -104,16 +104,13 @@ func buildConnectors(projectDir, outputDir string) error {
 			return fmt.Errorf("connector %s manifest contains trailing JSON", target.slug)
 		}
 		for _, platform := range manifest.Targets {
-			goos, goarch, err := connectorBuildTarget(platform)
+			buildTarget, err := connectorBuildTarget(platform)
 			if err != nil {
 				return fmt.Errorf("connector %s target %s: %w", target.slug, platform, err)
 			}
-			artifact := filepath.Join(outputDir, target.slug+"-"+platform)
-			if goos == "windows" {
-				artifact += ".exe"
-			}
+			artifact := filepath.Join(outputDir, target.slug+"-"+platform+buildTarget.ExecutableSuffix)
 			fmt.Printf("==> connector %s: %s (CGO_ENABLED=0)\n", target.slug, platform)
-			environment := []string{"CGO_ENABLED=0", "GOOS=" + goos, "GOARCH=" + goarch}
+			environment := append([]string{"CGO_ENABLED=0"}, buildTarget.GoEnv()...)
 			if _, err := connectorCommand(projectDir, environment, "go", "build", "-buildvcs=false", "-o", artifact, target.packagePath); err != nil {
 				return fmt.Errorf("connector %s target %s: %w", target.slug, platform, err)
 			}
@@ -127,19 +124,12 @@ func buildConnectors(projectDir, outputDir string) error {
 	return nil
 }
 
-func connectorBuildTarget(platform string) (string, string, error) {
-	switch platform {
-	case protocol.PlatformLinuxAMD64, protocol.PlatformLinuxARM64,
-		protocol.PlatformDarwinAMD64, protocol.PlatformDarwinARM64,
-		protocol.PlatformWindowsAMD64, protocol.PlatformWindowsARM64:
-		goos, goarch, found := strings.Cut(platform, "-")
-		if !found {
-			panic("connector: validated build target has no separator")
-		}
-		return goos, goarch, nil
-	default:
-		return "", "", fmt.Errorf("unsupported connector build target %q", platform)
+func connectorBuildTarget(platform string) (protocol.Target, error) {
+	target, ok := protocol.LookupTarget(platform)
+	if !ok {
+		return protocol.Target{}, fmt.Errorf("unsupported connector build target %q", platform)
 	}
+	return target, nil
 }
 
 type limitedBuffer struct {

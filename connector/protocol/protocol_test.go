@@ -75,7 +75,7 @@ func TestValidateManifest(t *testing.T) {
 
 func TestValidateManifestTargets(t *testing.T) {
 	targets := []string{
-		PlatformLinuxAMD64, PlatformLinuxARM64,
+		PlatformLinuxAMD64, PlatformLinuxARM64, PlatformLinuxARMv7,
 		PlatformDarwinAMD64, PlatformDarwinARM64,
 		PlatformWindowsAMD64, PlatformWindowsARM64,
 	}
@@ -98,7 +98,7 @@ func TestValidateManifestTargets(t *testing.T) {
 	manifest := validProtocolTestManifest(t)
 	manifest.ServiceMode = "system"
 	manifest.Targets = []string{PlatformLinuxAMD64, PlatformDarwinARM64}
-	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "only user service mode") {
+	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "does not support system service mode") {
 		t.Fatalf("ValidateManifest(system Darwin) error = %v", err)
 	}
 }

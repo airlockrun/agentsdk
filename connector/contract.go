@@ -17,6 +17,7 @@ import (
 const (
 	PlatformLinuxAMD64   = protocol.PlatformLinuxAMD64
 	PlatformLinuxARM64   = protocol.PlatformLinuxARM64
+	PlatformLinuxARMv7   = protocol.PlatformLinuxARMv7
 	PlatformDarwinAMD64  = protocol.PlatformDarwinAMD64
 	PlatformDarwinARM64  = protocol.PlatformDarwinARM64
 	PlatformWindowsAMD64 = protocol.PlatformWindowsAMD64
@@ -234,6 +235,10 @@ func schemaFor(value reflect.Type) json.RawMessage {
 
 func reflectSchema(value reflect.Type, visiting map[reflect.Type]bool) any {
 	validateJSONType(value)
+	switch value.Kind() {
+	case reflect.Int, reflect.Uint, reflect.Uintptr:
+		panic(fmt.Sprintf("connector: architecture-sized integer type %s is unsupported in command contracts; use a fixed-width integer type", value))
+	}
 	if visiting[value] {
 		panic("connector: recursive command types are unsupported: " + value.String())
 	}
@@ -294,8 +299,8 @@ func reflectSchema(value reflect.Type, visiting map[reflect.Type]bool) any {
 		return map[string]any{"anyOf": []any{object, map[string]any{"type": "null"}}}
 	case reflect.Bool:
 		return map[string]any{"type": "boolean"}
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return map[string]any{"type": "integer"}
 	case reflect.Float32, reflect.Float64:
 		return map[string]any{"type": "number"}

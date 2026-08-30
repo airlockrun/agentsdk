@@ -253,6 +253,10 @@ func inferSettingKind(value reflect.Type) string {
 }
 
 func validateSettingType(kind string, value reflect.Type) error {
+	switch value.Kind() {
+	case reflect.Int, reflect.Uint, reflect.Uintptr:
+		return fmt.Errorf("architecture-sized integer type %s is unsupported; use a fixed-width signed integer type", value)
+	}
 	switch kind {
 	case "string", "url", "file", "directory", "enum":
 		if value.Kind() != reflect.String || value == reflect.TypeOf(Secret("")) {
