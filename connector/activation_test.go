@@ -49,6 +49,33 @@ func TestNonTTYActivationSavesPendingAndExits(t *testing.T) {
 	}
 }
 
+func TestActivationRequiresConfiguration(t *testing.T) {
+	base := t.TempDir()
+	runtime := New(Config{
+		Kind: "unconfigured", Contract: DefineContract("io.airlockrun.unconfigured"), Name: "Unconfigured", Description: "Unconfigured connector.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}, AllowInsecureHTTP: true,
+	})
+	err := runtime.RunContext(context.Background(), []string{"activate", "--airlock", "http://127.0.0.1"})
+	if err == nil || !strings.Contains(err.Error(), "configure the connector before activation") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestActivationRequiresConfiguredSettingsSnapshot(t *testing.T) {
+	base := t.TempDir()
+	if err := saveSettingsSchema(filepath.Join(draftStateDirectory(base), "settings-schema.json"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(Config{
+		Kind: "missing-settings", Contract: DefineContract("io.airlockrun.missing_settings"), Name: "Missing", Description: "Missing settings.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}, AllowInsecureHTTP: true,
+	})
+	err := runtime.RunContext(context.Background(), []string{"activate", "--airlock", "http://127.0.0.1"})
+	if err == nil || !strings.Contains(err.Error(), "settings snapshot is missing") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 func TestActivationCheckStates(t *testing.T) {
 	tests := []struct {
 		name, status string
@@ -173,11 +200,21 @@ func TestActivationPollingDoesNotHoldDraftLock(t *testing.T) {
 }
 
 func testRuntime(stateDir string, output *bytes.Buffer, client *http.Client) *Runtime {
-	return New(Config{
+	if err := saveSettingsSchema(filepath.Join(draftStateDirectory(stateDir), "settings-schema.json"), nil, nil); err != nil {
+		panic(err)
+	}
+	if err := saveSettings(filepath.Join(draftStateDirectory(stateDir), "settings.json"), &struct{}{}, false); err != nil {
+		panic(err)
+	}
+	runtime := New(Config{
 		Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1",
 		Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: stateDir, HTTPClient: client, AllowInsecureHTTP: true,
 		Input: bytes.NewBuffer(nil), Output: output, ErrorOutput: output,
 	})
+	if err := runtime.initialize([]string{"version"}); err != nil {
+		panic(err)
+	}
+	return runtime
 }
 
 func serverURL(r *http.Request) string { return "http://" + r.Host + "/connect" }

@@ -41,7 +41,10 @@ func (r *Runtime) validateServiceCommand(ctx context.Context, args []string) err
 		if clean != filepath.Join(r.stateDir, ".upgrade-settings.json") {
 			return errors.New("connector: service validation settings must be the staged upgrade file")
 		}
-		if err := loadSettings(clean, r.config.Settings, r.machineState); err != nil {
+		if err := loadSettings(clean, r.settingValues, r.machineState); err != nil {
+			return err
+		}
+		if err := r.publishSettings(); err != nil {
 			return err
 		}
 	}

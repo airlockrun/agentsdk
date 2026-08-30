@@ -65,7 +65,7 @@ func TestInstallationCommandsUseProcessLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	runtime := New(Config{Kind: "locked", Contract: DefineContract("io.airlockrun.locked_test"), Name: "Locked", Description: "Lock test.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: &struct{}{}, ServiceMode: ServiceUser, StateDirectory: base, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
+	runtime := New(Config{Kind: "locked", Contract: DefineContract("io.airlockrun.locked_test"), Name: "Locked", Description: "Lock test.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	err = runtime.RunContext(ctx, []string{"configure", "--non-interactive"})
@@ -91,7 +91,7 @@ func TestInstallationLocksAreScopedPerInstallation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lock.Close()
-	runtime := New(Config{Kind: "scoped", Contract: DefineContract("io.airlockrun.scoped_test"), Name: "Scoped", Description: "Scoped lock test.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: &struct{}{}, ServiceMode: ServiceUser, StateDirectory: base, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
+	runtime := New(Config{Kind: "scoped", Contract: DefineContract("io.airlockrun.scoped_test"), Name: "Scoped", Description: "Scoped lock test.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
 	if err := runtime.RunContext(context.Background(), []string{"configure", "--installation", ids[1], "--non-interactive"}); err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestInstallationDirectoryRejectsSymlink(t *testing.T) {
 
 func TestServiceModeIsExplicitAndPersisted(t *testing.T) {
 	stateDir := t.TempDir()
-	userRuntime := New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: &struct{}{}, ServiceMode: ServiceUser, StateDirectory: stateDir, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
+	userRuntime := New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: stateDir, Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}})
 	if err := userRuntime.RunContext(context.Background(), []string{"configure", "--non-interactive"}); err != nil {
 		t.Fatal(err)
 	}
@@ -130,9 +130,10 @@ func TestServiceModeIsExplicitAndPersisted(t *testing.T) {
 	if runtime.GOOS == "darwin" {
 		wantModeError = "macOS system services are unsupported"
 	}
-	assertPanicContains(t, wantModeError, func() {
-		New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceSystem, StateDirectory: stateDir})
-	})
+	systemRuntime := New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceSystem, StateDirectory: stateDir})
+	if err := systemRuntime.RunContext(context.Background(), []string{"version"}); err == nil || !strings.Contains(err.Error(), wantModeError) {
+		t.Fatalf("system mode error = %v", err)
+	}
 	assertPanicContains(t, "must explicitly select", func() {
 		New(Config{Kind: "test", Contract: DefineContract("io.airlockrun.connector_test"), Name: "Test", Description: "Test connector.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, StateDirectory: t.TempDir()})
 	})

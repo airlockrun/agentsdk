@@ -121,6 +121,9 @@ func (c Command[In, Out]) Handle(runtime *Runtime, handler Handler[In, Out]) {
 	if runtime == nil || handler == nil {
 		panic("connector: command runtime and handler are required")
 	}
+	if c.contract.id != runtime.config.Contract.id {
+		panic("connector: command contract does not match runtime contract")
+	}
 	runtime.registerCommand(commandRegistration{
 		descriptor: c.Descriptor(), timeout: c.timeout, maxInputBytes: c.maxInputBytes,
 		maxOutputBytes: c.maxOutputBytes, idempotent: c.idempotent,
@@ -180,6 +183,9 @@ func (d Directory) requirement() requirement {
 func (d Directory) Handle(runtime *Runtime, provider *LocalDirectoryProvider) {
 	if runtime == nil || provider == nil {
 		panic("connector: directory runtime and provider are required")
+	}
+	if d.contract.id != runtime.config.Contract.id {
+		panic("connector: directory contract does not match runtime contract")
 	}
 	runtime.registerDirectory(directoryRegistration{descriptor: d.descriptor, provider: provider})
 }

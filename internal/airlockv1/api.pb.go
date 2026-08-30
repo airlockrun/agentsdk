@@ -8389,6 +8389,9 @@ type ConnectorNeedCommandInfo struct {
 	Mode             string                 `protobuf:"bytes,3,opt,name=mode,proto3" json:"mode,omitempty"`
 	InputSchemaHash  string                 `protobuf:"bytes,4,opt,name=input_schema_hash,json=inputSchemaHash,proto3" json:"input_schema_hash,omitempty"`
 	OutputSchemaHash string                 `protobuf:"bytes,5,opt,name=output_schema_hash,json=outputSchemaHash,proto3" json:"output_schema_hash,omitempty"`
+	Description      string                 `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
+	InputSchemaJson  string                 `protobuf:"bytes,7,opt,name=input_schema_json,json=inputSchemaJson,proto3" json:"input_schema_json,omitempty"`
+	OutputSchemaJson string                 `protobuf:"bytes,8,opt,name=output_schema_json,json=outputSchemaJson,proto3" json:"output_schema_json,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -8454,6 +8457,27 @@ func (x *ConnectorNeedCommandInfo) GetInputSchemaHash() string {
 func (x *ConnectorNeedCommandInfo) GetOutputSchemaHash() string {
 	if x != nil {
 		return x.OutputSchemaHash
+	}
+	return ""
+}
+
+func (x *ConnectorNeedCommandInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *ConnectorNeedCommandInfo) GetInputSchemaJson() string {
+	if x != nil {
+		return x.InputSchemaJson
+	}
+	return ""
+}
+
+func (x *ConnectorNeedCommandInfo) GetOutputSchemaJson() string {
+	if x != nil {
+		return x.OutputSchemaJson
 	}
 	return ""
 }
@@ -11636,13 +11660,16 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\bby_model\x18\x03 \x03(\v2\x18.airlock.v1.UsageByModelR\abyModel\x12\x1f\n" +
 	"\vwindow_days\x18\x04 \x01(\x05R\n" +
 	"windowDays\x120\n" +
-	"\aby_user\x18\x05 \x03(\v2\x17.airlock.v1.UsageByUserR\x06byUser\"\xb8\x01\n" +
+	"\aby_user\x18\x05 \x03(\v2\x17.airlock.v1.UsageByUserR\x06byUser\"\xb4\x02\n" +
 	"\x18ConnectorNeedCommandInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x05R\brevision\x12\x12\n" +
 	"\x04mode\x18\x03 \x01(\tR\x04mode\x12*\n" +
 	"\x11input_schema_hash\x18\x04 \x01(\tR\x0finputSchemaHash\x12,\n" +
-	"\x12output_schema_hash\x18\x05 \x01(\tR\x10outputSchemaHash\"\x8a\x01\n" +
+	"\x12output_schema_hash\x18\x05 \x01(\tR\x10outputSchemaHash\x12 \n" +
+	"\vdescription\x18\x06 \x01(\tR\vdescription\x12*\n" +
+	"\x11input_schema_json\x18\a \x01(\tR\x0finputSchemaJson\x12,\n" +
+	"\x12output_schema_json\x18\b \x01(\tR\x10outputSchemaJson\"\x8a\x01\n" +
 	"\x1aConnectorNeedDirectoryInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x05R\brevision\x12\x12\n" +

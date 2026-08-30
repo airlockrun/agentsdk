@@ -22,6 +22,148 @@ type runtimeInput struct {
 	Value string `json:"value"`
 }
 
+type blockingWriter struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingWriter) Write(body []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.started)
+		<-w.release
+	})
+	return len(body), nil
+}
+
+type runtimeTestOperations struct{}
+
+func (runtimeTestOperations) Execute(context.Context, string, ...string) ([]byte, error) {
+	return []byte("active\n"), nil
+}
+
+func (runtimeTestOperations) Executable() (string, error) { return os.Executable() }
+
+func TestManifestModeRejectsConcurrentRunContext(t *testing.T) {
+	t.Setenv("AIRLOCK_CONNECTOR_MODE", "manifest")
+	output := &blockingWriter{started: make(chan struct{}), release: make(chan struct{})}
+	runtime := New(Config{
+		Kind: "manifest-concurrency", Contract: DefineContract("io.airlockrun.manifest_concurrency"), Name: "Manifest", Description: "Manifest concurrency test.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, Output: output,
+	})
+	first := make(chan error, 1)
+	go func() { first <- runtime.RunContext(context.Background(), nil) }()
+	<-output.started
+	if err := runtime.RunContext(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "cannot execute concurrently") {
+		t.Fatalf("concurrent error = %v", err)
+	}
+	close(output.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestValidateClosesDirectoryOpenedBySelfTest(t *testing.T) {
+	base := t.TempDir()
+	id := "00000000-0000-0000-0000-000000000001"
+	stateDir := filepath.Join(base, "installations", id)
+	if err := saveInstallation(filepath.Join(stateDir, "installation.json"), installationState{ServiceMode: ServiceUser, InstallationID: id, Enabled: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "probe"), []byte("ok"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider := LocalDirectory(root)
+	runtime := New(Config{
+		Kind: "directory-cleanup", Contract: DefineContract("io.airlockrun.directory_cleanup"), Name: "Cleanup", Description: "Directory cleanup test.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base,
+		SelfTest: func(context.Context) error { _, err := provider.Stat("probe"); return err },
+	})
+	DefineDirectory(runtime.config.Contract, "files", DirectoryOptions{Revision: 1, Read: true}).Handle(runtime, provider)
+	if err := runtime.RunContext(context.Background(), []string{"validate", "--installation", id}); err != nil {
+		t.Fatal(err)
+	}
+	provider.rootMu.Lock()
+	defer provider.rootMu.Unlock()
+	if provider.root != nil {
+		t.Fatal("directory root remained open after validation")
+	}
+}
+
+func TestRunAllowsUnconfiguredOptionalBoundDirectory(t *testing.T) {
+	var heartbeat sync.Once
+	heartbeatSeen := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/connectors/v1/heartbeat" {
+			heartbeat.Do(func() { close(heartbeatSeen) })
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	base := t.TempDir()
+	id := "00000000-0000-0000-0000-000000000001"
+	stateDir := filepath.Join(base, "installations", id)
+	if err := saveInstallation(filepath.Join(stateDir, "installation.json"), installationState{ServiceMode: ServiceUser, InstallationID: id, Credential: strings.Repeat("c", 32), AirlockURL: server.URL, Enabled: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSettings(filepath.Join(stateDir, "settings.json"), &directorySettings{}, false); err != nil {
+		t.Fatal(err)
+	}
+	settings := DefineSettings[directorySettings]()
+	runtime := New(Config{
+		Kind: "optional-directory", Contract: DefineContract("io.airlockrun.optional_directory"), Name: "Optional", Description: "Optional directory test.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, Settings: settings, ServiceMode: ServiceUser, StateDirectory: base, HTTPClient: server.Client(), AllowInsecureHTTP: true,
+	})
+	provider := BoundLocalDirectory(settings.Directory(func(value *directorySettings) *string { return &value.First }))
+	DefineDirectory(runtime.config.Contract, "files", DirectoryOptions{Revision: 1, Read: true}).Handle(runtime, provider)
+	if err := runtime.initialize([]string{"run", "--installation", id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadSettings(filepath.Join(stateDir, "settings.json"), runtime.settingValues, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.publishSettings(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtime.runService(ctx) }()
+	select {
+	case <-heartbeatSeen:
+	case <-time.After(5 * time.Second):
+		t.Fatal("connector did not become ready")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("runService error = %v", err)
+	}
+}
+
+func TestStatusRequiresSettingsSnapshot(t *testing.T) {
+	base := t.TempDir()
+	id := "00000000-0000-0000-0000-000000000001"
+	stateDir := filepath.Join(base, "installations", id)
+	if err := saveInstallation(filepath.Join(stateDir, "installation.json"), installationState{ServiceMode: ServiceUser, InstallationID: id, Enabled: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSettingsSchema(filepath.Join(stateDir, "settings-schema.json"), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	output := &bytes.Buffer{}
+	runtime := New(Config{
+		Kind: "status-snapshot", Contract: DefineContract("io.airlockrun.status_snapshot"), Name: "Status", Description: "Status snapshot test.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base, Output: output, Operations: runtimeTestOperations{},
+	})
+	if err := runtime.RunContext(context.Background(), []string{"status", "--installation", id}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "configured=false") {
+		t.Fatalf("status = %q", output.String())
+	}
+}
+
 func TestManifestUsesRunningExecutableDigest(t *testing.T) {
 	runtime := testRuntime(t.TempDir(), nilBuffer(), nil)
 	executable, err := os.Executable()
@@ -251,7 +393,7 @@ func TestHeartbeatTracksHealthTransitions(t *testing.T) {
 	runtime.active[activeAttemptKey{jobID: "job-b", attemptToken: "attempt-b"}] = activeJob{}
 	runtime.active[activeAttemptKey{jobID: "job-a", attemptToken: "attempt-a"}] = activeJob{}
 	ctx, cancel := context.WithCancel(context.Background())
-	go runtime.heartbeat(ctx, client, filepath.Join(runtime.stateDir, "runtime.json"))
+	go runtime.heartbeat(ctx, client, filepath.Join(t.TempDir(), "runtime.json"))
 	first := <-requests
 	if first.Readiness != protocol.ReadinessUnhealthy || runtime.healthy.Load() {
 		t.Fatalf("first heartbeat = %+v", first)
@@ -264,6 +406,9 @@ func TestHeartbeatTracksHealthTransitions(t *testing.T) {
 	}
 	unhealthy.Store(false)
 	second := <-requests
+	for second.Readiness != protocol.ReadinessReady {
+		second = <-requests
+	}
 	cancel()
 	if second.Readiness != protocol.ReadinessReady || !runtime.healthy.Load() {
 		t.Fatalf("second heartbeat = %+v", second)
@@ -389,6 +534,9 @@ func TestRollbackCommandFailsWithoutRetainedBinary(t *testing.T) {
 
 func TestReadinessFailsImmediatelyWhenCandidateExits(t *testing.T) {
 	runtime := testRuntime(t.TempDir(), nilBuffer(), nil)
+	if err := runtime.initialize([]string{"version"}); err != nil {
+		t.Fatal(err)
+	}
 	started := time.Now().Add(-time.Second)
 	if err := saveRuntimeStatus(filepath.Join(runtime.stateDir, "runtime.json"), runtimeStatus{Readiness: protocol.ReadinessOffline, ArtifactVersion: runtime.config.ArtifactVersion, ArtifactDigest: runtime.artifactDigest}); err != nil {
 		t.Fatal(err)

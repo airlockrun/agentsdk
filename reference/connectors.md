@@ -100,8 +100,12 @@ rejects cross-origin redirects.
 
 ```go
 func main() {
-    settings := &Settings{}
-    runtime := connector.New(connector.Config{
+	if err := newConnector().Run(); err != nil { log.Fatal(err) }
+}
+
+func newConnector() *connector.Runtime {
+	settings := connector.DefineSettings[Settings]()
+	runtime := connector.New(connector.Config{
         Kind: "transmission",
         Contract: torrentcontract.Contract,
         Name: "Transmission Connector",
@@ -112,13 +116,22 @@ func main() {
             connector.PlatformLinuxAMD64, connector.PlatformLinuxARM64, connector.PlatformLinuxARMv7,
             connector.PlatformDarwinAMD64, connector.PlatformDarwinARM64,
             connector.PlatformWindowsAMD64, connector.PlatformWindowsARM64,
-        },
-        Settings: settings,
-        SelfTest: func(ctx context.Context) error { return testTransmission(ctx, settings) },
-    })
-    torrentcontract.Add.Handle(runtime, addTorrent)
-    torrentcontract.Completed.Handle(runtime, connector.LocalDirectory(settings.CompletedDir))
-    if err := runtime.Run(); err != nil { log.Fatal(err) }
+		},
+		Settings: settings,
+		SelfTest: func(ctx context.Context) error {
+			configured := settings.Get()
+			return testTransmission(ctx, &configured)
+		},
+	})
+	runtime.OnStart("transmission", func(ctx context.Context) error {
+		configured := settings.Get()
+		return startTransmissionClient(ctx, configured)
+	})
+	torrentcontract.Add.Handle(runtime, addTorrent)
+	torrentcontract.Completed.Handle(runtime, connector.BoundLocalDirectory(
+		settings.Directory(func(value *Settings) *string { return &value.CompletedDir }),
+	))
+	return runtime
 }
 ```
 
@@ -129,7 +142,23 @@ Integrations requiring CGO or native toolchains must be distributed externally.
 
 ## Local settings and activation
 
-Settings are a pointer to a struct. Supported `connector` tag kinds are
+Declare settings with `connector.DefineSettings[T]`. It returns a late-bound
+handle, not a mutable settings struct. `connector.New` is definition-only: it
+does not inspect process arguments, select an installation, create state
+directories, or load persisted values. `Settings.Get` fails loudly during
+definition and returns an immutable value snapshot while a lifecycle command is
+running. Read settings inside `Validate`, `SelfTest`, `OnStart`, or command
+handlers. Do not derive runtime clients, paths, or other state while constructing
+the connector.
+
+`Runtime.OnStart` runs in registration order for the `run` command after the
+selected installation's settings and directory roots are bound. Its context is
+canceled when the service stops. Use it for process-local clients and
+goroutines; constructors remain definition-only. Capture the immutable
+`Settings.Get` snapshot in the hook rather than reading the handle from a
+goroutine after shutdown.
+
+Supported `connector` tag kinds are
 `string`, `secret`, `bool`, `integer`, `duration`, `url`, `file`, `directory`,
 and `enum`. Options include `required`, `default=`, `enum=a|b`, `name=`, and
 `description=`. Secrets must use `connector.Secret`; noninteractive
@@ -139,6 +168,14 @@ generated secret flags.
 Settings are flat direct struct fields; nested structs and collection types are
 unsupported. Integer settings use fixed-width signed types such as `int32` or
 `int64`; architecture-sized `int`, `uint`, and `uintptr` values are rejected.
+Anonymous fields, custom JSON/text marshalers, and JSON tag options are rejected
+because the persisted representation must match the declared schema exactly.
+
+Use `BoundLocalDirectory(settings.Directory(...))` when a directory root comes
+from configuration. The field selector records field identity, so multiple
+initially empty directory settings remain distinct. Bound roots are updated
+before validation and must be absolute. `LocalDirectory("/fixed/path")` is only
+for an intentionally static root; it is never rebound from settings.
 
 `ServiceMode` is required: select `connector.ServiceUser` for a user systemd
 unit, macOS LaunchAgent, or Windows logon task, or `connector.ServiceSystem` for
@@ -160,6 +197,14 @@ files use `0700` and `0600`; Windows
 installation credentials and pending activation state use DPAPI. Settings,
 credentials, local paths, and activation tokens stay outside source and binary
 artifacts.
+
+`SelfTest` also runs when the service starts and on every heartbeat, and may run
+concurrently with command handlers. It must be bounded, concurrency-safe, and
+non-disruptive. In particular, a network probe must not reuse a client identity
+held by the live service connection.
+
+Activation requires a settings snapshot and schema produced by `configure`,
+including for connectors with no configurable fields.
 
 Each approved installation is stored beneath `installations/<installation-id>`
 and has its own service, settings, credential, idempotency records, and runtime
@@ -185,6 +230,24 @@ The binary provides `activate`, `run`, `install`, `uninstall`, `start`, `stop`,
 side effect after checking the external system. Linux supports system and user systemd services.
 Windows supports a LocalService system service and a user logon task. macOS
 supports per-user LaunchAgents only.
+
+Connector declarations freeze when `Manifest` or `Run` begins. Commands,
+directories, and startup hooks registered afterward panic. Command and directory
+contracts must match `Config.Contract`.
+
+Use `connectortest.New(t, newConnector)` in connector tests. It clears connector
+runtime selection before invoking the exact definition factory and validates the
+offline manifest. Definition-time calls to SDK runtime handles such as
+`Settings.Get` fail. Arbitrary direct filesystem or network calls remain the
+connector author's responsibility, so keep the factory definition-only and test
+startup behavior separately:
+
+```go
+func TestConnectorDefinition(t *testing.T) {
+	env := connectortest.New(t, newConnector)
+	if env.Manifest.Interface.Kind != "transmission" { t.Fatal("wrong connector") }
+}
+```
 
 ### macOS artifacts, launchd, and TCC
 

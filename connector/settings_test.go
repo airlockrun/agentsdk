@@ -19,6 +19,55 @@ type testSettings struct {
 	Timeout  time.Duration `connector:"duration,default=5s"`
 }
 
+type directorySettings struct {
+	First  string `connector:"directory"`
+	Second string `connector:"directory"`
+}
+
+func TestSettingsUnavailableDuringDefinitionAndAfterRun(t *testing.T) {
+	settings := DefineSettings[testSettings]()
+	assertPanicContains(t, "unavailable during connector definition", func() { settings.Get() })
+
+	base := t.TempDir()
+	id := "00000000-0000-0000-0000-000000000001"
+	stateDir := filepath.Join(base, "installations", id)
+	configured := &testSettings{Endpoint: "https://example.com", Token: "secret", Workers: 2, Timeout: time.Second}
+	if err := saveInstallation(filepath.Join(stateDir, "installation.json"), installationState{Version: 1, ServiceMode: ServiceUser, InstallationID: id, Enabled: true}, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveSettings(filepath.Join(stateDir, "settings.json"), configured, false); err != nil {
+		t.Fatal(err)
+	}
+	seen := testSettings{}
+	runtime := New(Config{
+		Kind: "settings-lifecycle", Contract: DefineContract("io.airlockrun.settings_lifecycle"), Name: "Settings", Description: "Settings lifecycle.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, Settings: settings, ServiceMode: ServiceUser, StateDirectory: base,
+		Validate: func(context.Context) error { seen = settings.Get(); return nil },
+	})
+	if err := runtime.RunContext(context.Background(), []string{"validate", "--installation", id}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != *configured {
+		t.Fatalf("validated settings = %+v, want %+v", seen, *configured)
+	}
+	assertPanicContains(t, "unavailable during connector definition", func() { settings.Get() })
+}
+
+func TestNewDoesNotReadOrCreateRuntimeState(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "not-created")
+	New(Config{Kind: "definition", Contract: DefineContract("io.airlockrun.definition"), Name: "Definition", Description: "Definition only.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser, StateDirectory: base})
+	if _, err := os.Stat(base); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("definition created state directory: %v", err)
+	}
+}
+
+func TestSettingsHandleBelongsToOneRuntime(t *testing.T) {
+	settings := DefineSettings[testSettings]()
+	config := Config{Kind: "owner", Contract: DefineContract("io.airlockrun.settings_owner"), Name: "Owner", Description: "Settings owner.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: settings, ServiceMode: ServiceUser}
+	New(config)
+	assertPanicContains(t, "only one runtime", func() { New(config) })
+}
+
 func TestConfigureSettingsTransactional(t *testing.T) {
 	settings := &testSettings{Endpoint: "https://old.example", Token: "old"}
 	_, fields, err := settingsSchema(settings)
@@ -109,16 +158,22 @@ func TestSettingsSchemaAcceptsFixedWidthIntegers(t *testing.T) {
 
 func TestDirectoryRootBindingsTrackConfiguredDirectorySettings(t *testing.T) {
 	oldRoot, newRoot := filepath.Join(t.TempDir(), "old"), filepath.Join(t.TempDir(), "new")
-	settings := &struct {
+	type rootSettings struct {
 		Root string `connector:"directory"`
-	}{Root: oldRoot}
+	}
+	settings := DefineSettings[rootSettings]()
 	runtime := New(Config{Kind: "roots", Contract: DefineContract("io.airlockrun.root_settings"), Name: "Roots", Description: "Root settings.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: settings, ServiceMode: ServiceUser, StateDirectory: t.TempDir()})
 	directory := DefineDirectory(runtime.config.Contract, "files", DirectoryOptions{Revision: 1, Write: true})
-	provider := LocalDirectory(settings.Root)
+	provider := BoundLocalDirectory(settings.Directory(func(value *rootSettings) *string { return &value.Root }))
 	directory.Handle(runtime, provider)
 	bindings := runtime.directoryRootBindings()
-	settings.Root = newRoot
-	if err := bindings.apply(settings); err != nil {
+	runtime.settingValues.(*rootSettings).Root = oldRoot
+	if err := bindings.apply(runtime.settingValues); err != nil {
+		t.Fatal(err)
+	}
+	bindings = runtime.directoryRootBindings()
+	runtime.settingValues.(*rootSettings).Root = newRoot
+	if err := bindings.apply(runtime.settingValues); err != nil {
 		t.Fatal(err)
 	}
 	if provider.path != newRoot {
@@ -130,6 +185,84 @@ func TestDirectoryRootBindingsTrackConfiguredDirectorySettings(t *testing.T) {
 	if provider.path != oldRoot {
 		t.Fatalf("restored provider path = %q, want %q", provider.path, oldRoot)
 	}
+}
+
+func TestBoundDirectoriesUseExplicitFieldIdentity(t *testing.T) {
+	settings := DefineSettings[directorySettings]()
+	runtime := New(Config{Kind: "two-roots", Contract: DefineContract("io.airlockrun.two_roots"), Name: "Roots", Description: "Two roots.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: settings, ServiceMode: ServiceUser})
+	first := BoundLocalDirectory(settings.Directory(func(value *directorySettings) *string { return &value.First }))
+	second := BoundLocalDirectory(settings.Directory(func(value *directorySettings) *string { return &value.Second }))
+	DefineDirectory(runtime.config.Contract, "first", DirectoryOptions{Revision: 1, Write: true}).Handle(runtime, first)
+	DefineDirectory(runtime.config.Contract, "second", DirectoryOptions{Revision: 1, Write: true}).Handle(runtime, second)
+	firstRoot, secondRoot := filepath.Join(t.TempDir(), "first"), filepath.Join(t.TempDir(), "second")
+	values := runtime.settingValues.(*directorySettings)
+	values.First, values.Second = firstRoot, secondRoot
+	if err := runtime.publishSettings(); err != nil {
+		t.Fatal(err)
+	}
+	if first.path != firstRoot || second.path != secondRoot {
+		t.Fatalf("bound roots = %q / %q", first.path, second.path)
+	}
+}
+
+func TestConfigureSelfTestSeesProposedDirectoryRoot(t *testing.T) {
+	base := t.TempDir()
+	settings := DefineSettings[directorySettings]()
+	var provider *LocalDirectoryProvider
+	newRoot := filepath.Join(t.TempDir(), "new")
+	runtime := New(Config{
+		Kind: "root-validation", Contract: DefineContract("io.airlockrun.root_validation"), Name: "Roots", Description: "Root validation.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, Settings: settings, ServiceMode: ServiceUser, StateDirectory: base,
+		Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{},
+		SelfTest: func(context.Context) error {
+			if settings.Get().First != newRoot || provider.path != newRoot {
+				return errors.New("self-test observed stale directory root")
+			}
+			return nil
+		},
+	})
+	provider = BoundLocalDirectory(settings.Directory(func(value *directorySettings) *string { return &value.First }))
+	DefineDirectory(runtime.config.Contract, "files", DirectoryOptions{Revision: 1, Write: true}).Handle(runtime, provider)
+	if err := runtime.RunContext(context.Background(), []string{"configure", "--non-interactive", "--first", newRoot}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfigureRejectsRelativeDirectoryRoot(t *testing.T) {
+	settings := DefineSettings[directorySettings]()
+	runtime := New(Config{
+		Kind: "relative-root", Contract: DefineContract("io.airlockrun.relative_root"), Name: "Roots", Description: "Root validation.", ArtifactVersion: "1",
+		Targets: []string{PlatformLinuxAMD64}, Settings: settings, ServiceMode: ServiceUser, StateDirectory: t.TempDir(),
+		Input: bytes.NewBuffer(nil), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{},
+	})
+	err := runtime.RunContext(context.Background(), []string{"configure", "--non-interactive", "--first", "relative/path"})
+	if err == nil || !strings.Contains(err.Error(), "absolute path") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSettingsSchemaRejectsJSONOptionsAndCustomMarshalers(t *testing.T) {
+	t.Run("JSON options", func(t *testing.T) {
+		_, _, err := settingsSchema(&struct {
+			Workers int64 `json:"workers,string"`
+		}{})
+		if err == nil || !strings.Contains(err.Error(), "JSON tag options") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("anonymous field", func(t *testing.T) {
+		type embedded struct{ Value string }
+		_, _, err := settingsSchema(&struct{ embedded }{})
+		if err == nil || !strings.Contains(err.Error(), "anonymous") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("custom marshaler", func(t *testing.T) {
+		_, _, err := settingsSchema(&struct{ Value customJSON }{})
+		if err == nil || !strings.Contains(err.Error(), "custom JSON or text marshaling") {
+			t.Fatalf("error = %v", err)
+		}
+	})
 }
 
 type upgradeOldSettings struct {
@@ -144,7 +277,7 @@ type upgradeCandidateSettings struct {
 	Changed  string `connector:"string,required"`
 }
 
-func newSettingsUpgradeRuntime(t *testing.T, input string, selfTest func(context.Context) error) (*Runtime, *upgradeCandidateSettings, []byte, []byte) {
+func newSettingsUpgradeRuntime(t *testing.T, input string, selfTest func(context.Context) error) (*Runtime, *Settings[upgradeCandidateSettings], []byte, []byte) {
 	t.Helper()
 	base := t.TempDir()
 	installationID := "00000000-0000-0000-0000-000000000001"
@@ -171,15 +304,15 @@ func newSettingsUpgradeRuntime(t *testing.T, input string, selfTest func(context
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate := &upgradeCandidateSettings{}
-	previousArgs := os.Args
-	os.Args = []string{previousArgs[0], "upgrade"}
-	defer func() { os.Args = previousArgs }()
+	candidate := DefineSettings[upgradeCandidateSettings]()
 	runtime := New(Config{
 		Kind: "upgrade-test", Contract: DefineContract("io.airlockrun.settings_upgrade"), Name: "Upgrade", Description: "Settings upgrade test.", ArtifactVersion: "2",
 		Targets: []string{PlatformLinuxAMD64}, Settings: candidate, ServiceMode: ServiceUser, StateDirectory: base,
 		Input: bytes.NewBufferString(input), Output: &bytes.Buffer{}, ErrorOutput: &bytes.Buffer{}, SelfTest: selfTest,
 	})
+	if err := runtime.initialize([]string{"upgrade", "--installation", installationID}); err != nil {
+		t.Fatal(err)
+	}
 	return runtime, candidate, oldSettings, oldSchema
 }
 
@@ -190,8 +323,9 @@ func TestUpgradeSettingsAddsRequiredAndMigratesChangedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if candidate.Endpoint != "https://old.example" || candidate.Added != "new" || candidate.Changed != "replacement" {
-		t.Fatalf("candidate settings = %+v", candidate)
+	configured := candidate.Get()
+	if configured.Endpoint != "https://old.example" || configured.Added != "new" || configured.Changed != "replacement" {
+		t.Fatalf("candidate settings = %+v", configured)
 	}
 	if err := activate(); err != nil {
 		t.Fatal(err)
@@ -200,8 +334,8 @@ func TestUpgradeSettingsAddsRequiredAndMigratesChangedSchema(t *testing.T) {
 	if err := loadSettings(filepath.Join(runtime.stateDir, "settings.json"), &saved, false); err != nil {
 		t.Fatal(err)
 	}
-	if saved != *candidate {
-		t.Fatalf("saved settings = %+v, want %+v", saved, *candidate)
+	if saved != configured {
+		t.Fatalf("saved settings = %+v, want %+v", saved, configured)
 	}
 }
 

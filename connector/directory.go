@@ -37,6 +37,7 @@ type LocalDirectoryOptions struct {
 
 type LocalDirectoryProvider struct {
 	path          string
+	binding       *DirectorySetting
 	rootMu        sync.Mutex
 	root          *os.Root
 	maxReadBytes  int64
@@ -48,8 +49,24 @@ type LocalDirectoryProvider struct {
 // LocalDirectory opens a confined local filesystem root. The returned value
 // must be registered with a Directory definition and is closed by Runtime.
 func LocalDirectory(rootPath string, options ...LocalDirectoryOptions) *LocalDirectoryProvider {
+	if rootPath == "" {
+		panic("connector: LocalDirectory requires a static absolute root; use BoundLocalDirectory for a configured root")
+	}
+	return newLocalDirectory(rootPath, nil, options)
+}
+
+// BoundLocalDirectory opens a confined local filesystem root whose path is
+// supplied by an explicitly selected directory setting at runtime.
+func BoundLocalDirectory(setting DirectorySetting, options ...LocalDirectoryOptions) *LocalDirectoryProvider {
+	if setting.settings == nil || setting.field.kind != "directory" {
+		panic("connector: BoundLocalDirectory requires a directory setting")
+	}
+	return newLocalDirectory("", &setting, options)
+}
+
+func newLocalDirectory(rootPath string, binding *DirectorySetting, options []LocalDirectoryOptions) *LocalDirectoryProvider {
 	if len(options) > 1 {
-		panic("connector: LocalDirectory accepts at most one options value")
+		panic("connector: local directory accepts at most one options value")
 	}
 	if rootPath != "" && !pathIsAbsolute(rootPath) {
 		panic("connector: LocalDirectory root must be absolute")
@@ -71,9 +88,28 @@ func LocalDirectory(rootPath string, options ...LocalDirectoryOptions) *LocalDir
 		config.HTTPClient = &http.Client{Timeout: 10 * time.Minute}
 	}
 	return &LocalDirectoryProvider{
-		path: rootPath, maxReadBytes: config.MaxReadBytes,
+		path: rootPath, binding: binding, maxReadBytes: config.MaxReadBytes,
 		maxWriteBytes: config.MaxWriteBytes, http: config.HTTPClient, origins: make(map[string]bool),
 	}
+}
+
+func (d *LocalDirectoryProvider) rebind(rootPath string) error {
+	if rootPath != "" && !pathIsAbsolute(rootPath) {
+		return errors.New("connector: local directory root must be absolute")
+	}
+	d.rootMu.Lock()
+	defer d.rootMu.Unlock()
+	if d.path == rootPath {
+		return nil
+	}
+	if d.root != nil {
+		if err := d.root.Close(); err != nil {
+			return err
+		}
+		d.root = nil
+	}
+	d.path = rootPath
+	return nil
 }
 
 func (d *LocalDirectoryProvider) Close() error {
@@ -85,6 +121,12 @@ func (d *LocalDirectoryProvider) Close() error {
 	err := d.root.Close()
 	d.root = nil
 	return err
+}
+
+func (d *LocalDirectoryProvider) configured() bool {
+	d.rootMu.Lock()
+	defer d.rootMu.Unlock()
+	return d.path != ""
 }
 
 func (d *LocalDirectoryProvider) initialize() error {

@@ -241,7 +241,7 @@ func TestSystemConfigurationDelegatesSelfTestToServiceIdentity(t *testing.T) {
 	selfTests := 0
 	runtime := New(Config{
 		Kind: "sample", Contract: DefineContract("io.airlockrun.system_validation"), Name: "Sample", Description: "System validation.", ArtifactVersion: "1",
-		Targets: []string{PlatformLinuxAMD64}, Settings: &struct{}{}, ServiceMode: ServiceSystem, StateDirectory: stateDir, Operations: operations,
+		Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceSystem, StateDirectory: stateDir, Operations: operations,
 		Input: strings.NewReader(""), Output: &strings.Builder{}, ErrorOutput: &strings.Builder{}, SelfTest: func(context.Context) error { selfTests++; return nil },
 	})
 	if err := runtime.RunContext(context.Background(), []string{"configure", "--non-interactive"}); err != nil {

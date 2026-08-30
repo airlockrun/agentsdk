@@ -3,6 +3,7 @@ package connector
 import (
 	"bufio"
 	"context"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -161,14 +162,23 @@ func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField
 		return nil, nil, errors.New("connector: Config.Settings must be a non-nil pointer to a struct")
 	}
 	typeOf := value.Elem().Type()
+	if implementsSettingsMarshaler(typeOf) || implementsSettingsMarshaler(reflect.PointerTo(typeOf)) {
+		return nil, nil, errors.New("connector: settings struct cannot implement custom JSON or text marshaling")
+	}
 	descriptors := make([]protocol.SettingDescriptor, 0, typeOf.NumField())
 	fields := make([]settingsField, 0, typeOf.NumField())
 	seen := make(map[string]bool)
 	seenJSON := make(map[string]bool)
 	for i := 0; i < typeOf.NumField(); i++ {
 		field := typeOf.Field(i)
+		if field.Anonymous {
+			return nil, nil, fmt.Errorf("connector: setting %s cannot be anonymous", field.Name)
+		}
 		if field.PkgPath != "" {
-			continue
+			return nil, nil, fmt.Errorf("connector: setting %s must be exported", field.Name)
+		}
+		if implementsSettingsMarshaler(field.Type) || implementsSettingsMarshaler(reflect.PointerTo(field.Type)) {
+			return nil, nil, fmt.Errorf("connector: setting %s cannot implement custom JSON or text marshaling", field.Name)
 		}
 		parts := strings.Split(field.Tag.Get("connector"), ",")
 		kind := strings.TrimSpace(parts[0])
@@ -176,7 +186,12 @@ func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField
 			kind = inferSettingKind(field.Type)
 		}
 		name := kebab(field.Name)
-		jsonName := strings.Split(field.Tag.Get("json"), ",")[0]
+		jsonTag := field.Tag.Get("json")
+		jsonParts := strings.Split(jsonTag, ",")
+		if len(jsonParts) > 1 {
+			return nil, nil, fmt.Errorf("connector: setting %s cannot use JSON tag options", field.Name)
+		}
+		jsonName := jsonParts[0]
 		if jsonName == "" {
 			jsonName = field.Name
 		}
@@ -231,6 +246,14 @@ func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField
 		return nil, nil, err
 	}
 	return descriptors, fields, nil
+}
+
+func implementsSettingsMarshaler(value reflect.Type) bool {
+	jsonMarshaler := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
+	jsonUnmarshaler := reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
+	textMarshaler := reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
+	textUnmarshaler := reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
+	return value.Implements(jsonMarshaler) || value.Implements(jsonUnmarshaler) || value.Implements(textMarshaler) || value.Implements(textUnmarshaler)
 }
 
 func inferSettingKind(value reflect.Type) string {
@@ -390,7 +413,12 @@ func trimLineEnding(value string) string {
 
 func setSetting(value reflect.Value, field settingsField, raw string) error {
 	switch field.kind {
-	case "string", "file", "directory", "secret":
+	case "string", "file", "secret":
+		value.SetString(raw)
+	case "directory":
+		if raw != "" && !pathIsAbsolute(raw) {
+			return errors.New("must be an absolute path")
+		}
 		value.SetString(raw)
 	case "url":
 		parsed, err := url.ParseRequestURI(raw)

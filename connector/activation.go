@@ -80,12 +80,31 @@ func (r *Runtime) activate(ctx context.Context, args []string) error {
 		lockHeld = false
 		return lock.Close()
 	}
-	if r.config.Settings != nil {
-		if err := json.Unmarshal(r.initialSettings, r.config.Settings); err != nil {
+	if r.settingValues != nil {
+		if err := json.Unmarshal(r.initialSettings, r.settingValues); err != nil {
 			return err
 		}
 	}
-	if err := loadSettings(filepath.Join(r.stateDir, "settings.json"), r.config.Settings, r.machineState); err != nil {
+	schema, err := loadSettingsSchema(filepath.Join(r.stateDir, "settings-schema.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return errors.New("connector: configure the connector before activation")
+	}
+	if err != nil {
+		return fmt.Errorf("connector: load configured settings schema: %w", err)
+	}
+	if !settingsSchemasEqual(schema, r.settings, r.settingFields) {
+		return errors.New("connector: configured settings schema differs from this connector")
+	}
+	settingsPath := filepath.Join(r.stateDir, "settings.json")
+	if _, err := os.Stat(settingsPath); errors.Is(err, os.ErrNotExist) {
+		return errors.New("connector: configured settings snapshot is missing; run configure again")
+	} else if err != nil {
+		return err
+	}
+	if err := loadSettings(settingsPath, r.settingValues, r.machineState); err != nil {
+		return err
+	}
+	if err := r.publishSettings(); err != nil {
 		return err
 	}
 	statePath := filepath.Join(r.stateDir, "installation.json")
@@ -312,8 +331,8 @@ func (r *Runtime) completeActivation(statePath string, state installationState) 
 	if err := saveInstallation(targetStatePath, state, r.machineState); err != nil {
 		return err
 	}
-	if r.config.Settings != nil {
-		if err := saveSettings(filepath.Join(targetDir, "settings.json"), r.config.Settings, r.machineState); err != nil {
+	if r.settingValues != nil {
+		if err := saveSettings(filepath.Join(targetDir, "settings.json"), r.settingValues, r.machineState); err != nil {
 			return err
 		}
 	}

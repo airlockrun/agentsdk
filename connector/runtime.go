@@ -41,7 +41,7 @@ type Config struct {
 	Description       string
 	ArtifactVersion   string
 	Targets           []string
-	Settings          any
+	Settings          SettingsDefinition
 	Validate          func(context.Context) error
 	SelfTest          func(context.Context) error
 	StateDirectory    string
@@ -76,13 +76,21 @@ type Runtime struct {
 	stateBase              string
 	installationID         string
 	artifactDigest         string
+	artifactMu             sync.Mutex
 	ambiguousInstallations bool
 	initialSettings        []byte
 	machineState           bool
 	settings               []protocol.SettingDescriptor
 	settingFields          []settingsField
+	settingValues          any
+	settingHandle          SettingsDefinition
 	commands               map[string]commandRegistration
 	directories            map[string]directoryRegistration
+	definitionMu           sync.Mutex
+	frozen                 bool
+	startHooks             []startHook
+	startHookNames         map[string]bool
+	executing              atomic.Bool
 	activeMu               sync.Mutex
 	active                 map[activeAttemptKey]activeJob
 	healthy                atomic.Bool
@@ -101,9 +109,15 @@ func New(config Config) *Runtime {
 	if len(config.Targets) == 0 {
 		panic("connector: Config.Targets is required")
 	}
-	settings, fields, err := settingsSchema(config.Settings)
-	if err != nil {
-		panic(err)
+	var settingHandle SettingsDefinition
+	var settingValues any = &struct{}{}
+	var settings []protocol.SettingDescriptor
+	var fields []settingsField
+	if config.Settings != nil {
+		settingHandle = config.Settings
+	}
+	if settingHandle != nil {
+		settingValues, settings, fields = settingHandle.definition()
 	}
 	if config.ServiceMode != ServiceSystem && config.ServiceMode != ServiceUser {
 		panic("connector: Config.ServiceMode must explicitly select connector.ServiceUser or connector.ServiceSystem")
@@ -111,84 +125,12 @@ func New(config Config) *Runtime {
 	if config.Operations == nil {
 		config.Operations = systemOperations{}
 	}
-	artifactDigest, err := executableDigest(config.Operations)
-	if err != nil {
-		panic("connector: digest running executable: " + err.Error())
-	}
-	if config.StateDirectory == "" {
-		config.StateDirectory, err = defaultStateDir(config.Kind, config.ServiceMode)
-		if err != nil {
-			panic("connector: state directory: " + err.Error())
-		}
-	}
-	if os.Getenv("AIRLOCK_CONNECTOR_MODE") != "manifest" {
-		if err := prepareStateDirectory(config.StateDirectory, config.ServiceMode, config.Operations); err != nil {
-			panic("connector: prepare state directory: " + err.Error())
-		}
-	}
-	machineState := config.ServiceMode == ServiceSystem
-	stateDir := draftStateDirectory(config.StateDirectory)
-	selector := config.InstallationID
-	if selector == "" {
-		selector = os.Getenv("AIRLOCK_CONNECTOR_INSTALLATION_ID")
-	}
-	if selector == "" && os.Getenv("AIRLOCK_CONNECTOR_MODE") != "manifest" {
-		selector = installationArgument(os.Args[1:])
-	}
-	if selector != "" && !validInstallationID(selector) {
+	if config.InstallationID != "" && !validInstallationID(config.InstallationID) {
 		panic("connector: InstallationID must be a lowercase UUID")
 	}
-	ambiguous := false
-	if os.Getenv("AIRLOCK_CONNECTOR_MODE") != "manifest" {
-		ids, err := installationDirectories(config.StateDirectory)
-		if err != nil {
-			panic(err)
-		}
-		if selector == "" && len(ids) == 1 {
-			selector = ids[0]
-		}
-		if selector == "" && len(ids) > 1 {
-			ambiguous = true
-		}
-		if selector != "" {
-			found := false
-			for _, id := range ids {
-				found = found || id == selector
-			}
-			if !found {
-				panic("connector: selected installation does not exist: " + selector)
-			}
-			stateDir = filepath.Join(config.StateDirectory, "installations", selector)
-		} else if err := prepareStateDirectory(stateDir, config.ServiceMode, config.Operations); err != nil {
-			panic("connector: prepare draft state directory: " + err.Error())
-		}
-	}
-	initialSettings, err := json.Marshal(config.Settings)
+	initialSettings, err := json.Marshal(settingValues)
 	if err != nil {
 		panic(err)
-	}
-	if os.Getenv("AIRLOCK_CONNECTOR_MODE") != "manifest" {
-		settingsPath := filepath.Join(stateDir, "settings.json")
-		if staged := settingsFileArgument(os.Args[1:]); staged != "" {
-			if filepath.Clean(staged) != filepath.Join(stateDir, ".upgrade-settings.json") {
-				panic("connector: staged settings path does not match the selected installation")
-			}
-			settingsPath = staged
-		}
-		if err := loadSettings(settingsPath, config.Settings, machineState); err != nil && (len(os.Args) < 2 || os.Args[1] != "upgrade") {
-			panic(err)
-		}
-		if _, err := os.Stat(filepath.Join(stateDir, "installation.json")); err == nil {
-			state, err := loadInstallation(filepath.Join(stateDir, "installation.json"), machineState)
-			if err != nil {
-				panic(err)
-			}
-			if state.ServiceMode != config.ServiceMode {
-				panic(fmt.Sprintf("connector: persisted service mode %q does not match Config.ServiceMode %q", state.ServiceMode, config.ServiceMode))
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			panic(err)
-		}
 	}
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{Timeout: 90 * time.Second}
@@ -211,14 +153,116 @@ func New(config Config) *Runtime {
 	if config.ErrorOutput == nil {
 		config.ErrorOutput = os.Stderr
 	}
-	return &Runtime{
-		config: config, stateDir: stateDir, stateBase: config.StateDirectory, installationID: selector, artifactDigest: artifactDigest, ambiguousInstallations: ambiguous, initialSettings: initialSettings, machineState: machineState, settings: settings, settingFields: fields,
+	config.Targets = append([]string(nil), config.Targets...)
+	runtime := &Runtime{
+		config: config, initialSettings: initialSettings, machineState: config.ServiceMode == ServiceSystem, settings: settings, settingFields: fields, settingValues: settingValues, settingHandle: settingHandle,
 		commands: make(map[string]commandRegistration), directories: make(map[string]directoryRegistration),
-		active: make(map[activeAttemptKey]activeJob),
+		startHookNames: make(map[string]bool), active: make(map[activeAttemptKey]activeJob),
 	}
+	if settingHandle != nil {
+		settingHandle.claim(runtime)
+	}
+	return runtime
+}
+
+func (r *Runtime) freeze() {
+	r.definitionMu.Lock()
+	defer r.definitionMu.Unlock()
+	r.frozen = true
+}
+
+func (r *Runtime) initialize(args []string) error {
+	stateBase := r.config.StateDirectory
+	if stateBase == "" {
+		var err error
+		stateBase, err = defaultStateDir(r.config.Kind, r.config.ServiceMode)
+		if err != nil {
+			return fmt.Errorf("connector: state directory: %w", err)
+		}
+	}
+	if err := prepareStateDirectory(stateBase, r.config.ServiceMode, r.config.Operations); err != nil {
+		return fmt.Errorf("connector: prepare state directory: %w", err)
+	}
+	r.stateBase = stateBase
+	r.stateDir = draftStateDirectory(stateBase)
+	r.installationID = ""
+	r.ambiguousInstallations = false
+
+	selector := r.config.InstallationID
+	if selector == "" {
+		selector = os.Getenv("AIRLOCK_CONNECTOR_INSTALLATION_ID")
+	}
+	argumentSelector := installationArgument(args)
+	if selector != "" && argumentSelector != "" && selector != argumentSelector {
+		return errors.New("connector: --installation conflicts with Config.InstallationID or AIRLOCK_CONNECTOR_INSTALLATION_ID")
+	}
+	if selector == "" {
+		selector = argumentSelector
+	}
+	if selector != "" && !validInstallationID(selector) {
+		return errors.New("connector: installation selector must be a lowercase UUID")
+	}
+	ids, err := installationDirectories(stateBase)
+	if err != nil {
+		return err
+	}
+	if selector == "" && len(ids) == 1 {
+		selector = ids[0]
+	}
+	if selector == "" && len(ids) > 1 {
+		r.ambiguousInstallations = true
+	}
+	if selector != "" {
+		found := false
+		for _, id := range ids {
+			found = found || id == selector
+		}
+		if !found {
+			return fmt.Errorf("connector: selected installation does not exist: %s", selector)
+		}
+		r.installationID = selector
+		r.stateDir = filepath.Join(stateBase, "installations", selector)
+	} else if err := prepareStateDirectory(r.stateDir, r.config.ServiceMode, r.config.Operations); err != nil {
+		return fmt.Errorf("connector: prepare draft state directory: %w", err)
+	}
+	if r.settingValues != nil {
+		if err := json.Unmarshal(r.initialSettings, r.settingValues); err != nil {
+			return err
+		}
+	}
+	if _, err = r.artifactDigestValue(); err != nil {
+		return fmt.Errorf("connector: digest running executable: %w", err)
+	}
+	return nil
+}
+
+func (r *Runtime) artifactDigestValue() (string, error) {
+	r.artifactMu.Lock()
+	defer r.artifactMu.Unlock()
+	if r.artifactDigest != "" {
+		return r.artifactDigest, nil
+	}
+	digest, err := executableDigest(r.config.Operations)
+	if err != nil {
+		return "", err
+	}
+	r.artifactDigest = digest
+	return digest, nil
+}
+
+func (r *Runtime) publishSettings() error {
+	if r.settingHandle != nil {
+		r.settingHandle.publish()
+	}
+	return r.directoryRootBindings().apply(r.settingValues)
 }
 
 func (r *Runtime) registerCommand(command commandRegistration) {
+	r.definitionMu.Lock()
+	defer r.definitionMu.Unlock()
+	if r.frozen {
+		panic("connector: registrations are frozen after Manifest or Run")
+	}
 	if command.descriptor.Name == "" || command.handle == nil {
 		panic("connector: invalid command registration")
 	}
@@ -248,6 +292,14 @@ func (r *Runtime) registerCommand(command commandRegistration) {
 }
 
 func (r *Runtime) registerDirectory(directory directoryRegistration) {
+	r.definitionMu.Lock()
+	defer r.definitionMu.Unlock()
+	if r.frozen {
+		panic("connector: registrations are frozen after Manifest or Run")
+	}
+	if directory.provider.binding != nil && directory.provider.binding.settings != r.settingHandle {
+		panic("connector: bound local directory belongs to different settings")
+	}
 	if _, exists := r.directories[directory.descriptor.Name]; exists {
 		panic("connector: duplicate directory " + directory.descriptor.Name)
 	}
@@ -255,9 +307,10 @@ func (r *Runtime) registerDirectory(directory directoryRegistration) {
 }
 
 func (r *Runtime) Manifest() protocol.Manifest {
+	r.freeze()
 	commands := make([]protocol.CommandDescriptor, 0, len(r.commands))
 	for _, name := range sortedMapKeys(r.commands) {
-		commands = append(commands, r.commands[name].descriptor)
+		commands = append(commands, cloneCommandDescriptor(r.commands[name].descriptor))
 	}
 	directories := make([]protocol.DirectoryDescriptor, 0, len(r.directories))
 	for _, name := range sortedMapKeys(r.directories) {
@@ -265,7 +318,11 @@ func (r *Runtime) Manifest() protocol.Manifest {
 	}
 	targets := append([]string(nil), r.config.Targets...)
 	sort.Strings(targets)
-	settings := append([]protocol.SettingDescriptor(nil), r.settings...)
+	settings := make([]protocol.SettingDescriptor, len(r.settings))
+	for i, setting := range r.settings {
+		settings[i] = setting
+		settings[i].Enum = append([]string(nil), setting.Enum...)
+	}
 	sort.Slice(settings, func(i, j int) bool { return settings[i].Name < settings[j].Name })
 	iface := protocol.Interface{
 		Kind: r.config.Kind, ContractID: r.config.Contract.id, Name: r.config.Name,
@@ -276,11 +333,15 @@ func (r *Runtime) Manifest() protocol.Manifest {
 	if err != nil {
 		panic("connector: interface digest: " + err.Error())
 	}
+	artifactDigest, err := r.artifactDigestValue()
+	if err != nil {
+		panic("connector: digest running executable: " + err.Error())
+	}
 	manifest := protocol.Manifest{
 		ProtocolMajor: protocol.Major, ProtocolMinor: protocol.Minor,
 		Features: []string{"cancellation", "commands", "directories", "long-jobs"},
 		Targets:  targets, ServiceMode: string(r.config.ServiceMode), Interface: iface,
-		InterfaceHash: digest, ArtifactDigest: r.artifactDigest,
+		InterfaceHash: digest, ArtifactDigest: artifactDigest,
 		Settings: settings,
 	}
 	if err := protocol.ValidateManifest(manifest); err != nil {
@@ -292,6 +353,10 @@ func (r *Runtime) Manifest() protocol.Manifest {
 func (r *Runtime) Run() error { return r.RunContext(context.Background(), os.Args[1:]) }
 
 func (r *Runtime) RunContext(ctx context.Context, args []string) error {
+	if !r.executing.CompareAndSwap(false, true) {
+		return errors.New("connector: Runtime.RunContext cannot execute concurrently")
+	}
+	defer r.executing.Store(false)
 	if mode := os.Getenv("AIRLOCK_CONNECTOR_MODE"); mode != "" {
 		if mode != "manifest" {
 			return fmt.Errorf("connector: unsupported AIRLOCK_CONNECTOR_MODE %q", mode)
@@ -308,6 +373,13 @@ func (r *Runtime) RunContext(ctx context.Context, args []string) error {
 	}
 	if len(args) == 0 {
 		return errors.New("connector: command is required (activate, run, install, uninstall, start, stop, restart, status, configure, validate, version, unregister, upgrade, rollback, enable, disable)")
+	}
+	r.freeze()
+	if err := r.initialize(args); err != nil {
+		return err
+	}
+	if r.settingHandle != nil {
+		defer r.settingHandle.clear()
 	}
 	var err error
 	args, err = r.extractInstallation(args)
@@ -334,10 +406,16 @@ func (r *Runtime) RunContext(ctx context.Context, args []string) error {
 			return err
 		}
 		if args[0] != "upgrade" && !(args[0] == "validate-service" && containsArgument(args[1:], "--settings-file")) {
-			if err := loadSettings(filepath.Join(r.stateDir, "settings.json"), r.config.Settings, r.machineState); err != nil {
+			if err := loadSettings(filepath.Join(r.stateDir, "settings.json"), r.settingValues, r.machineState); err != nil {
 				return err
 			}
 		}
+	}
+	if err := r.publishSettings(); err != nil {
+		return err
+	}
+	if args[0] != "run" {
+		defer r.closeDirectories()
 	}
 	switch args[0] {
 	case "activate":
@@ -377,6 +455,12 @@ func (r *Runtime) RunContext(ctx context.Context, args []string) error {
 		return r.serviceCommand(ctx, args[0], args[1:])
 	default:
 		return fmt.Errorf("connector: unknown command %q", args[0])
+	}
+}
+
+func (r *Runtime) closeDirectories() {
+	for _, directory := range r.directories {
+		_ = directory.provider.Close()
 	}
 }
 
@@ -424,8 +508,8 @@ func (r *Runtime) extractInstallation(args []string) ([]string, error) {
 		if err := prepareStateDirectory(r.stateDir, r.config.ServiceMode, r.config.Operations); err != nil {
 			return nil, err
 		}
-		if r.config.Settings != nil {
-			if err := json.Unmarshal(r.initialSettings, r.config.Settings); err != nil {
+		if r.settingValues != nil {
+			if err := json.Unmarshal(r.initialSettings, r.settingValues); err != nil {
 				return nil, err
 			}
 		}
@@ -453,8 +537,8 @@ func (r *Runtime) extractInstallation(args []string) ([]string, error) {
 			return nil, fmt.Errorf("connector: installation %s does not exist", selector)
 		}
 		r.installationID, r.stateDir, r.ambiguousInstallations = selector, filepath.Join(r.stateBase, "installations", selector), false
-		if r.config.Settings != nil {
-			if err := json.Unmarshal(r.initialSettings, r.config.Settings); err != nil {
+		if r.settingValues != nil {
+			if err := json.Unmarshal(r.initialSettings, r.settingValues); err != nil {
 				return nil, err
 			}
 		}
@@ -474,15 +558,6 @@ func containsArgument(args []string, value string) bool {
 func installationArgument(args []string) string {
 	for i, arg := range args {
 		if arg == "--installation" && i+1 < len(args) {
-			return args[i+1]
-		}
-	}
-	return ""
-}
-
-func settingsFileArgument(args []string) string {
-	for i, arg := range args {
-		if arg == "--settings-file" && i+1 < len(args) {
 			return args[i+1]
 		}
 	}
@@ -514,7 +589,7 @@ func (r *Runtime) configure(ctx context.Context, args []string) error {
 			return errors.New("connector: candidate settings schema differs from the installed binary; provide candidate settings to upgrade")
 		}
 	}
-	before, err := json.Marshal(r.config.Settings)
+	before, err := json.Marshal(r.settingValues)
 	if err != nil {
 		return err
 	}
@@ -542,24 +617,35 @@ func (r *Runtime) configure(ctx context.Context, args []string) error {
 	if r.config.ServiceMode == ServiceSystem {
 		validator = r.validateFields
 	}
-	if err := configureSettings(ctx, r.config.Settings, r.settingFields, args, r.config.Input, r.config.Output, interactive, validator); err != nil {
-		return err
+	validateProposed := func(ctx context.Context) error {
+		if r.settingHandle != nil {
+			r.settingHandle.publish()
+		}
+		if err := rootBindings.apply(r.settingValues); err != nil {
+			return err
+		}
+		return validator(ctx)
 	}
-	if err := rootBindings.apply(r.config.Settings); err != nil {
-		_ = json.Unmarshal(before, r.config.Settings)
+	if err := configureSettings(ctx, r.settingValues, r.settingFields, args, r.config.Input, r.config.Output, interactive, validateProposed); err != nil {
+		_ = json.Unmarshal(before, r.settingValues)
+		if r.settingHandle != nil {
+			r.settingHandle.publish()
+		}
 		return errors.Join(err, rootBindings.restore())
 	}
 	restore := func(validationErr error) error {
-		_ = json.Unmarshal(before, r.config.Settings)
+		_ = json.Unmarshal(before, r.settingValues)
+		if r.settingHandle != nil {
+			r.settingHandle.publish()
+		}
 		restoreErr := errors.Join(rootBindings.restore(), settingsBefore.restore(), stateBefore.restore(), schemaBefore.restore())
 		if r.config.ServiceMode == ServiceSystem && r.installationID != "" {
 			restoreErr = errors.Join(restoreErr, r.serviceManager().PrepareIdentity(ctx))
 		}
 		return errors.Join(validationErr, restoreErr)
 	}
-	if err := saveSettings(settingsPath, r.config.Settings, r.machineState); err != nil {
-		_ = json.Unmarshal(before, r.config.Settings)
-		return err
+	if err := saveSettings(settingsPath, r.settingValues, r.machineState); err != nil {
+		return restore(err)
 	}
 	if err := saveSettingsSchema(settingsSchemaPath, r.settings, r.settingFields); err != nil {
 		return restore(err)
@@ -633,7 +719,7 @@ func (s fileSnapshot) restore() error {
 
 func (r *Runtime) validateFields(context.Context) error {
 	for _, field := range r.settingFields {
-		if field.required && reflectSettingZero(r.config.Settings, field.index) {
+		if field.required && reflectSettingZero(r.settingValues, field.index) {
 			return fmt.Errorf("connector: required setting %s is missing", field.name)
 		}
 	}
@@ -673,7 +759,11 @@ func (r *Runtime) status(ctx context.Context, args []string) error {
 		return err
 	}
 	service, serviceErr := r.serviceManager().Status(ctx)
-	configured := r.validateForMode(ctx) == nil
+	configured := false
+	_, settingsErr := os.Stat(filepath.Join(r.stateDir, "settings.json"))
+	if schema, schemaErr := loadSettingsSchema(filepath.Join(r.stateDir, "settings-schema.json")); schemaErr == nil && settingsErr == nil && settingsSchemasEqual(schema, r.settings, r.settingFields) {
+		configured = r.validateForMode(ctx) == nil
+	}
 	_, err = fmt.Fprintf(r.config.Output, "configured=%t activated=%t enabled=%t service=%s\n", configured, state.Credential != "", state.Enabled, service)
 	if err != nil {
 		return err
@@ -864,8 +954,8 @@ func (r *Runtime) prepareUpgradeSettings(ctx context.Context, args []string) (fu
 	if err != nil {
 		return nil, nil, fmt.Errorf("connector: load installed settings schema: %w", err)
 	}
-	if r.config.Settings != nil {
-		if err := json.Unmarshal(r.initialSettings, r.config.Settings); err != nil {
+	if r.settingValues != nil {
+		if err := json.Unmarshal(r.initialSettings, r.settingValues); err != nil {
 			return nil, nil, err
 		}
 		encoded, err := readSettings(filepath.Join(r.stateDir, "settings.json"), r.machineState)
@@ -874,14 +964,27 @@ func (r *Runtime) prepareUpgradeSettings(ctx context.Context, args []string) (fu
 		} else if err != nil {
 			return nil, nil, err
 		}
-		if err := migrateSettings(r.config.Settings, r.settingFields, installedSchema, encoded); err != nil {
+		if err := migrateSettings(r.settingValues, r.settingFields, installedSchema, encoded); err != nil {
 			return nil, nil, err
 		}
 		validator := r.validate
 		if r.config.ServiceMode == ServiceSystem {
 			validator = r.validateFields
 		}
-		if err := configureSettingsCommand(ctx, "upgrade", r.config.Settings, r.settingFields, args, r.config.Input, r.config.Output, isTerminal(r.config.Input), validator); err != nil {
+		validateProposed := func(ctx context.Context) error {
+			if r.settingHandle != nil {
+				r.settingHandle.publish()
+			}
+			if err := rootBindings.apply(r.settingValues); err != nil {
+				return err
+			}
+			return validator(ctx)
+		}
+		if err := configureSettingsCommand(ctx, "upgrade", r.settingValues, r.settingFields, args, r.config.Input, r.config.Output, isTerminal(r.config.Input), validateProposed); err != nil {
+			_ = rootBindings.restore()
+			if r.settingHandle != nil {
+				r.settingHandle.publish()
+			}
 			return nil, nil, err
 		}
 	} else {
@@ -892,10 +995,6 @@ func (r *Runtime) prepareUpgradeSettings(ctx context.Context, args []string) (fu
 			return nil, nil, err
 		}
 	}
-	if err := rootBindings.apply(r.config.Settings); err != nil {
-		_ = rootBindings.restore()
-		return nil, nil, err
-	}
 	stagedSettings := filepath.Join(r.stateDir, ".upgrade-settings.json")
 	stagedSchema := filepath.Join(r.stateDir, ".upgrade-settings-schema.json")
 	cleanup := func() {
@@ -903,7 +1002,7 @@ func (r *Runtime) prepareUpgradeSettings(ctx context.Context, args []string) (fu
 		_ = os.Remove(stagedSchema)
 	}
 	cleanup()
-	if err := saveSettings(stagedSettings, r.config.Settings, r.machineState); err != nil {
+	if err := saveSettings(stagedSettings, r.settingValues, r.machineState); err != nil {
 		return nil, nil, errors.Join(err, rootBindings.restore())
 	}
 	if err := saveSettingsSchema(stagedSchema, r.settings, r.settingFields); err != nil {
@@ -956,27 +1055,21 @@ func (r *Runtime) serviceManager() serviceManager {
 
 type directoryRootBinding struct {
 	provider *LocalDirectoryProvider
-	fields   []int
+	field    int
 	previous string
 }
 
 type directoryRootBindings []directoryRootBinding
 
 func (r *Runtime) directoryRootBindings() directoryRootBindings {
-	if r.config.Settings == nil {
-		return nil
-	}
-	settings := reflect.ValueOf(r.config.Settings).Elem()
 	bindings := make(directoryRootBindings, 0, len(r.directories))
 	for _, directory := range r.directories {
-		binding := directoryRootBinding{provider: directory.provider, previous: directory.provider.path}
-		for _, field := range r.settingFields {
-			if field.kind == "directory" && settings.Field(field.index).String() == directory.provider.path {
-				binding.fields = append(binding.fields, field.index)
-			}
-		}
-		if len(binding.fields) > 0 {
-			bindings = append(bindings, binding)
+		if directory.provider.binding != nil {
+			bindings = append(bindings, directoryRootBinding{
+				provider: directory.provider,
+				field:    directory.provider.binding.field.index,
+				previous: directory.provider.path,
+			})
 		}
 	}
 	return bindings
@@ -987,20 +1080,14 @@ func (b directoryRootBindings) apply(settings any) error {
 		return nil
 	}
 	value := reflect.ValueOf(settings).Elem()
+	applied := make(directoryRootBindings, 0, len(b))
 	for _, binding := range b {
-		path := value.Field(binding.fields[0]).String()
-		for _, index := range binding.fields[1:] {
-			if value.Field(index).String() != path {
-				return errors.New("connector: configured directory roots are ambiguous; use distinct initial directory setting values")
-			}
+		path := value.Field(binding.field).String()
+		if err := binding.provider.rebind(path); err != nil {
+			_ = applied.restore()
+			return fmt.Errorf("connector: bind local directory setting: %w", err)
 		}
-		if path == binding.provider.path {
-			continue
-		}
-		if err := binding.provider.Close(); err != nil {
-			return err
-		}
-		binding.provider.path = path
+		applied = append(applied, binding)
 	}
 	return nil
 }
@@ -1008,11 +1095,7 @@ func (b directoryRootBindings) apply(settings any) error {
 func (b directoryRootBindings) restore() error {
 	var result error
 	for _, binding := range b {
-		if binding.provider.path == binding.previous {
-			continue
-		}
-		result = errors.Join(result, binding.provider.Close())
-		binding.provider.path = binding.previous
+		result = errors.Join(result, binding.provider.rebind(binding.previous))
 	}
 	return result
 }
@@ -1113,6 +1196,14 @@ func (r *Runtime) waitReadyArtifact(ctx context.Context, after time.Time, artifa
 }
 
 func (r *Runtime) runService(ctx context.Context) error {
+	runCtx, cancelRun := context.WithCancel(ctx)
+	var initializedDirectories []*LocalDirectoryProvider
+	defer func() {
+		cancelRun()
+		for i := len(initializedDirectories) - 1; i >= 0; i-- {
+			initializedDirectories[i].Close()
+		}
+	}()
 	statusPath := filepath.Join(r.stateDir, "runtime.json")
 	_ = saveRuntimeStatus(statusPath, runtimeStatus{Readiness: protocol.ReadinessStarting, ArtifactVersion: r.config.ArtifactVersion, ArtifactDigest: r.artifactDigest})
 	defer func() {
@@ -1133,11 +1224,17 @@ func (r *Runtime) runService(ctx context.Context) error {
 		return errors.New("connector: activation is required")
 	}
 	for _, directory := range r.directories {
+		directory.provider.setOrigins(state.StorageOrigins)
+		if !directory.provider.configured() {
+			continue
+		}
 		if err := directory.provider.initialize(); err != nil {
 			return fmt.Errorf("connector: directory %s: %w", directory.descriptor.Name, err)
 		}
-		directory.provider.setOrigins(state.StorageOrigins)
-		defer directory.provider.Close()
+		initializedDirectories = append(initializedDirectories, directory.provider)
+	}
+	if err := r.runStartHooks(runCtx); err != nil {
+		return fmt.Errorf("connector: start: %w", err)
 	}
 	client, err := newProtocolClient(state.AirlockURL, state.Credential, r.config.HTTPClient, r.config.AllowInsecureHTTP)
 	if err != nil {
@@ -1150,10 +1247,21 @@ func (r *Runtime) runService(ctx context.Context) error {
 	if err := saveRuntimeStatus(statusPath, runtimeStatus{Readiness: protocol.ReadinessReady, ArtifactVersion: r.config.ArtifactVersion, ArtifactDigest: r.artifactDigest}); err != nil {
 		return err
 	}
-	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
-	defer cancelHeartbeat()
-	go r.heartbeat(heartbeatCtx, client, statusPath)
-	go r.pollCancellations(heartbeatCtx, client)
+	backgroundCtx, cancelBackground := context.WithCancel(runCtx)
+	var background sync.WaitGroup
+	background.Add(2)
+	defer func() {
+		cancelBackground()
+		background.Wait()
+	}()
+	go func() {
+		defer background.Done()
+		r.heartbeat(backgroundCtx, client, statusPath)
+	}()
+	go func() {
+		defer background.Done()
+		r.pollCancellations(backgroundCtx, client)
+	}()
 	semaphore := make(chan struct{}, r.config.MaxConcurrency)
 	var workers sync.WaitGroup
 	defer workers.Wait()
@@ -1222,7 +1330,7 @@ func (r *Runtime) heartbeat(ctx context.Context, client *protocolClient, statusP
 		if err := saveRuntimeStatus(statusPath, runtimeStatus{Readiness: readiness, ArtifactVersion: r.config.ArtifactVersion, ArtifactDigest: r.artifactDigest, Message: message}); err != nil && ctx.Err() == nil {
 			_, _ = fmt.Fprintln(r.config.ErrorOutput, err)
 		}
-		request := protocol.HeartbeatRequest{Handshake: protocol.Handshake{ProtocolMajor: protocol.Major, ProtocolMinor: protocol.Minor, Features: manifest.Features}, Readiness: readiness, ArtifactVersion: r.config.ArtifactVersion, ArtifactDigest: r.artifactDigest, InterfaceHash: manifest.InterfaceHash, ActiveAttempts: r.activeAttempts(), Error: message}
+		request := protocol.HeartbeatRequest{Handshake: protocol.Handshake{ProtocolMajor: protocol.Major, ProtocolMinor: protocol.Minor, Features: manifest.Features}, Readiness: readiness, ArtifactVersion: r.config.ArtifactVersion, ArtifactDigest: manifest.ArtifactDigest, InterfaceHash: manifest.InterfaceHash, ActiveAttempts: r.activeAttempts(), Error: message}
 		if err := client.post(ctx, "/api/connectors/v1/heartbeat", request, nil); err != nil && ctx.Err() == nil {
 			_, _ = fmt.Fprintln(r.config.ErrorOutput, err)
 		}
