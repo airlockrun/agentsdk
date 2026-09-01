@@ -9,15 +9,14 @@ func TestSupportedTargets(t *testing.T) {
 	tests := []struct {
 		id, architecture, goos, goarch, suffix string
 		environment                            []string
-		user, system                           bool
 	}{
-		{id: PlatformLinuxAMD64, architecture: "amd64", goos: "linux", goarch: "amd64", environment: []string{"GOOS=linux", "GOARCH=amd64"}, user: true, system: true},
-		{id: PlatformLinuxARM64, architecture: "arm64", goos: "linux", goarch: "arm64", environment: []string{"GOOS=linux", "GOARCH=arm64"}, user: true, system: true},
-		{id: PlatformLinuxARMv7, architecture: "armv7", goos: "linux", goarch: "arm", environment: []string{"GOOS=linux", "GOARCH=arm", "GOARM=7"}, user: true, system: true},
-		{id: PlatformDarwinAMD64, architecture: "amd64", goos: "darwin", goarch: "amd64", environment: []string{"GOOS=darwin", "GOARCH=amd64"}, user: true},
-		{id: PlatformDarwinARM64, architecture: "arm64", goos: "darwin", goarch: "arm64", environment: []string{"GOOS=darwin", "GOARCH=arm64"}, user: true},
-		{id: PlatformWindowsAMD64, architecture: "amd64", goos: "windows", goarch: "amd64", suffix: ".exe", environment: []string{"GOOS=windows", "GOARCH=amd64"}, user: true, system: true},
-		{id: PlatformWindowsARM64, architecture: "arm64", goos: "windows", goarch: "arm64", suffix: ".exe", environment: []string{"GOOS=windows", "GOARCH=arm64"}, user: true, system: true},
+		{id: PlatformLinuxAMD64, architecture: "amd64", goos: "linux", goarch: "amd64", environment: []string{"GOOS=linux", "GOARCH=amd64"}},
+		{id: PlatformLinuxARM64, architecture: "arm64", goos: "linux", goarch: "arm64", environment: []string{"GOOS=linux", "GOARCH=arm64"}},
+		{id: PlatformLinuxARMv7, architecture: "armv7", goos: "linux", goarch: "arm", environment: []string{"GOOS=linux", "GOARCH=arm", "GOARM=7"}},
+		{id: PlatformDarwinAMD64, architecture: "amd64", goos: "darwin", goarch: "amd64", environment: []string{"GOOS=darwin", "GOARCH=amd64"}},
+		{id: PlatformDarwinARM64, architecture: "arm64", goos: "darwin", goarch: "arm64", environment: []string{"GOOS=darwin", "GOARCH=arm64"}},
+		{id: PlatformWindowsAMD64, architecture: "amd64", goos: "windows", goarch: "amd64", suffix: ".exe", environment: []string{"GOOS=windows", "GOARCH=amd64"}},
+		{id: PlatformWindowsARM64, architecture: "arm64", goos: "windows", goarch: "arm64", suffix: ".exe", environment: []string{"GOOS=windows", "GOARCH=arm64"}},
 	}
 	targets := SupportedTargets()
 	if len(targets) != len(tests) {
@@ -35,9 +34,6 @@ func TestSupportedTargets(t *testing.T) {
 			}
 			if !reflect.DeepEqual(target.GoEnv(), test.environment) {
 				t.Fatalf("GoEnv() = %v, want %v", target.GoEnv(), test.environment)
-			}
-			if target.SupportsServiceMode("user") != test.user || target.SupportsServiceMode("system") != test.system {
-				t.Fatalf("service modes user=%t system=%t", target.SupportsServiceMode("user"), target.SupportsServiceMode("system"))
 			}
 			if targets[i].ID != test.id || seen[test.id] {
 				t.Fatalf("target order or uniqueness failed at %q", test.id)

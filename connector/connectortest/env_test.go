@@ -17,7 +17,7 @@ func TestNewInvokesDefinitionFactoryWithoutRuntimeState(t *testing.T) {
 		}
 		return connector.New(connector.Config{
 			Kind: "factory", Contract: connector.DefineContract("io.airlockrun.factory_test"), Name: "Factory", Description: "Factory test.", ArtifactVersion: "1",
-			Targets: []string{connector.PlatformLinuxAMD64}, ServiceMode: connector.ServiceUser, StateDirectory: stateDirectory,
+			Targets: []string{connector.PlatformLinuxAMD64},
 		})
 	})
 	if env.Runtime == nil || env.Manifest.Interface.Kind != "factory" {

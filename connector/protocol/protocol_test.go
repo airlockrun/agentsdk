@@ -2,7 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
-	"strings"
+	"math"
 	"testing"
 )
 
@@ -51,7 +51,7 @@ func TestValidateManifest(t *testing.T) {
 	}
 	manifest := Manifest{
 		ProtocolMajor: Major, ProtocolMinor: Minor,
-		Targets: []string{PlatformLinuxAMD64}, ServiceMode: "user", ArtifactDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Targets: []string{PlatformLinuxAMD64}, ArtifactDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		Interface: Interface{Kind: "sample", ContractID: "io.airlockrun.sample", Name: "Sample", Description: "Sample connector.", ArtifactVersion: "1",
 			Commands: []CommandDescriptor{{Name: "ping", Revision: 1, Mode: CommandModeUnary, InputSchema: schema, OutputSchema: schema, InputSchemaHash: hash, OutputSchemaHash: hash}}},
 	}
@@ -66,10 +66,41 @@ func TestValidateManifest(t *testing.T) {
 	if err := ValidateManifest(manifest); err == nil {
 		t.Fatal("ValidateManifest accepted revision zero")
 	}
-	manifest.Interface.Commands[0].Revision = 1
-	manifest.ServiceMode = ""
-	if err := ValidateManifest(manifest); err == nil {
-		t.Fatal("ValidateManifest accepted an empty service mode")
+}
+
+func TestValidateManifestInt32Bounds(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Manifest, int)
+	}{
+		{name: "protocol minor", mutate: func(manifest *Manifest, value int) { manifest.ProtocolMinor = value }},
+		{name: "command revision", mutate: func(manifest *Manifest, value int) { manifest.Interface.Commands[0].Revision = value }},
+		{name: "directory revision", mutate: func(manifest *Manifest, value int) { manifest.Interface.Directories[0].Revision = value }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			manifest := validProtocolTestManifest(t)
+			schema := json.RawMessage(`{"type":"object"}`)
+			hash, err := HashJSON(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest.Interface.Commands = []CommandDescriptor{{Name: "ping", Revision: 1, Mode: CommandModeUnary, InputSchema: schema, OutputSchema: schema, InputSchemaHash: hash, OutputSchemaHash: hash}}
+			manifest.Interface.Directories = []DirectoryDescriptor{{Name: "files", Revision: 1, Read: true}}
+			for _, boundary := range []struct {
+				value int
+				ok    bool
+			}{{value: math.MaxInt32, ok: true}, {value: math.MaxInt32 + 1}} {
+				test.mutate(&manifest, boundary.value)
+				manifest.InterfaceHash, err = InterfaceDigest(manifest.Interface)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := ValidateManifest(manifest); (err == nil) != boundary.ok {
+					t.Fatalf("value %d: error = %v, ok = %t", boundary.value, err, boundary.ok)
+				}
+			}
+		})
 	}
 }
 
@@ -95,18 +126,12 @@ func TestValidateManifestTargets(t *testing.T) {
 			t.Fatalf("ValidateManifest accepted targets %v", targets)
 		}
 	}
-	manifest := validProtocolTestManifest(t)
-	manifest.ServiceMode = "system"
-	manifest.Targets = []string{PlatformLinuxAMD64, PlatformDarwinARM64}
-	if err := ValidateManifest(manifest); err == nil || !strings.Contains(err.Error(), "does not support system service mode") {
-		t.Fatalf("ValidateManifest(system Darwin) error = %v", err)
-	}
 }
 
 func validProtocolTestManifest(t *testing.T) Manifest {
 	t.Helper()
 	manifest := Manifest{
-		ProtocolMajor: Major, ProtocolMinor: Minor, Targets: []string{PlatformLinuxAMD64}, ServiceMode: "user",
+		ProtocolMajor: Major, ProtocolMinor: Minor, Targets: []string{PlatformLinuxAMD64},
 		ArtifactDigest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		Interface:      Interface{Kind: "sample", ContractID: "io.airlockrun.sample", Name: "Sample", Description: "Sample connector.", ArtifactVersion: "1"},
 	}
@@ -142,11 +167,7 @@ func TestArtifactDigestWireFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	heartbeatJSON, err := json.Marshal(HeartbeatRequest{ArtifactDigest: digest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, encoded := range map[string][]byte{"manifest": manifestJSON, "heartbeat": heartbeatJSON} {
+	for name, encoded := range map[string][]byte{"manifest": manifestJSON} {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(encoded, &fields); err != nil {
 			t.Fatal(err)
@@ -167,9 +188,6 @@ func TestValidateSettings(t *testing.T) {
 		{name: "duration", setting: SettingDescriptor{Name: "timeout", Kind: "duration", Default: "5s"}, ok: true},
 		{name: "enum", setting: SettingDescriptor{Name: "mode", Kind: "enum", Enum: []string{"one", "two"}, Default: "two"}, ok: true},
 		{name: "secret default", setting: SettingDescriptor{Name: "password", Kind: "secret", Default: "bad"}},
-		{name: "reserved", setting: SettingDescriptor{Name: "check", Kind: "string"}},
-		{name: "internal new flag", setting: SettingDescriptor{Name: "new", Kind: "string"}},
-		{name: "internal settings file flag", setting: SettingDescriptor{Name: "settings-file", Kind: "string"}},
 		{name: "bad integer", setting: SettingDescriptor{Name: "workers", Kind: "integer", Default: "many"}},
 		{name: "enum default", setting: SettingDescriptor{Name: "mode", Kind: "enum", Enum: []string{"one"}, Default: "two"}},
 	}
