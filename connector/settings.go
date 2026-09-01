@@ -112,7 +112,7 @@ func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField
 				return nil, nil, fmt.Errorf("connector: setting %s default: %w", field.Name, err)
 			}
 		}
-		descriptors = append(descriptors, protocol.SettingDescriptor{Name: entry.name, Kind: entry.kind, Description: entry.description, Required: entry.required, Default: entry.defaultValue, Enum: append([]string(nil), entry.enum...)})
+		descriptors = append(descriptors, protocol.SettingDescriptor{Name: entry.name, JSONName: entry.jsonName, Kind: entry.kind, Description: entry.description, Required: entry.required, Default: entry.defaultValue, Enum: append([]string(nil), entry.enum...)})
 		fields = append(fields, entry)
 	}
 	if err := protocol.ValidateSettings(descriptors); err != nil {

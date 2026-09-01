@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -74,6 +75,7 @@ type DirectoryDescriptor struct {
 
 type SettingDescriptor struct {
 	Name        string   `json:"name"`
+	JSONName    string   `json:"jsonName,omitempty"`
 	Kind        string   `json:"kind"`
 	Description string   `json:"description,omitempty"`
 	Required    bool     `json:"required,omitempty"`
@@ -493,11 +495,18 @@ func validateDescriptors(commands []CommandDescriptor, directories []DirectoryDe
 
 func ValidateSettings(settings []SettingDescriptor) error {
 	seen := make(map[string]bool, len(settings))
+	seenJSON := make(map[string]bool, len(settings))
 	for _, setting := range settings {
 		if len(setting.Name) > 63 || !kindPattern.MatchString(setting.Name) || seen[setting.Name] {
 			return fmt.Errorf("connector protocol: invalid or duplicate setting name %q", setting.Name)
 		}
 		seen[setting.Name] = true
+		if setting.JSONName != "" {
+			if !validJSONName(setting.JSONName) || seenJSON[setting.JSONName] {
+				return fmt.Errorf("connector protocol: invalid or duplicate setting JSON name %q", setting.JSONName)
+			}
+			seenJSON[setting.JSONName] = true
+		}
 		if len(setting.Description) > 4096 || len(setting.Default) > 4096 {
 			return fmt.Errorf("connector protocol: setting %q metadata exceeds its limit", setting.Name)
 		}
@@ -571,4 +580,16 @@ func ValidateSettings(settings []SettingDescriptor) error {
 		}
 	}
 	return nil
+}
+
+func validJSONName(name string) bool {
+	for _, character := range name {
+		if strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", character) {
+			continue
+		}
+		if !unicode.IsLetter(character) && !unicode.IsDigit(character) {
+			return false
+		}
+	}
+	return name != ""
 }

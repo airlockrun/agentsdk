@@ -7433,7 +7433,7 @@ func (x *ListAllowedModelsResponse) GetModels() []*AllowedModel {
 type OwnedResourceInfo struct {
 	state           protoimpl.MessageState       `protogen:"open.v1"`
 	Id              string                       `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Type            string                       `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"` // connection | mcp_server | connector
+	Type            string                       `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"` // connection | mcp_server | git_credential | connector | host | connector_target_group
 	Slug            string                       `protobuf:"bytes,3,opt,name=slug,proto3" json:"slug,omitempty"`
 	Name            string                       `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
 	AuthMode        string                       `protobuf:"bytes,5,opt,name=auth_mode,json=authMode,proto3" json:"auth_mode,omitempty"`
@@ -7446,6 +7446,7 @@ type OwnedResourceInfo struct {
 	ConnectorStatus *ConnectorResourceStatusInfo `protobuf:"bytes,12,opt,name=connector_status,json=connectorStatus,proto3" json:"connector_status,omitempty"`
 	OwnerUserId     string                       `protobuf:"bytes,13,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
 	OwnerName       string                       `protobuf:"bytes,14,opt,name=owner_name,json=ownerName,proto3" json:"owner_name,omitempty"`
+	HostId          string                       `protobuf:"bytes,15,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"` // set for connector installations
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -7574,6 +7575,13 @@ func (x *OwnedResourceInfo) GetOwnerUserId() string {
 func (x *OwnedResourceInfo) GetOwnerName() string {
 	if x != nil {
 		return x.OwnerName
+	}
+	return ""
+}
+
+func (x *OwnedResourceInfo) GetHostId() string {
+	if x != nil {
+		return x.HostId
 	}
 	return ""
 }
@@ -12200,7 +12208,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x05model\x18\x02 \x01(\tR\x05model\"q\n" +
 	"\x19ListAllowedModelsResponse\x12\"\n" +
 	"\funrestricted\x18\x01 \x01(\bR\funrestricted\x120\n" +
-	"\x06models\x18\x02 \x03(\v2\x18.airlock.v1.AllowedModelR\x06models\"\x94\x04\n" +
+	"\x06models\x18\x02 \x03(\v2\x18.airlock.v1.AllowedModelR\x06models\"\xad\x04\n" +
 	"\x11OwnedResourceInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x12\n" +
@@ -12222,7 +12230,8 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x10connector_status\x18\f \x01(\v2'.airlock.v1.ConnectorResourceStatusInfoR\x0fconnectorStatus\x12\"\n" +
 	"\rowner_user_id\x18\r \x01(\tR\vownerUserId\x12\x1d\n" +
 	"\n" +
-	"owner_name\x18\x0e \x01(\tR\townerName\"\x85\x06\n" +
+	"owner_name\x18\x0e \x01(\tR\townerName\x12\x17\n" +
+	"\ahost_id\x18\x0f \x01(\tR\x06hostId\"\x85\x06\n" +
 	"\x1bConnectorResourceStatusInfo\x12\x1c\n" +
 	"\treadiness\x18\x01 \x01(\tR\treadiness\x12)\n" +
 	"\x10readiness_detail\x18\x02 \x01(\tR\x0freadinessDetail\x12\x16\n" +

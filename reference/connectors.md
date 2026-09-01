@@ -128,7 +128,9 @@ Supported setting kinds are `string`, `secret`, `bool`, `integer`, `duration`,
 `url`, `file`, `directory`, and `enum`. Options are `required`, `default=`,
 `enum=a|b`, `name=`, and `description=`. Secrets use `connector.Secret` and do
 not appear in manifests. Settings are flat exported struct fields and cannot use
-custom JSON/text marshalers or JSON tag options.
+custom JSON/text marshalers or JSON tag options. Published setting descriptors
+carry both the canonical setting name and the exact JSON field name so management
+clients can generate typed configuration forms.
 
 `Runtime.OnStart` executes in registration order after settings and directory
 roots are bound. Its context is canceled when the host stops the child. Use it

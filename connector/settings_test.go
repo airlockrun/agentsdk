@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -18,6 +19,9 @@ type testSettings struct {
 
 func TestHostSettingsAreStrictDefaultedAndPublished(t *testing.T) {
 	settings := DefineSettings[testSettings]()
+	if got := settings.descriptors[0]; got.Name != "endpoint" || got.JSONName != "endpoint" {
+		t.Fatalf("endpoint descriptor = %+v", got)
+	}
 	var seen testSettings
 	runtime := New(Config{Kind: "settings", Contract: DefineContract("io.airlockrun.settings"), Name: "Settings", Description: "Settings test.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: settings, Validate: func(context.Context) error { seen = settings.Get(); return nil }})
 	if err := runtime.applySettings(context.Background(), []byte(`{"endpoint":"https://example.com","token":"secret"}`), nil); err != nil {
@@ -28,6 +32,30 @@ func TestHostSettingsAreStrictDefaultedAndPublished(t *testing.T) {
 	}
 	if err := runtime.applySettings(context.Background(), []byte(`{"endpoint":"https://example.com","token":"secret","unknown":true}`), nil); err == nil {
 		t.Fatal("unknown setting accepted")
+	}
+}
+
+func TestSettingsPublishExactJSONNameSeparatelyFromDisplayName(t *testing.T) {
+	settings := DefineSettings[struct {
+		BrokerURL string `json:"broker.url" connector:"url,name=mqtt-broker,required"`
+	}]()
+	if got := settings.descriptors[0]; got.Name != "mqtt-broker" || got.JSONName != "broker.url" {
+		t.Fatalf("descriptor = %+v", got)
+	}
+	var seen string
+	runtime := New(Config{Kind: "settings-json-name", Contract: DefineContract("io.airlockrun.settings_json_name"), Name: "Settings", Description: "Settings test.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Settings: settings, Validate: func(context.Context) error { seen = settings.Get().BrokerURL; return nil }})
+	manifest, err := json.Marshal(runtime.Manifest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(manifest), `"jsonName":"broker.url"`) {
+		t.Fatalf("manifest = %s", manifest)
+	}
+	if err := runtime.applySettings(context.Background(), []byte(`{"broker.url":"https://example.com"}`), nil); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "https://example.com" {
+		t.Fatalf("broker URL = %q", seen)
 	}
 }
 

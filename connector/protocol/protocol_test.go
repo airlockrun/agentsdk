@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -186,7 +187,11 @@ func TestValidateSettings(t *testing.T) {
 		ok      bool
 	}{
 		{name: "duration", setting: SettingDescriptor{Name: "timeout", Kind: "duration", Default: "5s"}, ok: true},
+		{name: "exact JSON name", setting: SettingDescriptor{Name: "broker-url", JSONName: "broker_url", Kind: "url"}, ok: true},
 		{name: "enum", setting: SettingDescriptor{Name: "mode", Kind: "enum", Enum: []string{"one", "two"}, Default: "two"}, ok: true},
+		{name: "punctuated JSON name", setting: SettingDescriptor{Name: "broker-url", JSONName: "broker.url", Kind: "url"}, ok: true},
+		{name: "long JSON name", setting: SettingDescriptor{Name: "broker-url", JSONName: strings.Repeat("a", 256), Kind: "url"}, ok: true},
+		{name: "invalid JSON name", setting: SettingDescriptor{Name: "broker-url", JSONName: "broker\nurl", Kind: "url"}},
 		{name: "secret default", setting: SettingDescriptor{Name: "password", Kind: "secret", Default: "bad"}},
 		{name: "bad integer", setting: SettingDescriptor{Name: "workers", Kind: "integer", Default: "many"}},
 		{name: "enum default", setting: SettingDescriptor{Name: "mode", Kind: "enum", Enum: []string{"one"}, Default: "two"}},
@@ -198,5 +203,11 @@ func TestValidateSettings(t *testing.T) {
 				t.Fatalf("error = %v", err)
 			}
 		})
+	}
+	if err := ValidateSettings([]SettingDescriptor{
+		{Name: "first", JSONName: "shared", Kind: "string"},
+		{Name: "second", JSONName: "shared", Kind: "string"},
+	}); err == nil {
+		t.Fatal("duplicate JSON setting name accepted")
 	}
 }
