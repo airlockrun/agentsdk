@@ -1,5 +1,5 @@
-// Package protocol defines the JSON protocol exchanged by connector binaries
-// and Airlock. It has no platform or Agents SDK runtime dependencies.
+// Package protocol defines the JSON protocols exchanged by connector children,
+// airlock-host, and Airlock. It has no platform or runtime dependencies.
 package protocol
 
 import (
@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"regexp"
 	"sort"
@@ -29,6 +30,8 @@ const (
 	MaxJobPayloadBytes      = MaxEnvelopeBytes - (64 << 10)
 	MaxInlineFileBytes      = (MaxJobPayloadBytes * 3 / 4) - (16 << 10)
 	MaxManifestBytes        = 4 << 20
+	MaxInterfaceBytes       = 1 << 20
+	MaxSettingsSchemaBytes  = 256 << 10
 	MaxSchemaBytes          = 512 << 10
 	MaxTransferPartBytes    = 16 << 20
 	MaxTransferParts        = 10000
@@ -41,13 +44,6 @@ var (
 	namePattern       = regexp.MustCompile(`^[a-z][a-z0-9]*(_[a-z0-9]+)*$`)
 	kindPattern       = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 )
-
-var reservedSettingNames = map[string]bool{
-	"airlock": true, "check": true, "installation": true, "no-browser": true,
-	"no-wait": true, "non-interactive": true, "wait": true, "new": true,
-	"draft": true, "identity": true, "service-name": true, "result": true,
-	"settings-file": true, "output-json": true, "error": true,
-}
 
 type CommandMode string
 
@@ -100,7 +96,6 @@ type Manifest struct {
 	ProtocolMinor  int                 `json:"protocolMinor"`
 	Features       []string            `json:"features"`
 	Targets        []string            `json:"targets"`
-	ServiceMode    string              `json:"serviceMode"`
 	Interface      Interface           `json:"interface"`
 	InterfaceHash  string              `json:"interfaceHash"`
 	ArtifactDigest string              `json:"artifactDigest"`
@@ -113,37 +108,6 @@ type Requirement struct {
 	Directories []DirectoryDescriptor `json:"directories"`
 }
 
-type Handshake struct {
-	ProtocolMajor int      `json:"protocolMajor"`
-	ProtocolMinor int      `json:"protocolMinor"`
-	Features      []string `json:"features"`
-}
-
-type DeviceCodeRequest struct {
-	Manifest Manifest `json:"manifest"`
-}
-
-type DeviceCodeResponse struct {
-	DeviceSecret        string    `json:"deviceSecret"`
-	UserCode            string    `json:"userCode"`
-	VerificationURL     string    `json:"verificationUrl"`
-	ExpiresAt           time.Time `json:"expiresAt"`
-	PollIntervalSeconds int       `json:"pollIntervalSeconds"`
-	StorageOrigins      []string  `json:"storageOrigins,omitempty"`
-}
-
-type EnrollmentRequest struct {
-	DeviceSecret string `json:"deviceSecret"`
-}
-
-type EnrollmentResponse struct {
-	Status         string   `json:"status"`
-	InstallationID string   `json:"installationId,omitempty"`
-	Credential     string   `json:"credential,omitempty"`
-	StorageOrigins []string `json:"storageOrigins,omitempty"`
-	Error          string   `json:"error,omitempty"`
-}
-
 type Readiness string
 
 const (
@@ -154,16 +118,6 @@ const (
 	ReadinessUnhealthy          Readiness = "unhealthy"
 	ReadinessReady              Readiness = "ready"
 )
-
-type HeartbeatRequest struct {
-	Handshake       Handshake       `json:"handshake"`
-	Readiness       Readiness       `json:"readiness"`
-	ArtifactVersion string          `json:"artifactVersion"`
-	ArtifactDigest  string          `json:"artifactDigest"`
-	InterfaceHash   string          `json:"interfaceHash"`
-	ActiveAttempts  []ActiveAttempt `json:"activeAttempts,omitempty"`
-	Error           string          `json:"error,omitempty"`
-}
 
 type ActiveAttempt struct {
 	JobID        string `json:"jobId"`
@@ -429,7 +383,7 @@ func ValidateRequirement(r Requirement) error {
 }
 
 func ValidateManifest(m Manifest) error {
-	if m.ProtocolMajor != Major || m.ProtocolMinor < 0 {
+	if m.ProtocolMajor != Major || m.ProtocolMinor < 0 || m.ProtocolMinor > math.MaxInt32 {
 		return fmt.Errorf("connector protocol: unsupported protocol %d.%d", m.ProtocolMajor, m.ProtocolMinor)
 	}
 	if err := ValidateKind(m.Interface.Kind); err != nil {
@@ -440,9 +394,6 @@ func ValidateManifest(m Manifest) error {
 	}
 	if err := ValidateArtifactDigest(m.ArtifactDigest); err != nil {
 		return err
-	}
-	if m.ServiceMode != "user" && m.ServiceMode != "system" {
-		return errors.New("connector protocol: service mode must be user or system")
 	}
 	if strings.TrimSpace(m.Interface.Name) == "" || strings.TrimSpace(m.Interface.Description) == "" || strings.TrimSpace(m.Interface.ArtifactVersion) == "" {
 		return errors.New("connector protocol: interface name, description, and artifact version are required")
@@ -455,7 +406,7 @@ func ValidateManifest(m Manifest) error {
 	}
 	seenTargets := make(map[string]bool)
 	for _, targetID := range m.Targets {
-		target, ok := LookupTarget(targetID)
+		_, ok := LookupTarget(targetID)
 		if !ok {
 			return fmt.Errorf("connector protocol: unsupported target %q", targetID)
 		}
@@ -463,9 +414,6 @@ func ValidateManifest(m Manifest) error {
 			return fmt.Errorf("connector protocol: duplicate target %q", targetID)
 		}
 		seenTargets[targetID] = true
-		if !target.SupportsServiceMode(m.ServiceMode) {
-			return fmt.Errorf("connector protocol: target %q does not support %s service mode", targetID, m.ServiceMode)
-		}
 	}
 	if len(m.Targets) == 0 {
 		return errors.New("connector protocol: at least one target is required")
@@ -479,6 +427,14 @@ func ValidateManifest(m Manifest) error {
 	}
 	if err := ValidateSettings(m.Settings); err != nil {
 		return err
+	}
+	interfaceJSON, err := json.Marshal(m.Interface)
+	if err != nil || len(interfaceJSON) > MaxInterfaceBytes {
+		return errors.New("connector protocol: interface exceeds its aggregate size limit")
+	}
+	settingsJSON, err := json.Marshal(m.Settings)
+	if err != nil || len(settingsJSON) > MaxSettingsSchemaBytes {
+		return errors.New("connector protocol: settings schema exceeds its aggregate size limit")
 	}
 	digest, err := InterfaceDigest(m.Interface)
 	if err != nil {
@@ -500,7 +456,7 @@ func validateDescriptors(commands []CommandDescriptor, directories []DirectoryDe
 			return fmt.Errorf("connector protocol: duplicate operation %q", command.Name)
 		}
 		seen[command.Name] = "command"
-		if command.Revision < 1 || (command.Mode != CommandModeUnary && command.Mode != CommandModeJob) {
+		if command.Revision < 1 || command.Revision > math.MaxInt32 || (command.Mode != CommandModeUnary && command.Mode != CommandModeJob) {
 			return fmt.Errorf("connector protocol: command %q has invalid revision or mode", command.Name)
 		}
 		if len(command.Description) > 4096 || len(command.InputSchema) > MaxSchemaBytes || len(command.OutputSchema) > MaxSchemaBytes {
@@ -525,7 +481,7 @@ func validateDescriptors(commands []CommandDescriptor, directories []DirectoryDe
 			return fmt.Errorf("connector protocol: duplicate operation %q", directory.Name)
 		}
 		seen[directory.Name] = "directory"
-		if directory.Revision < 1 || (!directory.Read && !directory.Write && !directory.List) {
+		if directory.Revision < 1 || directory.Revision > math.MaxInt32 || (!directory.Read && !directory.Write && !directory.List) {
 			return fmt.Errorf("connector protocol: directory %q has invalid revision or access", directory.Name)
 		}
 		if len(directory.Description) > 4096 {
@@ -538,8 +494,8 @@ func validateDescriptors(commands []CommandDescriptor, directories []DirectoryDe
 func ValidateSettings(settings []SettingDescriptor) error {
 	seen := make(map[string]bool, len(settings))
 	for _, setting := range settings {
-		if len(setting.Name) > 63 || !kindPattern.MatchString(setting.Name) || seen[setting.Name] || reservedSettingNames[setting.Name] || reservedSettingNames[strings.TrimSuffix(setting.Name, "-file")] || reservedSettingNames[strings.TrimSuffix(setting.Name, "-stdin")] {
-			return fmt.Errorf("connector protocol: invalid, duplicate, or reserved setting name %q", setting.Name)
+		if len(setting.Name) > 63 || !kindPattern.MatchString(setting.Name) || seen[setting.Name] {
+			return fmt.Errorf("connector protocol: invalid or duplicate setting name %q", setting.Name)
 		}
 		seen[setting.Name] = true
 		if len(setting.Description) > 4096 || len(setting.Default) > 4096 {
@@ -612,13 +568,6 @@ func ValidateSettings(settings []SettingDescriptor) error {
 			}
 		default:
 			return fmt.Errorf("connector protocol: setting %q has unsupported kind %q", setting.Name, setting.Kind)
-		}
-	}
-	for _, setting := range settings {
-		if setting.Kind == "secret" {
-			if seen[setting.Name+"-file"] || seen[setting.Name+"-stdin"] {
-				return fmt.Errorf("connector protocol: setting %q conflicts with generated secret flags", setting.Name)
-			}
 		}
 	}
 	return nil

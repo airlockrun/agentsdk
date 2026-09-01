@@ -60,7 +60,7 @@ Read the relevant companion at its build-container path:
 - **[Database](reference/database.md)** (`/libs/agentsdk/reference/database.md`) — Postgres: goose migrations, sqlc
   queries, database-only Go migrations, build-time validation, and when to use jobs instead.
 - **[Connectors](reference/connectors.md)** (`/libs/agentsdk/reference/connectors.md`) — typed remote-machine
-  contracts, `RegisterConnector`, command and directory clients, connector runtime, settings, activation, and services.
+  contracts, command and directory clients, hosted-child runtime, settings, and framed transport.
 
 ## Verifying a build
 

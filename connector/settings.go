@@ -1,16 +1,11 @@
 package connector
 
 import (
-	"bufio"
-	"context"
 	"encoding"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
-	"io"
 	"net/url"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -20,8 +15,8 @@ import (
 	"github.com/airlockrun/agentsdk/connector/protocol"
 )
 
-// Secret is a locally stored sensitive setting. Configure accepts it only from
-// a file or standard input so it does not enter shell history or process lists.
+// Secret marks a sensitive host-supplied setting. Its value is never included
+// in connector manifests or logs by the SDK.
 type Secret string
 
 type settingsField struct {
@@ -33,125 +28,6 @@ type settingsField struct {
 	required     bool
 	defaultValue string
 	enum         []string
-}
-
-const settingsSchemaVersion = 1
-
-type persistedSetting struct {
-	protocol.SettingDescriptor
-	JSONName string `json:"jsonName"`
-}
-
-type persistedSettingsSchema struct {
-	Version  int                `json:"version"`
-	Settings []persistedSetting `json:"settings"`
-}
-
-func saveSettingsSchema(path string, descriptors []protocol.SettingDescriptor, fields []settingsField) error {
-	if len(descriptors) != len(fields) {
-		return errors.New("connector: settings descriptor and field counts differ")
-	}
-	settings := make([]persistedSetting, len(fields))
-	for i := range fields {
-		settings[i] = persistedSetting{SettingDescriptor: descriptors[i], JSONName: fields[i].jsonName}
-	}
-	body, err := json.Marshal(persistedSettingsSchema{Version: settingsSchemaVersion, Settings: settings})
-	if err != nil {
-		return err
-	}
-	return atomicWrite(path, body, 0o600)
-}
-
-func loadSettingsSchema(path string) (persistedSettingsSchema, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return persistedSettingsSchema{}, err
-	}
-	var schema persistedSettingsSchema
-	if err := strictUnmarshal(body, &schema); err != nil {
-		return persistedSettingsSchema{}, fmt.Errorf("connector: decode settings schema: %w", err)
-	}
-	if schema.Version != settingsSchemaVersion {
-		return persistedSettingsSchema{}, fmt.Errorf("connector: unsupported settings schema version %d", schema.Version)
-	}
-	descriptors := make([]protocol.SettingDescriptor, len(schema.Settings))
-	seenJSON := make(map[string]bool, len(schema.Settings))
-	for i, setting := range schema.Settings {
-		if setting.JSONName == "" || seenJSON[setting.JSONName] {
-			return persistedSettingsSchema{}, errors.New("connector: persisted settings schema has invalid JSON field names")
-		}
-		seenJSON[setting.JSONName] = true
-		descriptors[i] = setting.SettingDescriptor
-	}
-	if err := protocol.ValidateSettings(descriptors); err != nil {
-		return persistedSettingsSchema{}, err
-	}
-	return schema, nil
-}
-
-func settingsSchemasEqual(installed persistedSettingsSchema, descriptors []protocol.SettingDescriptor, fields []settingsField) bool {
-	if len(installed.Settings) != len(fields) || len(descriptors) != len(fields) {
-		return false
-	}
-	byName := make(map[string]persistedSetting, len(installed.Settings))
-	for _, setting := range installed.Settings {
-		byName[setting.Name] = setting
-	}
-	for i, field := range fields {
-		setting, found := byName[field.name]
-		if !found || setting.JSONName != field.jsonName || !reflect.DeepEqual(setting.SettingDescriptor, descriptors[i]) {
-			return false
-		}
-	}
-	return true
-}
-
-func migrateSettings(settings any, fields []settingsField, current persistedSettingsSchema, encoded []byte) error {
-	var values map[string]json.RawMessage
-	if err := strictUnmarshal(encoded, &values); err != nil {
-		return fmt.Errorf("connector: decode installed settings for upgrade: %w", err)
-	}
-	old := make(map[string]persistedSetting, len(current.Settings))
-	for _, setting := range current.Settings {
-		old[setting.Name] = setting
-	}
-	target := reflect.ValueOf(settings).Elem()
-	for _, field := range fields {
-		installed, found := old[field.name]
-		if !found || installed.Kind != field.kind {
-			continue
-		}
-		raw, found := values[installed.JSONName]
-		if !found {
-			continue
-		}
-		candidate := reflect.New(target.Field(field.index).Type())
-		if err := json.Unmarshal(raw, candidate.Interface()); err != nil || !settingValueCompatible(candidate.Elem(), field) {
-			continue
-		}
-		target.Field(field.index).Set(candidate.Elem())
-	}
-	return nil
-}
-
-func settingValueCompatible(value reflect.Value, field settingsField) bool {
-	if value.IsZero() {
-		return true
-	}
-	switch field.kind {
-	case "url":
-		parsed, err := url.ParseRequestURI(value.String())
-		return err == nil && parsed.Scheme != "" && parsed.Host != ""
-	case "enum":
-		for _, allowed := range field.enum {
-			if value.String() == allowed {
-				return true
-			}
-		}
-		return false
-	default:
-		return true
-	}
 }
 
 func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField, error) {
@@ -187,8 +63,7 @@ func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField
 			kind = inferSettingKind(field.Type)
 		}
 		name := kebab(field.Name)
-		jsonTag := field.Tag.Get("json")
-		jsonParts := strings.Split(jsonTag, ",")
+		jsonParts := strings.Split(field.Tag.Get("json"), ",")
 		if len(jsonParts) > 1 {
 			return nil, nil, fmt.Errorf("connector: setting %s cannot use JSON tag options", field.Name)
 		}
@@ -201,21 +76,21 @@ func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField
 		}
 		entry := settingsField{index: i, name: name, jsonName: jsonName, kind: kind}
 		for _, option := range parts[1:] {
-			key, value, found := strings.Cut(option, "=")
+			key, optionValue, found := strings.Cut(option, "=")
 			switch key {
 			case "required":
 				entry.required = true
 			case "name":
-				if !found || value == "" {
+				if !found || optionValue == "" {
 					return nil, nil, fmt.Errorf("connector: setting %s has empty name", field.Name)
 				}
-				entry.name = value
+				entry.name = optionValue
 			case "default":
-				entry.defaultValue = value
+				entry.defaultValue = optionValue
 			case "enum":
-				entry.enum = strings.Split(value, "|")
+				entry.enum = strings.Split(optionValue, "|")
 			case "description":
-				entry.description = value
+				entry.description = optionValue
 			case "":
 			default:
 				return nil, nil, fmt.Errorf("connector: setting %s has unknown option %q", field.Name, option)
@@ -233,14 +108,11 @@ func settingsSchema(settings any) ([]protocol.SettingDescriptor, []settingsField
 			return nil, nil, fmt.Errorf("connector: setting %s: %w", field.Name, err)
 		}
 		if entry.defaultValue != "" {
-			if err := setSetting(reflect.New(field.Type).Elem(), entry, entry.defaultValue); err != nil {
+			if err := setSetting(value.Elem().Field(i), entry, entry.defaultValue); err != nil {
 				return nil, nil, fmt.Errorf("connector: setting %s default: %w", field.Name, err)
 			}
 		}
-		descriptors = append(descriptors, protocol.SettingDescriptor{
-			Name: entry.name, Kind: entry.kind, Description: entry.description,
-			Required: entry.required, Default: entry.defaultValue, Enum: append([]string(nil), entry.enum...),
-		})
+		descriptors = append(descriptors, protocol.SettingDescriptor{Name: entry.name, Kind: entry.kind, Description: entry.description, Required: entry.required, Default: entry.defaultValue, Enum: append([]string(nil), entry.enum...)})
 		fields = append(fields, entry)
 	}
 	if err := protocol.ValidateSettings(descriptors); err != nil {
@@ -308,137 +180,10 @@ func validateSettingType(kind string, value reflect.Type) error {
 	return nil
 }
 
-func configureSettings(ctx context.Context, settings any, fields []settingsField, args []string, input io.Reader, output io.Writer, interactive bool, validate func(context.Context) error) error {
-	return configureSettingsCommand(ctx, "configure", settings, fields, args, input, output, interactive, validate)
-}
-
-func configureSettingsCommand(ctx context.Context, command string, settings any, fields []settingsField, args []string, input io.Reader, output io.Writer, interactive bool, validate func(context.Context) error) error {
-	current, err := json.Marshal(settings)
-	if err != nil {
-		return err
-	}
-	copyValue := reflect.New(reflect.ValueOf(settings).Elem().Type())
-	if err := json.Unmarshal(current, copyValue.Interface()); err != nil {
-		return err
-	}
-	set := flag.NewFlagSet(command, flag.ContinueOnError)
-	set.SetOutput(output)
-	nonInteractive := set.Bool("non-interactive", false, "fail rather than prompt")
-	values := make(map[string]*string)
-	secretStdin := make(map[string]*bool)
-	for _, field := range fields {
-		if field.kind == "secret" {
-			values[field.name] = set.String(field.name+"-file", "", "read secret from file")
-			secretStdin[field.name] = set.Bool(field.name+"-stdin", false, "read secret from standard input")
-		} else {
-			values[field.name] = set.String(field.name, "", field.description)
-		}
-	}
-	if err := set.Parse(args); err != nil {
-		return err
-	}
-	if set.NArg() != 0 {
-		return fmt.Errorf("connector: %s takes no positional arguments", command)
-	}
-	providedFlags := make(map[string]bool)
-	set.Visit(func(value *flag.Flag) { providedFlags[value.Name] = true })
-	reader := bufio.NewReader(input)
-	for _, field := range fields {
-		var raw string
-		provided := false
-		if field.kind == "secret" {
-			file := *values[field.name]
-			stdin := *secretStdin[field.name]
-			if file != "" && stdin {
-				return fmt.Errorf("connector: --%s-file and --%s-stdin are mutually exclusive", field.name, field.name)
-			}
-			if file != "" {
-				body, err := os.ReadFile(file)
-				if err != nil {
-					return fmt.Errorf("read --%s-file: %w", field.name, err)
-				}
-				raw, provided = trimLineEnding(string(body)), true
-			} else if stdin {
-				body, err := io.ReadAll(io.LimitReader(reader, 1024*1024+1))
-				if err != nil || len(body) > 1024*1024 {
-					return fmt.Errorf("read --%s-stdin: secret exceeds 1 MiB or could not be read", field.name)
-				}
-				raw, provided = trimLineEnding(string(body)), true
-			}
-		} else if providedFlags[field.name] {
-			raw, provided = *values[field.name], true
-		}
-		fieldValue := copyValue.Elem().Field(field.index)
-		if !provided && isZero(fieldValue) && field.defaultValue != "" {
-			raw, provided = field.defaultValue, true
-		}
-		promptForUpgrade := command != "upgrade" || (field.required && isZero(fieldValue))
-		if !provided && interactive && !*nonInteractive && field.kind != "secret" && promptForUpgrade {
-			_, _ = fmt.Fprintf(output, "%s: ", field.name)
-			line, err := reader.ReadString('\n')
-			if err != nil && !errors.Is(err, io.EOF) {
-				return err
-			}
-			raw = strings.TrimSpace(line)
-			provided = raw != ""
-		}
-		if provided {
-			if err := setSetting(fieldValue, field, raw); err != nil {
-				return fmt.Errorf("connector: setting %s: %w", field.name, err)
-			}
-		}
-		if field.required && isZero(fieldValue) {
-			if field.kind == "secret" {
-				return fmt.Errorf("connector: required setting %s is missing; provide --%s-file or --%s-stdin", field.name, field.name, field.name)
-			}
-			return fmt.Errorf("connector: required setting %s is missing; provide --%s", field.name, field.name)
-		}
-	}
-	original := reflect.ValueOf(settings).Elem()
-	proposed := copyValue.Elem()
-	original.Set(proposed)
-	if validate != nil {
-		if err := validate(ctx); err != nil {
-			var restored any = reflect.New(original.Type()).Interface()
-			_ = json.Unmarshal(current, restored)
-			original.Set(reflect.ValueOf(restored).Elem())
-			return fmt.Errorf("connector: configuration self-test: %w", err)
-		}
-	}
-	return nil
-}
-
-func trimLineEnding(value string) string {
-	value = strings.TrimSuffix(value, "\n")
-	return strings.TrimSuffix(value, "\r")
-}
-
 func setSetting(value reflect.Value, field settingsField, raw string) error {
 	switch field.kind {
-	case "string", "file", "secret":
+	case "string", "url", "file", "directory", "enum", "secret":
 		value.SetString(raw)
-	case "directory":
-		if raw != "" && !pathIsAbsolute(raw) {
-			return errors.New("must be an absolute path")
-		}
-		value.SetString(raw)
-	case "url":
-		parsed, err := url.ParseRequestURI(raw)
-		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-			return errors.New("must be an absolute URL")
-		}
-		value.SetString(raw)
-	case "enum":
-		if len(field.enum) == 0 {
-			return errors.New("enum requires connector tag enum=a|b")
-		}
-		for _, allowed := range field.enum {
-			if raw == allowed {
-				value.SetString(raw)
-				return nil
-			}
-		}
-		return fmt.Errorf("must be one of %s", strings.Join(field.enum, ", "))
 	case "bool":
 		parsed, err := strconv.ParseBool(raw)
 		if err != nil {
@@ -458,16 +203,43 @@ func setSetting(value reflect.Value, field settingsField, raw string) error {
 		}
 		value.SetInt(int64(parsed))
 	}
-	return nil
+	return validateSettingValue(value, field)
 }
 
-func isZero(value reflect.Value) bool { return value.IsZero() }
+func validateSettingValue(value reflect.Value, field settingsField) error {
+	switch field.kind {
+	case "string", "file", "secret", "bool", "integer", "duration":
+		return nil
+	case "directory":
+		if value.String() != "" && !pathIsAbsolute(value.String()) {
+			return errors.New("must be an absolute path")
+		}
+	case "url":
+		parsed, err := url.ParseRequestURI(value.String())
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return errors.New("must be an absolute URL")
+		}
+	case "enum":
+		if len(field.enum) == 0 {
+			return errors.New("enum requires connector tag enum=a|b")
+		}
+		for _, allowed := range field.enum {
+			if value.String() == allowed {
+				return nil
+			}
+		}
+		return fmt.Errorf("must be one of %s", strings.Join(field.enum, ", "))
+	default:
+		return fmt.Errorf("unsupported kind %q", field.kind)
+	}
+	return nil
+}
 
 func kebab(value string) string {
 	var result strings.Builder
 	runes := []rune(value)
 	for i, r := range runes {
-		if i > 0 && unicode.IsUpper(r) && (unicode.IsLower(runes[i-1]) || unicode.IsDigit(runes[i-1]) || (i+1 < len(runes) && unicode.IsLower(runes[i+1]))) {
+		if i > 0 && unicode.IsUpper(r) && (unicode.IsLower(runes[i-1]) || unicode.IsDigit(runes[i-1]) || i+1 < len(runes) && unicode.IsLower(runes[i+1])) {
 			result.WriteByte('-')
 		}
 		result.WriteRune(unicode.ToLower(r))

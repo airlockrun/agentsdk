@@ -526,7 +526,7 @@ func (d *LocalDirectoryProvider) validateURL(raw string) error {
 	}
 	origin := strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host)
 	if !d.origins[origin] {
-		return fmt.Errorf("connector: transfer origin %q was not approved during activation", origin)
+		return fmt.Errorf("connector: transfer origin %q was not approved by the host", origin)
 	}
 	return nil
 }

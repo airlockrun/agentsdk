@@ -47,7 +47,7 @@ For package-level SDK details and runtime contracts, read the
 [agentsdk reference](REFERENCE.md). Its focused companions cover
 [object storage](reference/files.md), [interactive authentication](reference/auth-web.md), and
 [Postgres-backed agents](reference/database.md). The [connector reference](reference/connectors.md)
-covers pure-Go remote-machine connectors, typed contracts, local settings, and service lifecycle.
+covers hosted pure-Go connectors, typed contracts, local settings, and child transport.
 
 ## Hello-world agent
 
@@ -89,12 +89,10 @@ Agent repositories may also contain connector binaries under immediate
 native manifest and cross-compiles its explicitly declared Linux, macOS, and
 Windows targets with `CGO_ENABLED=0`.
 
-macOS connector artifacts are unsigned and not notarized. Verify the published
-SHA-256 before installation; if Gatekeeper quarantines the verified file, remove
-only that file's quarantine attribute with `xattr -d com.apple.quarantine
-/path/to/connector`. The [connector reference](reference/connectors.md) details
-the user LaunchAgent installation path and desktop privacy (TCC) limits. macOS
-system services are unsupported.
+Connector artifacts are installed and supervised by `airlock-host`, which
+verifies the exact size and SHA-256 before executing a candidate. Connector
+binaries use framed stdin/stdout child transport and never hold an Airlock
+credential.
 
 `go tool air connectors list` and `go tool air connectors inspect <id>` inspect
 visible installed connector resources without executing operations.

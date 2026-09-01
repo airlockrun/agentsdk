@@ -184,7 +184,7 @@ func TestCommandAndRequirement(t *testing.T) {
 func TestRegistrationRejectsForeignContract(t *testing.T) {
 	runtimeContract := DefineContract("io.airlockrun.runtime_contract")
 	foreign := DefineContract("io.airlockrun.foreign_contract")
-	runtime := New(Config{Kind: "contract", Contract: runtimeContract, Name: "Contract", Description: "Contract identity.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser})
+	runtime := New(Config{Kind: "contract", Contract: runtimeContract, Name: "Contract", Description: "Contract identity.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}})
 	command := DefineCommand[contractInput, contractOutput](foreign, "run", CommandOptions{Revision: 1})
 	assertPanicContains(t, "command contract does not match", func() {
 		command.Handle(runtime, func(Context, contractInput) (contractOutput, error) { return contractOutput{}, nil })
@@ -197,7 +197,7 @@ func TestRegistrationRejectsForeignContract(t *testing.T) {
 
 func TestManifestFreezesRegistrations(t *testing.T) {
 	contract := DefineContract("io.airlockrun.frozen_contract")
-	runtime := New(Config{Kind: "frozen", Contract: contract, Name: "Frozen", Description: "Frozen registrations.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, ServiceMode: ServiceUser})
+	runtime := New(Config{Kind: "frozen", Contract: contract, Name: "Frozen", Description: "Frozen registrations.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}})
 	runtime.Manifest()
 	command := DefineCommand[contractInput, contractOutput](contract, "run", CommandOptions{Revision: 1})
 	assertPanicContains(t, "registrations are frozen", func() {
@@ -212,7 +212,7 @@ func TestManifestDoesNotAliasDefinitionData(t *testing.T) {
 	targets := []string{PlatformLinuxAMD64}
 	settings := DefineSettings[settingsType]()
 	contract := DefineContract("io.airlockrun.immutable_manifest")
-	runtime := New(Config{Kind: "immutable", Contract: contract, Name: "Immutable", Description: "Immutable manifest.", ArtifactVersion: "1", Targets: targets, Settings: settings, ServiceMode: ServiceUser})
+	runtime := New(Config{Kind: "immutable", Contract: contract, Name: "Immutable", Description: "Immutable manifest.", ArtifactVersion: "1", Targets: targets, Settings: settings})
 	command := DefineCommand[contractInput, contractOutput](contract, "run", CommandOptions{Revision: 1})
 	command.Handle(runtime, func(Context, contractInput) (contractOutput, error) { return contractOutput{}, nil })
 	targets[0] = PlatformLinuxARM64

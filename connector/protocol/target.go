@@ -10,11 +10,6 @@ const (
 	PlatformWindowsARM64 = "windows-arm64"
 )
 
-const (
-	serviceModeUser uint8 = 1 << iota
-	serviceModeSystem
-)
-
 // Target defines one supported connector artifact platform and its Go build
 // recipe. Connector manifests carry Target.ID values; builders own the recipe.
 type Target struct {
@@ -24,18 +19,17 @@ type Target struct {
 	GOARCH           string
 	ExecutableSuffix string
 
-	goarm        string
-	serviceModes uint8
+	goarm string
 }
 
 var supportedTargets = [...]Target{
-	{ID: PlatformLinuxAMD64, Architecture: "amd64", GOOS: "linux", GOARCH: "amd64", serviceModes: serviceModeUser | serviceModeSystem},
-	{ID: PlatformLinuxARM64, Architecture: "arm64", GOOS: "linux", GOARCH: "arm64", serviceModes: serviceModeUser | serviceModeSystem},
-	{ID: PlatformLinuxARMv7, Architecture: "armv7", GOOS: "linux", GOARCH: "arm", goarm: "7", serviceModes: serviceModeUser | serviceModeSystem},
-	{ID: PlatformDarwinAMD64, Architecture: "amd64", GOOS: "darwin", GOARCH: "amd64", serviceModes: serviceModeUser},
-	{ID: PlatformDarwinARM64, Architecture: "arm64", GOOS: "darwin", GOARCH: "arm64", serviceModes: serviceModeUser},
-	{ID: PlatformWindowsAMD64, Architecture: "amd64", GOOS: "windows", GOARCH: "amd64", ExecutableSuffix: ".exe", serviceModes: serviceModeUser | serviceModeSystem},
-	{ID: PlatformWindowsARM64, Architecture: "arm64", GOOS: "windows", GOARCH: "arm64", ExecutableSuffix: ".exe", serviceModes: serviceModeUser | serviceModeSystem},
+	{ID: PlatformLinuxAMD64, Architecture: "amd64", GOOS: "linux", GOARCH: "amd64"},
+	{ID: PlatformLinuxARM64, Architecture: "arm64", GOOS: "linux", GOARCH: "arm64"},
+	{ID: PlatformLinuxARMv7, Architecture: "armv7", GOOS: "linux", GOARCH: "arm", goarm: "7"},
+	{ID: PlatformDarwinAMD64, Architecture: "amd64", GOOS: "darwin", GOARCH: "amd64"},
+	{ID: PlatformDarwinARM64, Architecture: "arm64", GOOS: "darwin", GOARCH: "arm64"},
+	{ID: PlatformWindowsAMD64, Architecture: "amd64", GOOS: "windows", GOARCH: "amd64", ExecutableSuffix: ".exe"},
+	{ID: PlatformWindowsARM64, Architecture: "arm64", GOOS: "windows", GOARCH: "arm64", ExecutableSuffix: ".exe"},
 }
 
 // LookupTarget returns the registered build target for id.
@@ -60,17 +54,4 @@ func (t Target) GoEnv() []string {
 		environment = append(environment, "GOARM="+t.goarm)
 	}
 	return environment
-}
-
-// SupportsServiceMode reports whether target has a managed-service lifecycle
-// for mode.
-func (t Target) SupportsServiceMode(mode string) bool {
-	switch mode {
-	case "user":
-		return t.serviceModes&serviceModeUser != 0
-	case "system":
-		return t.serviceModes&serviceModeSystem != 0
-	default:
-		return false
-	}
 }
