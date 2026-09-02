@@ -3368,6 +3368,7 @@ type SystemSettingsInfo struct {
 	DefaultImageGenProviderId  string                 `protobuf:"bytes,14,opt,name=default_image_gen_provider_id,json=defaultImageGenProviderId,proto3" json:"default_image_gen_provider_id,omitempty"`
 	DefaultSearchProviderId    string                 `protobuf:"bytes,15,opt,name=default_search_provider_id,json=defaultSearchProviderId,proto3" json:"default_search_provider_id,omitempty"`
 	DefaultEmbeddingProviderId string                 `protobuf:"bytes,16,opt,name=default_embedding_provider_id,json=defaultEmbeddingProviderId,proto3" json:"default_embedding_provider_id,omitempty"`
+	UiLocale                   string                 `protobuf:"bytes,20,opt,name=ui_locale,json=uiLocale,proto3" json:"ui_locale,omitempty"`
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
 }
@@ -3510,6 +3511,13 @@ func (x *SystemSettingsInfo) GetDefaultSearchProviderId() string {
 func (x *SystemSettingsInfo) GetDefaultEmbeddingProviderId() string {
 	if x != nil {
 		return x.DefaultEmbeddingProviderId
+	}
+	return ""
+}
+
+func (x *SystemSettingsInfo) GetUiLocale() string {
+	if x != nil {
+		return x.UiLocale
 	}
 	return ""
 }
@@ -7882,7 +7890,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\vdescription\x18\x03 \x01(\tR\vdescription\x12\x1e\n" +
 	"\n" +
 	"subscribed\x18\x04 \x01(\bR\n" +
-	"subscribed\"\xec\a\n" +
+	"subscribed\"\x89\b\n" +
 	"\x12SystemSettingsInfo\x12.\n" +
 	"\x13default_build_model\x18\x01 \x01(\tR\x11defaultBuildModel\x12,\n" +
 	"\x12default_exec_model\x18\x02 \x01(\tR\x10defaultExecModel\x12*\n" +
@@ -7900,7 +7908,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x17default_tts_provider_id\x18\r \x01(\tR\x14defaultTtsProviderId\x12@\n" +
 	"\x1ddefault_image_gen_provider_id\x18\x0e \x01(\tR\x19defaultImageGenProviderId\x12;\n" +
 	"\x1adefault_search_provider_id\x18\x0f \x01(\tR\x17defaultSearchProviderId\x12A\n" +
-	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderIdJ\x04\b\x11\x10\x12J\x04\b\x12\x10\x13J\x04\b\x13\x10\x14R\x1ftelegram_manager_bot_configuredR\x1dtelegram_manager_bot_usernameR\x1atelegram_manager_bot_error\"\x7f\n" +
+	"\x1ddefault_embedding_provider_id\x18\x10 \x01(\tR\x1adefaultEmbeddingProviderId\x12\x1b\n" +
+	"\tui_locale\x18\x14 \x01(\tR\buiLocaleJ\x04\b\x11\x10\x12J\x04\b\x12\x10\x13J\x04\b\x13\x10\x14R\x1ftelegram_manager_bot_configuredR\x1dtelegram_manager_bot_usernameR\x1atelegram_manager_bot_error\"\x7f\n" +
 	"\x1eCreateManagedBotSessionRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1b\n" +
 	"\tis_system\x18\x02 \x01(\bR\bisSystem\x12%\n" +

@@ -881,6 +881,7 @@ type ActivateRequest struct {
 	Password       string                 `protobuf:"bytes,2,opt,name=password,proto3" json:"password,omitempty"`
 	DisplayName    string                 `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	ActivationCode string                 `protobuf:"bytes,4,opt,name=activation_code,json=activationCode,proto3" json:"activation_code,omitempty"`
+	UiLocale       string                 `protobuf:"bytes,5,opt,name=ui_locale,json=uiLocale,proto3" json:"ui_locale,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -939,6 +940,13 @@ func (x *ActivateRequest) GetDisplayName() string {
 func (x *ActivateRequest) GetActivationCode() string {
 	if x != nil {
 		return x.ActivationCode
+	}
+	return ""
+}
+
+func (x *ActivateRequest) GetUiLocale() string {
+	if x != nil {
+		return x.UiLocale
 	}
 	return ""
 }
@@ -11751,12 +11759,13 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x19DeviceLoginApproveRequest\x12\x1b\n" +
 	"\tuser_code\x18\x01 \x01(\tR\buserCode\"5\n" +
 	"\x16DeviceLoginDenyRequest\x12\x1b\n" +
-	"\tuser_code\x18\x01 \x01(\tR\buserCode\"\x8f\x01\n" +
+	"\tuser_code\x18\x01 \x01(\tR\buserCode\"\xac\x01\n" +
 	"\x0fActivateRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12\x1a\n" +
 	"\bpassword\x18\x02 \x01(\tR\bpassword\x12!\n" +
 	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12'\n" +
-	"\x0factivation_code\x18\x04 \x01(\tR\x0eactivationCode\"\x89\x01\n" +
+	"\x0factivation_code\x18\x04 \x01(\tR\x0eactivationCode\x12\x1b\n" +
+	"\tui_locale\x18\x05 \x01(\tR\buiLocale\"\x89\x01\n" +
 	"\x11CreateUserRequest\x12\x14\n" +
 	"\x05email\x18\x01 \x01(\tR\x05email\x12!\n" +
 	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1a\n" +
