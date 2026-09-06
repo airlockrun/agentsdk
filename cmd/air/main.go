@@ -12,6 +12,7 @@
 //	air deploy -m "Fix retries"  upload this repo's source and start a build
 //	air pull                     fast-forward this workspace from Airlock
 //	air clone <agent> <dir>      clone Airlock source without Git
+//	air env list                 list operator-managed environment variables
 //
 // init and update render the same airlock-managed files airlock's builder
 // produces; toolchain install ensures the pinned templ/sqlc/tailwind/daisyui versions
@@ -81,6 +82,8 @@ func run(args []string) error {
 		return cmdBuild(args[1:])
 	case "integrations":
 		return cmdIntegrations(args[1:])
+	case "env":
+		return cmdEnv(args[1:])
 	case "connectors":
 		return cmdConnectors(args[1:])
 	case "connection":
@@ -114,6 +117,11 @@ Usage:
   air toolchain install           ensure the pinned build tools and references
   air build [dir]                 run the local build chain
   air integrations list [flags]   list configured external integrations
+  air env list [flags]            list agent environment variable declarations
+  air env get <slug> [flags]      print one configured non-secret value
+  air env set <slug> <value> [flags]
+                                   set one declared non-secret value
+  air env clear <slug> [flags]    clear one declared non-secret value
   air connectors list [--json]    list connector resources visible to you
   air connectors inspect <id>     inspect one connector interface
   air connection request ...      call a target's HTTP connection

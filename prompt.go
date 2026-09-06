@@ -148,9 +148,10 @@ func handlePrompt(agent *Agent) http.HandlerFunc {
 
 		// Build runner options.
 		opts := sol.RunnerOptions{
-			Agent: solAgent,
-			Bus:   runBus,
-			Quiet: true,
+			Agent:                 solAgent,
+			Bus:                   runBus,
+			Quiet:                 true,
+			ToolCallExecutionMode: stream.ToolCallExecutionSync,
 			Model: proxy.Model("", proxy.Options{
 				BaseURL: run.agent.client.baseURL,
 				Token:   run.agent.client.token,

@@ -275,7 +275,7 @@ Copyright 2026 Oleg Karpov
 
 
 ================================================================================
-github.com/airlockrun/goai v0.1.5
+github.com/airlockrun/goai v0.1.7
 ================================================================================
 Copyright 2026 Oleg Karpov
 
@@ -493,7 +493,7 @@ goai is distributed. See LICENSE for the full license text.
 
 
 ================================================================================
-github.com/airlockrun/sol v0.1.8
+github.com/airlockrun/sol v0.1.10
 ================================================================================
 Copyright 2026 Oleg Karpov
 
