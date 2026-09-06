@@ -80,7 +80,8 @@ func cmdDeploy(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := ensureDeploySDKVersion(ctx, baseURL, token); err != nil {
+	sdkInfo, err := ensureDeploySDKVersion(ctx, baseURL, token)
+	if err != nil {
 		return err
 	}
 	var target agentRemoteBinding
@@ -95,9 +96,13 @@ func cmdDeploy(args []string) error {
 	if err != nil {
 		return err
 	}
+	agentBaseImage, err := deployAgentBaseImage(f.dir, sdkInfo.GetAgentBaseImage())
+	if err != nil {
+		return err
+	}
 	if err := runUpdate(f.dir, scaffold.ScaffoldData{
 		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  defaultBaseImage,
+		AgentBaseImage:  agentBaseImage,
 	}); err != nil {
 		return err
 	}
@@ -268,24 +273,61 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 	return f, nil
 }
 
-func ensureDeploySDKVersion(ctx context.Context, baseURL, token string) error {
+func ensureDeploySDKVersion(ctx context.Context, baseURL, token string) (*airlockv1.GetAgentSDKInfoResponse, error) {
 	var resp airlockv1.GetAgentSDKInfoResponse
 	if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/agent-sdk", token, nil, &resp); err != nil {
-		return fmt.Errorf("check Airlock SDK version: %w", err)
+		return nil, fmt.Errorf("check Airlock SDK version: %w", err)
 	}
 	serverVersion := strings.TrimPrefix(resp.GetVersion(), "v")
 	localVersion := strings.TrimPrefix(agentsdk.Version, "v")
 	if serverVersion == "" {
-		return errors.New("check Airlock SDK version: server response did not include a version")
+		return nil, errors.New("check Airlock SDK version: server response did not include a version")
 	}
 	if compatibleSDKVersions(serverVersion, localVersion) {
-		return nil
+		return &resp, nil
 	}
 	commandImport := resp.GetCommandImport()
 	if commandImport == "" {
 		commandImport = "github.com/airlockrun/agentsdk/cmd/air"
 	}
-	return fmt.Errorf("Airlock uses agentsdk v%s, but this air CLI is v%s; update this repo, validate the build, then rerun deploy:\n  go get -tool %s@v%s\n  go tool air update\n  go tool air build", serverVersion, localVersion, commandImport, serverVersion)
+	return nil, fmt.Errorf("Airlock uses agentsdk v%s, but this air CLI is v%s; update this repo, validate the build, then rerun deploy:\n  go get -tool %s@v%s\n  go tool air update\n  go tool air build", serverVersion, localVersion, commandImport, serverVersion)
+}
+
+func deployAgentBaseImage(dir, serverImage string) (string, error) {
+	if image := strings.TrimSpace(serverImage); image != "" {
+		return image, nil
+	}
+	image, err := finalDockerfileFromImage(filepath.Join(dir, "Dockerfile"))
+	if err != nil {
+		return "", fmt.Errorf("choose agent base image: Airlock SDK metadata did not include agent_base_image and the workspace Dockerfile has no usable runtime FROM image: %w", err)
+	}
+	return image, nil
+}
+
+func finalDockerfileFromImage(path string) (string, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	var image string
+	for lineNumber, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !strings.EqualFold(fields[0], "FROM") {
+			continue
+		}
+		fields = fields[1:]
+		for len(fields) > 0 && strings.HasPrefix(fields[0], "--") {
+			fields = fields[1:]
+		}
+		if len(fields) != 1 && (len(fields) != 3 || !strings.EqualFold(fields[1], "AS")) {
+			return "", fmt.Errorf("parse %s:%d: expected FROM [--flag=value] image [AS name]", path, lineNumber+1)
+		}
+		image = fields[0]
+	}
+	if image == "" {
+		return "", fmt.Errorf("parse %s: no FROM instruction", path)
+	}
+	return image, nil
 }
 
 // compatibleSDKVersions accepts a local CLI from the same major/minor series

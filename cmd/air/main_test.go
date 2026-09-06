@@ -506,6 +506,9 @@ func TestUsageIncludesVersion(t *testing.T) {
 	if !strings.Contains(out.String(), "--reauthenticate") {
 		t.Fatalf("usage does not document --reauthenticate:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "air env set <slug> <value>") {
+		t.Fatalf("usage does not document env commands:\n%s", out.String())
+	}
 }
 
 func TestParseDeployFlags(t *testing.T) {
@@ -585,6 +588,7 @@ func TestSlugFromName(t *testing.T) {
 
 func TestEnsureDeploySDKVersion(t *testing.T) {
 	t.Run("accepts matching version", func(t *testing.T) {
+		const agentBaseImage = "ghcr.io/airlockrun/airlock-agent-base:v0.6.3"
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/api/v1/agent-sdk" {
 				t.Fatalf("unexpected path %s", r.URL.Path)
@@ -593,12 +597,19 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 				t.Fatalf("Authorization = %q", got)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"version":"` + agentsdk.Version + `","commandImport":"github.com/airlockrun/agentsdk/cmd/air"}`))
+			w.Write([]byte(`{"version":"` + agentsdk.Version + `","commandImport":"github.com/airlockrun/agentsdk/cmd/air","agentBaseImage":"` + agentBaseImage + `"}`))
 		}))
 		defer srv.Close()
 
-		if err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok"); err != nil {
+		info, err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok")
+		if err != nil {
 			t.Fatalf("ensureDeploySDKVersion: %v", err)
+		}
+		if info.GetVersion() != agentsdk.Version {
+			t.Fatalf("version = %q, want %q", info.GetVersion(), agentsdk.Version)
+		}
+		if info.GetAgentBaseImage() != agentBaseImage {
+			t.Fatalf("agent base image = %q, want %q", info.GetAgentBaseImage(), agentBaseImage)
 		}
 	})
 
@@ -614,7 +625,7 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		if err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok"); err != nil {
+		if _, err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok"); err != nil {
 			t.Fatalf("ensureDeploySDKVersion: %v", err)
 		}
 	})
@@ -626,7 +637,7 @@ func TestEnsureDeploySDKVersion(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok")
+		_, err := ensureDeploySDKVersion(context.Background(), srv.URL, "tok")
 		if err == nil {
 			t.Fatal("ensureDeploySDKVersion accepted mismatched version")
 		}

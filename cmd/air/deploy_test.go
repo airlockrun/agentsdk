@@ -5,12 +5,74 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/scaffold"
 )
+
+func TestDeployUpdateAgentBaseImage(t *testing.T) {
+	const (
+		workspaceImage = "ghcr.io/airlockrun/airlock-agent-base:v0.6.3"
+		serverImage    = "ghcr.io/airlockrun/airlock-agent-base:v0.6.4"
+	)
+	tests := []struct {
+		name       string
+		metadata   string
+		want       string
+		dockerfile string
+	}{
+		{
+			name:       "server canonical image",
+			metadata:   serverImage,
+			want:       serverImage,
+			dockerfile: "FROM golang:1.26 AS builder\nFROM " + workspaceImage + "\n",
+		},
+		{
+			name:       "omitted metadata preserves workspace runtime image",
+			want:       workspaceImage,
+			dockerfile: "# syntax=docker/dockerfile:1\nFROM --platform=$BUILDPLATFORM golang:1.26 AS builder\n\n# Runtime\n  from " + workspaceImage + "\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mustWrite(t, filepath.Join(dir, "Dockerfile"), tt.dockerfile)
+			image, err := deployAgentBaseImage(dir, tt.metadata)
+			if err != nil {
+				t.Fatalf("deployAgentBaseImage: %v", err)
+			}
+			if image != tt.want {
+				t.Fatalf("image = %q, want %q", image, tt.want)
+			}
+			if err := scaffold.GenerateDockerfile(dir, scaffold.ScaffoldData{
+				AgentSDKVersion: "v" + agentsdk.Version,
+				AgentBaseImage:  image,
+			}); err != nil {
+				t.Fatalf("GenerateDockerfile: %v", err)
+			}
+			body, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), "# Runtime\nFROM "+tt.want+"\n") {
+				t.Fatalf("runtime image not preserved:\n%s", body)
+			}
+		})
+	}
+}
+
+func TestDeployAgentBaseImageRequiresMetadataOrDockerfileImage(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "Dockerfile"), "# no runtime stage\n")
+	_, err := deployAgentBaseImage(dir, "")
+	if err == nil || !strings.Contains(err.Error(), "metadata did not include agent_base_image") || !strings.Contains(err.Error(), "no FROM instruction") {
+		t.Fatalf("deployAgentBaseImage error = %v", err)
+	}
+}
 
 func TestCmdDeployExplainsUnavailableBoundAgent(t *testing.T) {
 	const (
