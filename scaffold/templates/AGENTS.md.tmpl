@@ -24,6 +24,38 @@ Two other documents complete the picture:
   styling palette, anything a future upgrade needs to know about).
   Keep it short and current as you go.
 
+## Inspecting remote builds
+
+After `go tool air deploy -m "Describe this deployment"`, inspect the build
+without uploading or changing this workspace:
+
+```sh
+go tool air deploy list --limit 10
+go tool air deploy status --watch --logs
+go tool air deploy status --build <UUID> --json
+```
+
+Both commands take an optional repo directory and the deploy target flags
+`--remote`, `--url`, and `--agent <slug-or-id>`. They use saved operator login
+credentials (refresh may update the external login store), enforce remote
+binding conflicts, and do not require SDK version compatibility. Codegen
+integration tokens cannot use these commands.
+
+List returns newest-first builds with full IDs; `--limit` accepts 1-50 and
+defaults to 10. Status selects the latest build unless `--build` is supplied.
+Watch polls every two seconds, pins that ID, and stops on complete, failed, or
+Ctrl-C. `--logs` shows persisted Docker and Sol logs, printing additions during
+watch; replaced or truncated snapshots are marked and reprinted. Build status
+and deployment phase describe that build, not the agent's current runtime or
+which image is currently deployed.
+
+`--json` prints the typed API response; status JSON includes persisted logs.
+It cannot be combined with `--watch`. A failed build prints its snapshot before
+returning a nonzero exit with an error on stderr, also in JSON mode. A building
+snapshot without watch succeeds immediately. No builds is an explicit error.
+Use `./list` or `./status` for directory names that match these subcommands;
+valid directory/message deploy invocations are source uploads.
+
 ## What "an app" usually means
 
 Requests are often a single line — "build me a Spotify app", "a kanban

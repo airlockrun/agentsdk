@@ -38,7 +38,32 @@ Inside an agent repository, use the pinned tool for authoring and deployment:
 go tool air toolchain install
 go tool air build
 go tool air deploy -m "Describe this deployment"
+go tool air deploy list --limit 10
+go tool air deploy status --watch --logs
 ```
+
+`deploy list [dir]` shows the newest builds with full build IDs, type, status,
+start time, and message. `--limit` defaults to 10 and accepts 1-50.
+`deploy status [dir]` inspects the latest build, or a specific `--build <UUID>`.
+Both accept `--remote`, `--url`, and `--agent <slug-or-id>` with the same binding
+conflict checks as source deployment, and use the saved login for that URL.
+They do not upload source, start builds, check SDK compatibility, or write the
+workspace. Login refresh can update credentials outside the repository.
+
+Status shows build lifecycle, deployment phase, timestamps, source ref, errors,
+and job blockers. `--logs` adds persisted Docker and Sol logs. `--watch` polls
+every two seconds, pins the selected build even if a newer build starts, and
+prints only new log content; replaced or truncated snapshots are marked and
+reprinted. Ctrl-C cancels the watch. A complete build is historical build state,
+not a claim that its image is currently deployed or that the agent is running.
+
+Both commands support `--json` using the typed API response (`builds` for list,
+`build` for status). Status JSON includes persisted logs even without `--logs`.
+`--watch --json` is rejected. Failed status prints its snapshot, then exits
+nonzero with an error on stderr, including in JSON mode. A building snapshot
+without `--watch` succeeds immediately. An empty build history is an explicit
+error. A valid `deploy list -m "message"` uploads a directory named `list`;
+use `./list` or `./status` to make these directory names unambiguous.
 
 Running `airlock` inside an agent repository delegates non-bootstrap commands
 to `go tool air`; the repository's `go.mod` remains the version source of truth.

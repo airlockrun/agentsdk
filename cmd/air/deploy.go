@@ -43,6 +43,9 @@ func cmdDeploy(args []string) error {
 		return errors.New("deploy is unavailable with a codegen integration token")
 	}
 	f, err := parseDeployFlags(args)
+	if err != nil && len(args) > 0 && (args[0] == "list" || args[0] == "status") {
+		return cmdDeployBuilds(args[0], args[1:])
+	}
 	if err != nil {
 		return err
 	}
