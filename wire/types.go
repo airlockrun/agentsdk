@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/connector/protocol"
-	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/sol/session"
 	"github.com/airlockrun/sol/websearch"
 	"github.com/google/uuid"
@@ -92,28 +91,20 @@ type FileInfo struct {
 }
 
 type PromptInput struct {
-	Messages         []message.Message `json:"messages"`
-	Message          string            `json:"message,omitempty"`
-	ConversationID   string            `json:"conversationId,omitempty"`
-	ProviderID       string            `json:"providerId,omitempty"`
-	ModelID          string            `json:"modelId,omitempty"`
-	Temperature      *float64          `json:"temperature,omitempty"`
-	MaxOutputTokens  *int              `json:"maxOutputTokens,omitempty"`
-	ProviderOptions  json.RawMessage   `json:"providerOptions,omitempty"`
-	Files            []FileInfo        `json:"files,omitempty"`
-	ResumeRunID      string            `json:"resumeRunId,omitempty"`
-	Approved         *bool             `json:"approved,omitempty"`
-	Source           string            `json:"source,omitempty"`
-	ExpectedSyncHash string            `json:"expectedSyncHash,omitempty"`
-	Instructions     string            `json:"instructions,omitempty"`
-	CallerAccess     Access            `json:"callerAccess,omitempty"`
-	VisibleSiblings  []uuid.UUID       `json:"visibleSiblings,omitempty"`
-	ForceCompact     bool              `json:"forceCompact,omitempty"`
-	AutoConfirm      bool              `json:"autoConfirm,omitempty"`
-	DirectTools      bool              `json:"directTools,omitempty"`
-	Platform         string            `json:"platform,omitempty"`
-	UserDisplayName  string            `json:"userDisplayName,omitempty"`
-	UserEmail        string            `json:"userEmail,omitempty"`
+	Message         string     `json:"message,omitempty"`
+	ConversationID  string     `json:"conversationId,omitempty"`
+	Temperature     *float64   `json:"temperature,omitempty"`
+	Files           []FileInfo `json:"files,omitempty"`
+	ResumeRunID     string     `json:"resumeRunId,omitempty"`
+	Approved        *bool      `json:"approved,omitempty"`
+	Source          string     `json:"source,omitempty"`
+	Instructions    string     `json:"instructions,omitempty"`
+	CallerAccess    Access     `json:"callerAccess,omitempty"`
+	ForceCompact    bool       `json:"forceCompact,omitempty"`
+	DirectTools     bool       `json:"directTools,omitempty"`
+	Platform        string     `json:"platform,omitempty"`
+	UserDisplayName string     `json:"userDisplayName,omitempty"`
+	UserEmail       string     `json:"userEmail,omitempty"`
 }
 
 type DirectoryDef struct {
@@ -275,24 +266,25 @@ type MCPContent struct {
 // synchronization. Slices are deterministically ordered by their identifiers,
 // except Instructions and StartupHooks, whose registration order is semantic.
 type AgentManifest struct {
-	Version      string             `json:"version"`
-	Description  string             `json:"description"`
-	Emoji        string             `json:"emoji"`
-	Tools        []ToolDef          `json:"tools"`
-	Webhooks     []WebhookDef       `json:"webhooks"`
-	JobHandlers  []JobHandlerDef    `json:"jobHandlers"`
-	JobCrons     []JobCronDef       `json:"jobCrons"`
-	Routes       []RouteDef         `json:"routes"`
-	Topics       []TopicDef         `json:"topics"`
-	MCPServers   []MCPDef           `json:"mcpServers"`
-	Connections  []ConnectionDef    `json:"connections"`
-	EnvVars      []EnvVarDef        `json:"envVars"`
-	Directories  []DirectoryDef     `json:"directories"`
-	Instructions []InstructionDef   `json:"instructions"`
-	ModelSlots   []ModelSlotDef     `json:"modelSlots"`
-	StaticAssets []StaticAssetDef   `json:"staticAssets"`
-	StartupHooks []StartupHookDef   `json:"startupHooks"`
-	Connectors   []ConnectorNeedDef `json:"connectors"`
+	RuntimeProtocol string             `json:"runtimeProtocol"`
+	Version         string             `json:"version"`
+	Description     string             `json:"description"`
+	Emoji           string             `json:"emoji"`
+	Tools           []ToolDef          `json:"tools"`
+	Webhooks        []WebhookDef       `json:"webhooks"`
+	JobHandlers     []JobHandlerDef    `json:"jobHandlers"`
+	JobCrons        []JobCronDef       `json:"jobCrons"`
+	Routes          []RouteDef         `json:"routes"`
+	Topics          []TopicDef         `json:"topics"`
+	MCPServers      []MCPDef           `json:"mcpServers"`
+	Connections     []ConnectionDef    `json:"connections"`
+	EnvVars         []EnvVarDef        `json:"envVars"`
+	Directories     []DirectoryDef     `json:"directories"`
+	Instructions    []InstructionDef   `json:"instructions"`
+	ModelSlots      []ModelSlotDef     `json:"modelSlots"`
+	StaticAssets    []StaticAssetDef   `json:"staticAssets"`
+	StartupHooks    []StartupHookDef   `json:"startupHooks"`
+	Connectors      []ConnectorNeedDef `json:"connectors"`
 }
 
 type ConnectorNeedDef struct {
@@ -415,11 +407,11 @@ type StartupHookDef struct {
 }
 
 type SyncResponse struct {
+	RuntimeProtocol   string                     `json:"runtimeProtocol"`
 	PromptData        PromptData                 `json:"promptData"`
 	MCPAuthStatus     []MCPAuthStatus            `json:"mcpAuthStatus,omitempty"`
 	MCPSchemas        map[string][]MCPToolSchema `json:"mcpSchemas,omitempty"`
 	PublicStorageBase string                     `json:"publicStorageBase,omitempty"`
-	SyncStateHash     string                     `json:"syncStateHash,omitempty"`
 }
 
 type PromptData struct {

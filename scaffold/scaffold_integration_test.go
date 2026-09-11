@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
@@ -166,7 +167,7 @@ func TestAgenttestFindsModuleMigrations(t *testing.T) {
 		// guard), which would crash the agent before it binds /health.
 		// Other endpoints just need a 200 with parseable JSON.
 		if r.URL.Path == "/api/agent/sync" {
-			w.Write([]byte(`{"promptData":{"agentDashboardUrl":"http://airlock.test/agents/test-agent","agentRouteUrl":"http://agent.test"}}`))
+			_ = json.NewEncoder(w).Encode(wire.SyncResponse{RuntimeProtocol: wire.AppRuntimeProtocol, PromptData: wire.PromptData{AgentDashboardURL: "http://airlock.test/agents/test-agent", AgentRouteURL: "http://agent.test"}})
 		} else {
 			w.Write([]byte(`{}`))
 		}

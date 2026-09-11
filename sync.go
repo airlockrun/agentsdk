@@ -40,6 +40,9 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 		return fmt.Errorf("sync with Airlock: %w", err)
 	}
 
+	if err := wire.CheckAppRuntimeProtocol(syncResp.RuntimeProtocol); err != nil {
+		return fmt.Errorf("sync handshake: %w", err)
+	}
 	a.applySyncResponse(syncResp)
 
 	// Log MCP auth issues.
@@ -220,24 +223,25 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 	}
 
 	return wire.AgentManifest{
-		Version:      Version,
-		Description:  a.description,
-		Emoji:        a.emoji,
-		Tools:        tools,
-		Webhooks:     webhooks,
-		JobHandlers:  jobManifest.JobHandlers,
-		JobCrons:     jobManifest.JobCrons,
-		Routes:       routes,
-		Topics:       topics,
-		MCPServers:   mcpServers,
-		Connections:  connections,
-		EnvVars:      envVars,
-		Directories:  directories,
-		Instructions: instructions,
-		ModelSlots:   modelSlots,
-		StaticAssets: staticAssets,
-		StartupHooks: startupHooks,
-		Connectors:   connectors,
+		RuntimeProtocol: wire.AppRuntimeProtocol,
+		Version:         Version,
+		Description:     a.description,
+		Emoji:           a.emoji,
+		Tools:           tools,
+		Webhooks:        webhooks,
+		JobHandlers:     jobManifest.JobHandlers,
+		JobCrons:        jobManifest.JobCrons,
+		Routes:          routes,
+		Topics:          topics,
+		MCPServers:      mcpServers,
+		Connections:     connections,
+		EnvVars:         envVars,
+		Directories:     directories,
+		Instructions:    instructions,
+		ModelSlots:      modelSlots,
+		StaticAssets:    staticAssets,
+		StartupHooks:    startupHooks,
+		Connectors:      connectors,
 	}
 }
 

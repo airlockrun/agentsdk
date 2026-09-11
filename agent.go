@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/internal/binding"
-	"github.com/airlockrun/agentsdk/internal/prompt"
+
 	"github.com/airlockrun/agentsdk/internal/testcaller"
 	"github.com/airlockrun/agentsdk/wire"
-	"github.com/google/uuid"
 	_ "github.com/lib/pq" // register "postgres" driver for agent.DB()
 	"go.uber.org/zap"
 )
@@ -86,11 +85,8 @@ type Agent struct {
 	// back via syncResponse. /refresh re-runs sync to pick up changes
 	// (e.g. MCP OAuth completion) without restarting the container.
 	syncMu            sync.RWMutex
-	promptData        wire.PromptData                 // platform-supplied prompt inputs (siblings, URLs); filled by applySyncResponse
-	mcpAuthStatus     []wire.MCPAuthStatus            // per-server auth status (for prompt status lines)
-	mcpSchemas        map[string][]wire.MCPToolSchema // server slug → discovered tools
-	publicStorageBase string                          // base URL for AccessPublic zone reads (subdomain or host-level fallback)
-	syncStateHash     string                          // airlock's config fingerprint at last sync; drift vs a dispatch's ExpectedSyncHash triggers a self-heal resync
+	promptData        wire.PromptData // platform URLs, filled by applySyncResponse
+	publicStorageBase string          // base URL for AccessPublic zone reads (subdomain or host-level fallback)
 
 	// bg holds the rolling "background" run used for model calls made with
 	// no dispatcher-bound ctx. See background.go.
@@ -377,72 +373,6 @@ func pingDatabase(db *sql.DB) error {
 	return err
 }
 
-// renderSystemPrompt builds the per-run system prompt from the agent's
-// live registrations and platform-supplied promptData. On-demand rendering
-// expresses per-user sibling visibility.
-//
-// caller is the resolved access level for the run; visibleSiblings is
-// the set of sibling IDs this run's user can A2A-call (uuid.Nil
-// excluded). Pass nil to disable the sibling section entirely (e.g. system
-// job and webhook runs with no original user).
-//
-// Unknown caller access values panic — they can only happen via a
-// wire-shape bug, and silently mapping would mask it.
-// promptEnv is the per-turn environment rendered into the prompt's <env>
-// block. Every field is set explicitly by the caller (never inferred); an
-// empty field is simply omitted from the block.
-type promptEnv struct {
-	Date         string
-	Platform     string
-	UserName     string
-	UserEmail    string
-	Conversation string
-}
-
-func (a *Agent) renderSystemPrompt(caller Access, visibleSiblings []uuid.UUID, env promptEnv, directTools bool) string {
-	switch caller {
-	case AccessAdmin, AccessUser, AccessPublic, "":
-		// ok
-	default:
-		panic("agentsdk: renderSystemPrompt: unknown caller access " + string(caller))
-	}
-	data := a.buildPromptData(caller, visibleSiblings)
-	data.Date = env.Date
-	data.Platform = env.Platform
-	data.UserName = env.UserName
-	data.UserEmail = env.UserEmail
-	data.Conversation = env.Conversation
-	data.DirectTools = directTools
-	tier := string(caller)
-	if tier == "" {
-		tier = string(AccessUser)
-	}
-	out, err := prompt.Render(data, tier)
-	if err != nil {
-		// Render errors here are template bugs, not user input — panic
-		// loud so the operator notices in test rather than shipping a
-		// silently-broken prompt.
-		panic("agentsdk: renderSystemPrompt: " + err.Error())
-	}
-	return out
-}
-
-// snapshotMCPSchemas returns a value-copy of the MCP schema map. Callers
-// (e.g. vm.go) work against the snapshot for the duration of a run so a
-// concurrent /refresh can't mutate the map mid-iteration.
-func (a *Agent) snapshotMCPSchemas() map[string][]wire.MCPToolSchema {
-	a.syncMu.RLock()
-	defer a.syncMu.RUnlock()
-	if a.mcpSchemas == nil {
-		return nil
-	}
-	out := make(map[string][]wire.MCPToolSchema, len(a.mcpSchemas))
-	for k, v := range a.mcpSchemas {
-		out[k] = v
-	}
-	return out
-}
-
 // applySyncResponse atomically stores the platform-supplied promptData
 // + MCP discovery results + public storage base URL returned by an
 // Airlock sync round-trip. Called both at startup (from
@@ -457,10 +387,7 @@ func (a *Agent) applySyncResponse(resp wire.SyncResponse) {
 	validateSyncedBindings(resp)
 	a.syncMu.Lock()
 	a.promptData = resp.PromptData
-	a.mcpAuthStatus = resp.MCPAuthStatus
-	a.mcpSchemas = resp.MCPSchemas
 	a.publicStorageBase = resp.PublicStorageBase
-	a.syncStateHash = resp.SyncStateHash
 	a.syncMu.Unlock()
 }
 
@@ -492,209 +419,6 @@ func validateSyncedBindings(resp wire.SyncResponse) {
 			panic(fmt.Sprintf("agentsdk: synced MCP %q: %v", slug, err))
 		}
 		check("mcp "+slug, paths)
-	}
-	seenIDs := make(map[uuid.UUID]struct{}, len(resp.PromptData.Siblings))
-	seenSlugs := make(map[string]struct{}, len(resp.PromptData.Siblings))
-	for _, sibling := range resp.PromptData.Siblings {
-		if sibling.ID == uuid.Nil || sibling.Slug == "" {
-			panic("agentsdk: synced sibling requires ID and slug")
-		}
-		if _, ok := seenIDs[sibling.ID]; ok {
-			panic("agentsdk: duplicate synced sibling ID: " + sibling.ID.String())
-		}
-		if _, ok := seenSlugs[sibling.Slug]; ok {
-			panic("agentsdk: duplicate synced sibling slug: " + sibling.Slug)
-		}
-		seenIDs[sibling.ID] = struct{}{}
-		seenSlugs[sibling.Slug] = struct{}{}
-		names := make([]string, len(sibling.Tools))
-		for i, schema := range sibling.Tools {
-			names[i] = schema.Name
-		}
-		paths, err := binding.External(binding.Agent, sibling.ID.String(), binding.SiblingNamespace(sibling.Slug), names)
-		if err != nil {
-			panic(fmt.Sprintf("agentsdk: synced sibling %q: %v", sibling.Slug, err))
-		}
-		check("agent "+sibling.Slug, paths)
-	}
-}
-
-// syncedStateHash returns airlock's config fingerprint as of the last
-// applied sync. A dispatch whose ExpectedSyncHash differs means the agent's
-// cached promptData is stale; the /prompt path resyncs to catch up.
-func (a *Agent) syncedStateHash() string {
-	a.syncMu.RLock()
-	defer a.syncMu.RUnlock()
-	return a.syncStateHash
-}
-
-// buildPromptData assembles prompt.AgentData from the agent's
-// in-memory registrations and the platform's promptData. The caller holds
-// no locks; we grab syncMu.RLock internally.
-//
-// caller filtering happens inside prompt.Render — we just hand it
-// every tool/conn/etc. registered with the agent. Sibling visibility
-// is per-user (not per-tier) so we intersect promptData.Siblings
-// with visibleSiblings here.
-func (a *Agent) buildPromptData(caller Access, visibleSiblings []uuid.UUID) prompt.AgentData {
-	a.syncMu.RLock()
-	pd := a.promptData
-	auth := append([]wire.MCPAuthStatus(nil), a.mcpAuthStatus...)
-	schemas := make(map[string][]wire.MCPToolSchema, len(a.mcpSchemas))
-	for k, v := range a.mcpSchemas {
-		schemas[k] = v
-	}
-	a.syncMu.RUnlock()
-
-	tools := make([]prompt.ToolInfo, 0, len(a.tools))
-	for _, t := range a.tools {
-		tools = append(tools, prompt.ToolInfo{
-			Name:         t.Name,
-			Description:  t.Description,
-			LLMHint:      t.llmHint,
-			Access:       string(t.access),
-			InputSchema:  t.InputSchema,
-			OutputSchema: t.OutputSchema,
-		})
-	}
-
-	conns := make([]prompt.ConnInfo, 0, len(a.auths))
-	for _, c := range a.auths {
-		conns = append(conns, prompt.ConnInfo{
-			Slug:        c.Slug,
-			Name:        c.Name,
-			Description: c.Description,
-			LLMHint:     c.LLMHint,
-			BaseURL:     c.BaseURL,
-			Access:      string(c.Access),
-		})
-	}
-
-	topics := make([]prompt.TopicInfo, 0, len(a.topics))
-	for _, t := range a.topics {
-		topics = append(topics, prompt.TopicInfo{
-			Slug:        t.Slug,
-			Description: t.Description,
-			LLMHint:     t.LLMHint,
-			Access:      string(t.Access),
-		})
-	}
-
-	webhooks := make([]prompt.WebhookInfo, 0, len(a.webhooks))
-	for _, w := range a.webhooks {
-		webhooks = append(webhooks, prompt.WebhookInfo{
-			Path:        w.Path,
-			Description: w.Description,
-		})
-	}
-
-	routes := make([]prompt.RouteInfo, 0, len(a.routes))
-	for _, r := range a.routes {
-		routes = append(routes, prompt.RouteInfo{
-			Method:      r.Method,
-			Path:        r.Path,
-			Access:      string(r.Access),
-			Description: r.Description,
-		})
-	}
-
-	dirs := make([]prompt.DirInfo, 0, len(a.directories))
-	for _, d := range a.directories {
-		dirs = append(dirs, prompt.DirInfo{
-			Path:        d.Path,
-			Description: d.Description,
-			LLMHint:     d.LLMHint,
-			Read:        string(d.Read),
-			Write:       string(d.Write),
-			List:        string(d.List),
-			Scope:       string(d.Scope),
-		})
-	}
-
-	mcpServers := make([]prompt.MCPServerStatus, 0, len(a.mcps))
-	authBySlug := make(map[string]wire.MCPAuthStatus, len(auth))
-	for _, s := range auth {
-		authBySlug[s.Slug] = s
-	}
-	for _, m := range a.mcps {
-		status := "requires authentication"
-		var tools []prompt.ToolInfo
-		if s, ok := authBySlug[m.Slug]; ok && s.Authorized {
-			schema := schemas[m.Slug]
-			status = fmt.Sprintf("connected, %d tools", len(schema))
-			tools = make([]prompt.ToolInfo, len(schema))
-			for i, t := range schema {
-				tools[i] = prompt.ToolInfo{
-					Name:        t.Name,
-					Description: t.Description,
-					InputSchema: t.InputSchema,
-				}
-			}
-		}
-		mcpServers = append(mcpServers, prompt.MCPServerStatus{
-			Slug:        m.Slug,
-			Name:        m.Name,
-			Status:      status,
-			Access:      string(m.Access),
-			Description: authBySlug[m.Slug].Instructions,
-			Tools:       tools,
-		})
-	}
-
-	// Per-user sibling visibility: intersect synced address book with
-	// the visible set passed in. If visibleSiblings is nil (system job or
-	// webhook runs, no original user) the Siblings section is omitted
-	// entirely so the LLM doesn't see bindings it can't invoke.
-	var siblings []prompt.SiblingInfo
-	if len(visibleSiblings) > 0 && len(pd.Siblings) > 0 {
-		visible := make(map[uuid.UUID]struct{}, len(visibleSiblings))
-		for _, id := range visibleSiblings {
-			visible[id] = struct{}{}
-		}
-		for _, s := range pd.Siblings {
-			if _, ok := visible[s.ID]; !ok {
-				continue
-			}
-			tools := make([]prompt.ToolInfo, len(s.Tools))
-			for i, t := range s.Tools {
-				tools[i] = prompt.ToolInfo{
-					Name:        t.Name,
-					Description: t.Description,
-					InputSchema: t.InputSchema,
-				}
-			}
-			siblings = append(siblings, prompt.SiblingInfo{
-				ID:          s.ID,
-				Slug:        s.Slug,
-				Name:        s.Name,
-				Description: s.Description,
-				Tools:       tools,
-			})
-		}
-	}
-
-	modalities := pd.SupportedModalities
-
-	return prompt.AgentData{
-		AgentDashboardURL: pd.AgentDashboardURL,
-		AgentRouteURL:     pd.AgentRouteURL,
-		Capabilities: prompt.Capabilities{
-			Vision:        pd.Capabilities.Vision,
-			Transcription: pd.Capabilities.Transcription,
-			Speech:        pd.Capabilities.Speech,
-			Embedding:     pd.Capabilities.Embedding,
-			Image:         pd.Capabilities.Image,
-			Search:        pd.Capabilities.Search,
-		},
-		SupportedModalities: prompt.Modalities(modalities),
-		Tools:               tools,
-		Connections:         conns,
-		Topics:              topics,
-		Webhooks:            webhooks,
-		Routes:              routes,
-		MCPServers:          mcpServers,
-		Siblings:            siblings,
-		Directories:         dirs,
 	}
 }
 

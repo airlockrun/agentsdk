@@ -10,8 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/dop251/goja"
 )
 
 // editContentType is the MIME type stamped on editor output (always text).
@@ -34,8 +32,6 @@ func (r *run) applyEdit(ctx context.Context, src, dst string, fn streamFunc) (*t
 	}
 	return r.streamThrough(ctx, srcCanon, dstCanon, editContentType, ".txt", true, fn)
 }
-
-// --- fileEditLines: structured, line-addressed edits ---
 
 // lineEdit is one structured edit over original 1-based line numbers.
 type lineEdit struct {
@@ -118,83 +114,6 @@ func editLinesFunc(edits []lineEdit) streamFunc {
 	}
 }
 
-// parseLineEdits reads the JS `edits` arg (a single edit object or an array)
-// into validated, sorted lineEdits.
-func parseLineEdits(vm *goja.Runtime, v goja.Value) ([]lineEdit, error) {
-	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
-		return nil, errors.New("edits is required")
-	}
-	var raw []interface{}
-	switch ev := v.Export().(type) {
-	case []interface{}:
-		raw = ev
-	case map[string]interface{}:
-		raw = []interface{}{ev}
-	default:
-		return nil, errors.New("edits must be an object or array of edit objects")
-	}
-	edits := make([]lineEdit, 0, len(raw))
-	for i, item := range raw {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("edit %d is not an object", i)
-		}
-		e, err := parseOneLineEdit(m)
-		if err != nil {
-			return nil, fmt.Errorf("edit %d: %w", i, err)
-		}
-		edits = append(edits, e)
-	}
-	return edits, nil
-}
-
-func parseOneLineEdit(m map[string]interface{}) (lineEdit, error) {
-	if a, ok := m["append"]; ok {
-		s, _ := a.(string)
-		return lineEdit{isAppend: true, text: s, hasText: true}, nil
-	}
-	e := lineEdit{}
-	f, ok := numField(m, "from")
-	if !ok {
-		return e, errors.New("missing `from` (or `append`)")
-	}
-	e.from = f
-	if e.from < 1 {
-		return e, errors.New("`from` must be >= 1")
-	}
-	if c, ok := numField(m, "count"); ok {
-		e.count = c
-	}
-	if e.count < 0 {
-		return e, errors.New("`count` must be >= 0")
-	}
-	if t, ok := m["text"]; ok {
-		s, _ := t.(string)
-		e.text, e.hasText = s, true
-	}
-	if e.count == 0 && !e.hasText {
-		return e, errors.New("an insert (count 0) needs `text`")
-	}
-	return e, nil
-}
-
-func numField(m map[string]interface{}, key string) (int, bool) {
-	v, ok := m[key]
-	if !ok {
-		return 0, false
-	}
-	switch n := v.(type) {
-	case int64:
-		return int(n), true
-	case float64:
-		return int(n), true
-	case int:
-		return n, true
-	default:
-		return 0, false
-	}
-}
-
 // validateLineEdits sorts edits in place (by `from`; inserts before ranges at
 // the same line; appends last) and rejects overlapping ranges, so the
 // single-pass applier is unambiguous.
@@ -226,8 +145,6 @@ func validateLineEdits(edits []lineEdit) error {
 	}
 	return nil
 }
-
-// --- fileSed: a pragmatic sed subset ---
 
 const (
 	addrNone = iota

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/tool"
 	"github.com/robfig/cron/v3"
 )
@@ -35,6 +36,7 @@ const (
 )
 
 var frameworkRoutePatterns = []string{
+	"POST " + wire.RuntimeInvokePath,
 	"POST /prompt",
 	"POST /webhook/{name}",
 	"POST /job/{name}/{version}",

@@ -30,7 +30,7 @@ func scanErr(err error) error {
 // readRange returns the inclusive-length byte window [start, start+length) of
 // path. Cache-aware: a locally-cached copy is seeked; otherwise a true S3
 // Range fetch is issued (readRange never triggers a full spill). The window
-// is capped at maxReadFileBytes so it can't blow the goja heap.
+// is capped at maxReadFileBytes to bound memory across the capability boundary.
 func (r *run) readRange(ctx context.Context, path string, start, length int64) ([]byte, error) {
 	if start < 0 {
 		return nil, fmt.Errorf("start must be >= 0, got %d", start)

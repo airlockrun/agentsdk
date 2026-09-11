@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"net/url"
 	"sort"
 	"strings"
 )
@@ -22,7 +23,6 @@ const (
 	Connection
 	Topic
 	MCP
-	Agent
 )
 
 // Path carries canonical transport identity and presentation aliases.
@@ -32,7 +32,6 @@ type Path struct {
 	canonicalOperation string
 	namespaceAlias     string
 	operationAlias     string
-	noJS               bool
 }
 
 // Local creates a path whose canonical and presentation names are identical.
@@ -46,15 +45,10 @@ func Local(kind Kind, namespace, operation string) Path {
 	}
 }
 
-// AgentPrompt returns the direct tool used for open-ended agent delegation.
-func AgentPrompt() Path {
-	return Path{kind: Agent, canonicalOperation: "prompt", operationAlias: "prompt", noJS: true}
-}
-
 // External creates collision-safe paths for arbitrary external operation names.
 func External(kind Kind, canonicalNamespace, namespaceAlias string, operations []string) (map[string]Path, error) {
-	if kind != MCP && kind != Agent {
-		return nil, errors.New("external bindings require MCP or Agent kind")
+	if kind != MCP {
+		return nil, errors.New("external bindings require MCP kind")
 	}
 	bases := make(map[string][]string, len(operations))
 	seen := make(map[string]struct{}, len(operations))
@@ -92,20 +86,8 @@ func External(kind Kind, canonicalNamespace, namespaceAlias string, operations [
 	return paths, nil
 }
 
-// SiblingNamespace maps a canonical kebab-case agent slug to a JS-safe alias.
-func SiblingNamespace(slug string) string {
-	alias := strings.ReplaceAll(slug, "-", "_")
-	if alias != "" && alias[0] >= '0' && alias[0] <= '9' {
-		alias = "_" + alias
-	}
-	return alias
-}
-
 // JSParts returns the object-property path used by run_js.
 func (p Path) JSParts() []string {
-	if p.noJS {
-		return nil
-	}
 	switch p.kind {
 	case Air:
 		return []string{"air", builtinJSName(p.operationAlias)}
@@ -117,8 +99,6 @@ func (p Path) JSParts() []string {
 		return []string{"topic", p.namespaceAlias, builtinJSName(p.operationAlias)}
 	case MCP:
 		return []string{"mcp", p.namespaceAlias, p.operationAlias}
-	case Agent:
-		return []string{"agent", p.namespaceAlias, p.operationAlias}
 	default:
 		panic("binding: unknown kind")
 	}
@@ -145,6 +125,14 @@ func (p Path) Direct() string {
 
 // CanonicalNamespace returns the namespace used by transport dispatch.
 func (p Path) CanonicalNamespace() string { return p.canonicalNamespace }
+
+// Kind returns the canonical capability namespace kind.
+func (p Path) Kind() Kind { return p.kind }
+
+// ID is independent of JS aliases and provider-facing name limits.
+func (p Path) ID() string {
+	return kindName(p.kind) + "/" + url.PathEscape(p.canonicalNamespace) + "/" + url.PathEscape(p.canonicalOperation)
+}
 
 // CanonicalOperation returns the operation used by transport dispatch.
 func (p Path) CanonicalOperation() string { return p.canonicalOperation }
@@ -211,8 +199,6 @@ func kindName(kind Kind) string {
 		return "topic"
 	case MCP:
 		return "mcp"
-	case Agent:
-		return "agent"
 	default:
 		panic("binding: unknown kind")
 	}

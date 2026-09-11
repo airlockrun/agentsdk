@@ -3,295 +3,301 @@ package tsrender
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
-
-	"github.com/airlockrun/agentsdk/internal/binding"
-	"github.com/airlockrun/goai/schema"
 )
 
-// ToolRender is the data RenderToolDecls consumes. Airlock builds this
-// from the hydrated DB/sync payload; the agent assembles it from the
-// registered-tool schemas in tests. Both paths go through the same
-// renderer so the LLM sees one format.
-//
-// LLMHint is optional model-only guidance that pairs with Description
-// (which may also surface in member-facing UIs). When non-empty it's
-// appended to the JSDoc block in `[brackets]` so the LLM gets the
-// extra steer without polluting the user-visible description.
-type ToolRender struct {
-	Path          binding.Path
-	Name          string
-	Description   string
-	LLMHint       string
-	InputSchema   json.RawMessage
-	OutputSchema  json.RawMessage
-	InputExamples []json.RawMessage
-}
-
-// RenderToolDecls emits a TypeScript .d.ts-style block describing each
-// tool. Output is suitable for direct inclusion in an LLM prompt.
-func RenderToolDecls(tools []ToolRender) string {
-	if len(tools) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("declare const tools: {\n")
-	for i, t := range tools {
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		renderToolMethod(&b, t, "  ")
-	}
-	b.WriteString("};\n")
-	return b.String()
-}
-
-func renderToolMethod(b *strings.Builder, t ToolRender, indent string) {
-	inSchema := decodeSchema(t.InputSchema)
-	outSchema := decodeSchema(t.OutputSchema)
-	parts := t.Path.JSParts()
-	if len(parts) == 0 {
-		panic("tsrender: tool binding path is required")
-	}
-	name := parts[len(parts)-1]
-
-	// JSDoc block: description (+ optional LLMHint in brackets) + @example lines.
-	b.WriteString(indent)
-	b.WriteString("/**\n")
-	for _, line := range strings.Split(strings.TrimSpace(t.Description), "\n") {
-		b.WriteString(indent)
-		b.WriteString(" * ")
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-	if hint := strings.TrimSpace(t.LLMHint); hint != "" {
-		b.WriteString(indent)
-		b.WriteString(" * [")
-		b.WriteString(hint)
-		b.WriteString("]\n")
-	}
-	for _, ex := range t.InputExamples {
-		b.WriteString(indent)
-		b.WriteString(" * @example tools.")
-		b.WriteString(name)
-		b.WriteString("(")
-		b.Write(ex)
-		b.WriteString(")\n")
-	}
-	b.WriteString(indent)
-	b.WriteString(" */\n")
-
-	b.WriteString(indent)
-	b.WriteString(name)
-	b.WriteString("(args: ")
-	b.WriteString(tsTypeFromSchema(inSchema, 0))
-	b.WriteString("): ")
-	b.WriteString(tsTypeFromSchema(outSchema, 0))
-	b.WriteString(";\n")
-}
-
-func decodeSchema(raw json.RawMessage) *schema.Schema {
+// Type renders raw JSON Schema, including externally supplied MCP schemas.
+// Validation-only constraints (such as minimum and pattern) do not affect the
+// TypeScript shape. References must be local and acyclic. Malformed type-bearing
+// keywords and unsupported references return errors, never replacement schemas.
+// An absent output schema is unknown, as is the unrestricted schema {}.
+func Type(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
-		return &schema.Schema{}
+		return "unknown", nil
 	}
-	var s schema.Schema
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return &schema.Schema{}
+	if !json.Valid(raw) {
+		return "", errors.New("invalid JSON schema")
 	}
-	return &s
-}
-
-// tsTypeFromSchema renders a TypeScript type literal for a schema.
-// indent is the current indentation depth (0 = top-level).
-func tsTypeFromSchema(s *schema.Schema, indent int) string {
-	if s == nil {
-		return "any"
-	}
-
-	// Nullable: goai emits {anyOf: [T, {type: "null"}]} for pointer / nullable fields.
-	if len(s.AnyOf) == 2 {
-		a, b := s.AnyOf[0], s.AnyOf[1]
-		if b != nil && b.Type == "null" {
-			return tsTypeFromSchema(a, indent) + " | null"
+	root := raw
+	active := map[string]bool{}
+	var render func(json.RawMessage, int) (string, error)
+	render = func(raw json.RawMessage, depth int) (string, error) {
+		if depth > 64 {
+			return "", errors.New("schema nesting exceeds 64")
 		}
-		if a != nil && a.Type == "null" {
-			return tsTypeFromSchema(b, indent) + " | null"
+		switch strings.TrimSpace(string(raw)) {
+		case "true":
+			return "unknown", nil
+		case "false":
+			return "never", nil
+		case "null", "":
+			return "", errors.New("schema must be an object or boolean")
 		}
-	}
-
-	// Const → literal type.
-	if s.Const != nil {
-		return literalType(s.Const)
-	}
-
-	// Enum → union of literals.
-	if len(s.Enum) > 0 {
-		parts := make([]string, 0, len(s.Enum))
-		for _, v := range s.Enum {
-			parts = append(parts, literalType(v))
+		var s struct {
+			Ref                  string                     `json:"$ref"`
+			Type                 json.RawMessage            `json:"type"`
+			Format               string                     `json:"format"`
+			Properties           map[string]json.RawMessage `json:"properties"`
+			Required             []string                   `json:"required"`
+			AdditionalProperties json.RawMessage            `json:"additionalProperties"`
+			Items                json.RawMessage            `json:"items"`
+			PrefixItems          json.RawMessage            `json:"prefixItems"`
+			AnyOf                []json.RawMessage          `json:"anyOf"`
+			OneOf                []json.RawMessage          `json:"oneOf"`
+			AllOf                []json.RawMessage          `json:"allOf"`
+			Enum                 []json.RawMessage          `json:"enum"`
+			Const                json.RawMessage            `json:"const"`
 		}
-		return strings.Join(parts, " | ")
-	}
-
-	switch s.Type {
-	case "string":
-		// agentsdk.FilePath / DirPath travel as `format` markers on the
-		// JSON Schema. Render them as TS type aliases so the LLM sees
-		// the semantic, not just `string`. The aliases are `declare`d
-		// once in the prompt header.
-		switch s.Format {
-		case "agent-file":
-			return "FilePath"
-		case "agent-dir":
-			return "DirPath"
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return "", fmt.Errorf("invalid schema: %w", err)
 		}
-		return "string"
-	case "number", "integer":
-		return "number"
-	case "boolean":
-		return "boolean"
-	case "null":
-		return "null"
-	case "array":
-		if s.Items == nil {
-			return "any[]"
+		var keywords map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &keywords); err != nil {
+			return "", err
 		}
-		inner := tsTypeFromSchema(s.Items, indent)
-		// Parenthesize unions inside arrays for readability.
-		if strings.Contains(inner, " | ") {
-			return "(" + inner + ")[]"
-		}
-		return inner + "[]"
-	case "object", "":
-		return renderObjectType(s, indent)
-	}
-
-	return "any"
-}
-
-func renderObjectType(s *schema.Schema, indent int) string {
-	if len(s.Properties) == 0 {
-		// Empty object (no-arg tool input, or untyped output).
-		return "{}"
-	}
-
-	requiredSet := make(map[string]bool, len(s.Required))
-	for _, name := range s.Required {
-		requiredSet[name] = true
-	}
-
-	// Sort property names for stable output.
-	names := make([]string, 0, len(s.Properties))
-	for name := range s.Properties {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	pad := strings.Repeat("  ", indent+1)
-	closePad := strings.Repeat("  ", indent)
-
-	var b strings.Builder
-	b.WriteString("{\n")
-	for _, name := range names {
-		prop := s.Properties[name]
-		b.WriteString(pad)
-		b.WriteString(name)
-		if !requiredSet[name] {
-			b.WriteString("?")
-		}
-		b.WriteString(": ")
-		b.WriteString(tsTypeFromSchema(prop, indent+1))
-		b.WriteString(";")
-		if prop != nil && prop.Description != "" {
-			b.WriteString(" // ")
-			// Single-line: collapse any embedded newlines.
-			b.WriteString(strings.ReplaceAll(prop.Description, "\n", " "))
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString(closePad)
-	b.WriteString("}")
-	return b.String()
-}
-
-// literalType renders a JSON value as a TypeScript literal type.
-func literalType(v any) string {
-	switch x := v.(type) {
-	case string:
-		return fmt.Sprintf("%q", x)
-	case bool:
-		if x {
-			return "true"
-		}
-		return "false"
-	case float64:
-		// JSON numbers come through as float64 after Unmarshal; format cleanly.
-		if x == float64(int64(x)) {
-			return fmt.Sprintf("%d", int64(x))
-		}
-		return fmt.Sprintf("%g", x)
-	case nil:
-		return "null"
-	}
-	return "any"
-}
-
-// MCPToolRender carries the bits Airlock has cached about an MCP tool.
-// Only the input shape is typed — MCP doesn't define an output schema, so
-// the rendered return type is always `unknown` (caller does runtime parsing).
-type MCPToolRender struct {
-	Path        binding.Path
-	Name        string
-	Description string
-	InputSchema json.RawMessage
-}
-
-// NamespaceRender describes one namespace beneath an external capability root.
-type NamespaceRender struct {
-	Namespace string
-	Tools     []MCPToolRender
-}
-
-// RenderNestedRoot emits one declaration for a nested MCP or agent root.
-func RenderNestedRoot(root string, namespaces []NamespaceRender) string {
-	if len(namespaces) == 0 {
-		return ""
-	}
-	sortedNamespaces := make([]NamespaceRender, len(namespaces))
-	copy(sortedNamespaces, namespaces)
-	sort.Slice(sortedNamespaces, func(i, j int) bool { return sortedNamespaces[i].Namespace < sortedNamespaces[j].Namespace })
-
-	var b strings.Builder
-	b.WriteString("declare const ")
-	b.WriteString(root)
-	b.WriteString(": {\n")
-	for _, namespace := range sortedNamespaces {
-		b.WriteString("  ")
-		b.WriteString(namespace.Namespace)
-		b.WriteString(": {\n")
-		tools := make([]MCPToolRender, len(namespace.Tools))
-		copy(tools, namespace.Tools)
-		sort.Slice(tools, func(i, j int) bool { return tools[i].Path.JS() < tools[j].Path.JS() })
-		for _, t := range tools {
-			parts := t.Path.JSParts()
-			if len(parts) == 0 {
-				panic("tsrender: external binding path is required")
+		for _, key := range []string{"$ref", "type", "properties", "required", "anyOf", "oneOf", "allOf", "enum", "format"} {
+			if string(keywords[key]) == "null" {
+				return "", fmt.Errorf("%s must not be null", key)
 			}
-			if desc := strings.TrimSpace(t.Description); desc != "" {
-				b.WriteString("    /** ")
-				b.WriteString(strings.ReplaceAll(desc, "\n", " "))
-				b.WriteString(" */\n")
-			}
-			b.WriteString("    ")
-			b.WriteString(parts[len(parts)-1])
-			b.WriteString("(args: ")
-			b.WriteString(tsTypeFromSchema(decodeSchema(t.InputSchema), 2))
-			b.WriteString("): unknown;\n")
 		}
-		b.WriteString("  };\n")
+		var terms []string
+		if _, exists := keywords["$ref"]; exists {
+			pointer, err := url.PathUnescape(strings.TrimPrefix(s.Ref, "#"))
+			if err != nil || !strings.HasPrefix(s.Ref, "#") || pointer != "" && !strings.HasPrefix(pointer, "/") {
+				return "", fmt.Errorf("unsupported $ref %q: require a local JSON pointer", s.Ref)
+			}
+			if active[pointer] {
+				return "", fmt.Errorf("recursive $ref %q cannot be rendered inline", s.Ref)
+			}
+			target := root
+			if pointer != "" {
+				for _, token := range strings.Split(pointer[1:], "/") {
+					var object map[string]json.RawMessage
+					if json.Unmarshal(target, &object) == nil && object != nil {
+						target = object[strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~")]
+					} else {
+						var array []json.RawMessage
+						i, err := strconv.Atoi(token)
+						if json.Unmarshal(target, &array) != nil || err != nil || i < 0 || i >= len(array) {
+							return "", fmt.Errorf("unresolved $ref %q", s.Ref)
+						}
+						target = array[i]
+					}
+				}
+			}
+			if target == nil {
+				return "", fmt.Errorf("unresolved $ref %q", s.Ref)
+			}
+			active[pointer] = true
+			t, err := render(target, depth+1)
+			delete(active, pointer)
+			if err != nil {
+				return "", fmt.Errorf("$ref %q: %w", s.Ref, err)
+			}
+			terms = append(terms, t)
+		}
+		for _, group := range []struct {
+			name, sep string
+			variants  []json.RawMessage
+		}{{"anyOf", " | ", s.AnyOf}, {"oneOf", " | ", s.OneOf}, {"allOf", " & ", s.AllOf}} {
+			if _, exists := keywords[group.name]; !exists {
+				continue
+			}
+			if len(group.variants) == 0 {
+				return "", fmt.Errorf("%s must be nonempty", group.name)
+			}
+			var parts []string
+			for i, variant := range group.variants {
+				t, err := render(variant, depth+1)
+				if err != nil {
+					return "", fmt.Errorf("%s[%d]: %w", group.name, i, err)
+				}
+				parts = append(parts, t)
+			}
+			terms = append(terms, join(parts, group.sep))
+		}
+		if s.Const != nil {
+			terms = append(terms, literal(s.Const))
+		}
+		if _, exists := keywords["enum"]; exists {
+			if len(s.Enum) == 0 {
+				return "", errors.New("enum must be nonempty")
+			}
+			var parts []string
+			for _, value := range s.Enum {
+				parts = append(parts, literal(value))
+			}
+			terms = append(terms, join(parts, " | "))
+		}
+		var types []string
+		if s.Type != nil {
+			var single string
+			if err := json.Unmarshal(s.Type, &single); err == nil {
+				types = []string{single}
+			} else if err := json.Unmarshal(s.Type, &types); err != nil || len(types) == 0 {
+				return "", errors.New("type must be a string or nonempty string array")
+			}
+		} else if s.Properties != nil || s.AdditionalProperties != nil {
+			types = []string{"object"}
+		} else if s.Items != nil || s.PrefixItems != nil {
+			types = []string{"array"}
+		}
+		var shapes []string
+		for _, typ := range types {
+			switch typ {
+			case "string":
+				t := "string"
+				if s.Format == "agent-file" {
+					t = "FilePath"
+				} else if s.Format == "agent-dir" {
+					t = "DirPath"
+				}
+				shapes = append(shapes, t)
+			case "number", "integer":
+				shapes = append(shapes, "number")
+			case "boolean", "null":
+				shapes = append(shapes, typ)
+			case "array":
+				if s.PrefixItems != nil {
+					return "", errors.New("prefixItems tuple schemas are not supported")
+				}
+				items := s.Items
+				if items == nil {
+					items = json.RawMessage(`true`)
+				}
+				t, err := render(items, depth+1)
+				if err != nil {
+					return "", fmt.Errorf("items: %w", err)
+				}
+				shapes = append(shapes, parenthesize(t)+"[]")
+			case "object":
+				required := map[string]bool{}
+				for _, name := range s.Required {
+					required[name] = true
+				}
+				var names []string
+				for name := range s.Properties {
+					names = append(names, name)
+				}
+				sort.Strings(names)
+				var fields, propertyTypes []string
+				for _, name := range names {
+					t, err := render(s.Properties[name], depth+1)
+					if err != nil {
+						return "", fmt.Errorf("property %q: %w", name, err)
+					}
+					field := propertyName(name)
+					if !required[name] {
+						field += "?"
+						propertyTypes = append(propertyTypes, "undefined")
+					}
+					propertyTypes = append(propertyTypes, t)
+					field += ": " + t + ";"
+					var prop struct{ Description string }
+					if json.Unmarshal(s.Properties[name], &prop) == nil && prop.Description != "" {
+						field += " // " + strings.Join(strings.Fields(prop.Description), " ")
+					}
+					fields = append(fields, field)
+				}
+				additional := s.AdditionalProperties
+				if additional == nil {
+					additional = json.RawMessage(`true`)
+				}
+				t, err := render(additional, depth+1)
+				if err != nil {
+					return "", fmt.Errorf("additionalProperties: %w", err)
+				}
+				if len(fields) == 0 {
+					shapes = append(shapes, "Record<string, "+t+">")
+				} else {
+					if t != "never" {
+						// TS index signatures cover named properties too, so the
+						// index type must include them for mixed fixed/map shapes.
+						fields = append(fields, "[key: string]: "+join(append([]string{t}, propertyTypes...), " | ")+";")
+					}
+					shapes = append(shapes, "{\n  "+strings.ReplaceAll(strings.Join(fields, "\n"), "\n", "\n  ")+"\n}")
+				}
+			default:
+				return "", fmt.Errorf("invalid schema type %q", typ)
+			}
+		}
+		if len(shapes) > 0 {
+			terms = append(terms, join(shapes, " | "))
+		}
+		return join(terms, " & "), nil
 	}
-	b.WriteString("};\n")
-	return b.String()
+	return render(raw, 0)
+}
+
+func parenthesize(s string) string {
+	if strings.Contains(s, " | ") || strings.Contains(s, " & ") {
+		return "(" + s + ")"
+	}
+	return s
+}
+
+func join(parts []string, sep string) string {
+	var unique []string
+	seen := map[string]bool{}
+	for _, part := range parts {
+		if sep == " | " && part == "unknown" {
+			return "unknown"
+		}
+		if sep == " & " && part == "unknown" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		unique = append(unique, part)
+	}
+	if len(unique) == 0 {
+		return "unknown"
+	}
+	if len(unique) == 1 {
+		return unique[0]
+	}
+	if sep == " & " {
+		for i := range unique {
+			unique[i] = parenthesize(unique[i])
+		}
+	}
+	return strings.Join(unique, sep)
+}
+
+func propertyName(name string) string {
+	for i, c := range name {
+		if !(c == '_' || c == '$' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9') {
+			b, _ := json.Marshal(name)
+			return string(b)
+		}
+	}
+	if name == "" {
+		return `""`
+	}
+	return name
+}
+
+func literal(raw json.RawMessage) string {
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) == nil && object != nil {
+		var fields []string
+		for name, value := range object {
+			fields = append(fields, propertyName(name)+": "+literal(value)+";")
+		}
+		sort.Strings(fields)
+		return "{ " + strings.Join(fields, " ") + " }"
+	}
+	var array []json.RawMessage
+	if json.Unmarshal(raw, &array) == nil && array != nil {
+		var items []string
+		for _, value := range array {
+			items = append(items, literal(value))
+		}
+		return "[" + strings.Join(items, ", ") + "]"
+	}
+	return strings.TrimSpace(string(raw))
 }

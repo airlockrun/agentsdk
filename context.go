@@ -1,6 +1,10 @@
 package agentsdk
 
-import "context"
+import (
+	"context"
+
+	"github.com/airlockrun/agentsdk/wire"
+)
 
 // Run and lazyRun are carried through context so public Agent methods can
 // be called from anywhere — handler bodies, helper functions, goroutines —
@@ -9,6 +13,19 @@ import "context"
 
 type runCtxKey struct{}
 type lazyRunCtxKey struct{}
+
+func (a *Agent) borrowRuntimeRun(ctx context.Context, scope wire.RuntimeContext) *run {
+	if scope.Job != nil {
+		ctx = contextWithJobRun(ctx, &jobRunContext{agent: a, id: scope.Job.ID, attempt: scope.Job.Attempt, leaseToken: scope.Job.LeaseToken})
+	}
+	r := newRun(a, scope.RunID, scope.BridgeID, scope.ConversationID, ctx)
+	r.parentRunID = scope.ParentRunID
+	r.userID, r.userEmail, r.userDisplayName = scope.UserID, scope.UserEmail, scope.UserDisplayName
+	r.callerAccess = Access(scope.CallerAccess)
+	r.platform = scope.Platform
+	r.ctx = r.checkedCtx()
+	return r
+}
 
 func contextWithRun(ctx context.Context, r *run) context.Context {
 	if r == nil {

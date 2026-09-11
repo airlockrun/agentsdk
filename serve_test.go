@@ -50,6 +50,18 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestHandlerDoesNotHostChat(t *testing.T) {
+	a, mock := testAgent(t)
+	w := httptest.NewRecorder()
+	a.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/prompt", strings.NewReader(`{"message":"hello"}`)))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("/prompt status=%d", w.Code)
+	}
+	if len(mock.Requests()) != 0 {
+		t.Fatal("unhandled chat route performed runtime work")
+	}
+}
+
 // TestHealthEndpointDBUnavailable verifies that when the agent has a DB
 // configured but it can't be reached/authenticated, /health reports 503 —
 // so the dispatcher keeps the agent out of rotation instead of routing

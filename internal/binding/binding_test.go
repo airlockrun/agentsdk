@@ -18,8 +18,6 @@ func TestLocalPaths(t *testing.T) {
 		{Local(Connection, "gmail", "request_json"), "conn.gmail.requestJSON", "conn__gmail__request_json"},
 		{Local(Topic, "alerts", "subscribe"), "topic.alerts.subscribe", "topic__alerts__subscribe"},
 		{Local(MCP, "github", "search_issues"), "mcp.github.search_issues", "mcp__github__search_issues"},
-		{Local(Agent, "sales_app", "create_lead"), "agent.sales_app.create_lead", "agent__sales_app__create_lead"},
-		{AgentPrompt(), "", "agent__prompt"},
 	}
 	for _, tt := range tests {
 		if got := tt.path.JS(); got != tt.wantJS {
@@ -82,14 +80,5 @@ func TestDirectNameLength(t *testing.T) {
 	other := Local(MCP, strings.Repeat("a", 44), strings.Repeat("b", 79)+"c").Direct()
 	if other == name {
 		t.Fatal("distinct canonical paths collided")
-	}
-}
-
-func TestSiblingNamespace(t *testing.T) {
-	if got := SiblingNamespace("sales-app"); got != "sales_app" {
-		t.Fatalf("SiblingNamespace = %q", got)
-	}
-	if got := SiblingNamespace("123-app"); got != "_123_app" {
-		t.Fatalf("digit-leading SiblingNamespace = %q", got)
 	}
 }

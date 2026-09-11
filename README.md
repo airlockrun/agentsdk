@@ -4,7 +4,10 @@ Go SDK for building **cyborg agents** — programs that are half code, half AI �
 
 Cyborg agents are deterministic Go where it makes sense (HTTP routes, webhooks, cron jobs, structured tool execution) and AI-driven where it helps (LLM reasoning, conversation handling, open-ended decisions). agentsdk is the contract your code uses to participate in the airlock platform: register routes, tools, webhooks, crons, and chat surfaces; access scoped storage and per-agent Postgres; and call LLMs through the platform's credential-managing proxy.
 
-If you're not building on Airlock, you don't need this — agentsdk is the glue, not the runtime.
+The root SDK integrates Go apps with Airlock. The public
+[`chatruntime`](chatruntime/README.md) package runs hosted chat independently of
+the SDK root, using explicit Sol models, session persistence, capability dispatch,
+and an isolated Deno executor.
 
 Read the [Airlock documentation](https://airlock.run/docs/) for platform guides and the [Agent SDK and CLI guide](https://airlock.run/docs/agentsdk/) for the authoring workflow.
 
@@ -147,6 +150,15 @@ starts the runtime, validates migrations with an up, down-to-zero, up cycle,
 synchronizes declarations, runs `OnStart` hooks, and returns a ready agent.
 `go tool air build` provisions one throwaway PostgreSQL container for the serial
 test run instead of starting one per `agenttest.New` call.
+
+`env.Chat(ctx, scope, input)` exercises the actual shared Sol chat loop with mock
+models and the real authenticated app capability handler. Use `agenttest.MemoryStore`
+for conversation history, `agenttest.Events` for typed events, and
+`agenttest.Executor(ExecutorConfig)` for a lazy Deno factory. Local tests select
+an executor image built with `jsexec.BuildImage`; builders inject `OpenTransport`
+to an isolated host-owned executor without mounting Docker into test containers.
+Text-only and unapproved runs do not allocate an executor. See the
+[chat runtime contract](chatruntime/README.md) for required settings and callbacks.
 
 ## Companion projects
 

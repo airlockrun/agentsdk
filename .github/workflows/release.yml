@@ -70,6 +70,12 @@ jobs:
         run: GOWORK=off go test -count=1 ./...
       - name: Build
         run: GOWORK=off go build ./...
+      - name: Executor image and permission gate
+        env:
+          GOWORK: off
+          JSEXEC_DOCKER_TEST: '1'
+          JSEXEC_DENO_PROBE: '1'
+        run: go test -count=1 -timeout=5m ./jsexec
       - name: Create tag
         env:
           VERSION: ${{ inputs.version }}

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/dop251/goja"
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/unicode"
@@ -187,74 +186,12 @@ func (r *transformResult) toMap() map[string]any {
 	return out
 }
 
-func transformResultToJS(vm *goja.Runtime, res *transformResult) goja.Value {
-	return vm.ToValue(res.toMap())
-}
-
 // encodeContentType returns the MIME type for an encode codec's output.
 func encodeContentType(codecName string) string {
 	if codecName == "gzip" {
 		return "application/gzip"
 	}
 	return "text/plain; charset=utf-8"
-}
-
-// transformArgs parses the common (src, codec|charset, dst?) argument shape
-// shared by encodeFile/decodeFile/decodeTextFile. Panics (as a JS throw) on a
-// missing src or codec, mirroring the other bindings.
-func transformArgs(vm *goja.Runtime, call goja.FunctionCall, name string) (src, spec, dst string) {
-	src, err := pathArg(call.Argument(0))
-	if err != nil {
-		panic(vm.NewGoError(fmt.Errorf("%s: %w", name, err)))
-	}
-	specArg := call.Argument(1)
-	if goja.IsUndefined(specArg) || goja.IsNull(specArg) {
-		panic(vm.NewGoError(fmt.Errorf("%s: codec/charset is required", name)))
-	}
-	spec = specArg.String()
-	if d := call.Argument(2); !goja.IsUndefined(d) && !goja.IsNull(d) {
-		dst, err = pathArg(d)
-		if err != nil {
-			panic(vm.NewGoError(fmt.Errorf("%s: dst: %w", name, err)))
-		}
-	}
-	return src, spec, dst
-}
-
-// optPathArg parses an optional dst path argument; returns "" when absent.
-func optPathArg(vm *goja.Runtime, v goja.Value, name string) string {
-	if goja.IsUndefined(v) || goja.IsNull(v) {
-		return ""
-	}
-	p, err := pathArg(v)
-	if err != nil {
-		panic(vm.NewGoError(fmt.Errorf("%s: dst: %w", name, err)))
-	}
-	return p
-}
-
-// checkTransformAccess gates a transform's src read and (when given) dst write.
-// An omitted dst targets the framework scratch dir, which the authed gate
-// already covers, so it needs no check.
-func checkTransformAccess(ctx context.Context, agent *Agent, vm *goja.Runtime, name, src, dst string) (string, string) {
-	inPlace := dst != "" && dst == src
-	resolvedSrc, err := agent.resolveFilePath(ctx, src, FileOperationRead)
-	if err != nil {
-		panic(vm.NewGoError(fmt.Errorf("%s: %w", name, err)))
-	}
-	if dst == "" {
-		return resolvedSrc, ""
-	}
-	op := FileOperationWrite
-	if inPlace {
-		op = FileOperationOverwrite
-		dst = resolvedSrc
-	}
-	resolvedDst, err := agent.resolveFilePath(ctx, dst, op)
-	if err != nil {
-		panic(vm.NewGoError(fmt.Errorf("%s: %w", name, err)))
-	}
-	return resolvedSrc, resolvedDst
 }
 
 // lookupCharset resolves a charset name to its decoder streamFunc (→ UTF-8).
