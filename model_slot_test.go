@@ -45,7 +45,9 @@ func TestRegisterModel_SyncPayload(t *testing.T) {
 	a.RegisterModel(&ModelSlot{Slug: "poster", Capability: CapImage, Description: "Posters"})
 	a.RegisterModel(&ModelSlot{Slug: "research", Capability: CapSearch, Description: "Web search"})
 
-	a.syncWithAirlock(context.Background())
+	if err := a.syncWithAirlock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	reqs := mock.RequestsByPath("/api/agent/sync")
 	if len(reqs) != 1 {

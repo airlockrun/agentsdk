@@ -43,6 +43,21 @@ jobs:
       - name: Test
         run: GOWORK=off go test -count=1 ./...
 
+  executor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Executor image and permission gate
+        env:
+          GOWORK: off
+          JSEXEC_DOCKER_TEST: '1'
+          JSEXEC_DENO_PROBE: '1'
+        run: go test -count=1 -timeout=5m ./jsexec
+
   test-macos:
     runs-on: macos-latest
     steps:

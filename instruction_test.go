@@ -41,7 +41,9 @@ func TestAddInstruction_SyncPayload(t *testing.T) {
 	a.AddInstruction(&Instruction{Text: "hello everyone"})
 	a.AddInstruction(&Instruction{Text: "hello admin", Access: []Access{AccessAdmin}})
 
-	a.syncWithAirlock(context.Background())
+	if err := a.syncWithAirlock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	reqs := mock.RequestsByPath("/api/agent/sync")
 	if len(reqs) != 1 {

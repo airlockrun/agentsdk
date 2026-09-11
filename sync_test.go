@@ -7,10 +7,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/airlockrun/agentsdk/wire"
 )
+
+func TestSyncRequiresRuntimeHandshake(t *testing.T) {
+	for _, protocol := range []string{"", "airlock.app-runtime.v2", wire.AppRuntimeProtocol} {
+		t.Run(protocol, func(t *testing.T) {
+			a, _ := testAgent(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(wire.SyncResponse{RuntimeProtocol: protocol, PromptData: wire.PromptData{AgentRouteURL: "https://agent.test"}})
+			}))
+			defer server.Close()
+			a.client = newAirlockClient(server.URL, a.token, server.Client())
+			err := a.syncWithAirlock(t.Context())
+			if (err == nil) != (protocol == wire.AppRuntimeProtocol) {
+				t.Fatalf("protocol %q: %v", protocol, err)
+			}
+		})
+	}
+}
 
 func TestSyncWithAirlock(t *testing.T) {
 	a, mock := testAgent(t)
@@ -62,7 +80,12 @@ func TestSyncWithAirlock(t *testing.T) {
 	a.OnStart("hydrate-cache", func(context.Context) error { return nil })
 	manifest := a.Manifest()
 
-	a.syncWithAirlock(context.Background())
+	if err := a.syncWithAirlock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if manifest.RuntimeProtocol != wire.AppRuntimeProtocol {
+		t.Fatalf("runtime protocol = %q", manifest.RuntimeProtocol)
+	}
 
 	// Connections ride the sync batch now, not a per-slug PUT.
 	if connReqs := mock.RequestsByPath("/api/agent/connections/"); len(connReqs) != 0 {

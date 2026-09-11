@@ -85,6 +85,33 @@ runs `OnStart` hooks. It returns an agent ready for `DB` and `Handler`;
 `Env.Airlock` records platform calls. Tests needing only the HTTP mock can use
 `agenttest.NewMockAirlock`; wire payloads remain an SDK runtime detail.
 
+Tests that execute JavaScript through the shared chat runtime must select an
+executor explicitly. Airlock codegen provisions a build-scoped endpoint and
+credential in `AIRLOCK_TEST_EXECUTOR_URL` and `AIRLOCK_TEST_EXECUTOR_TOKEN`.
+These are inherited by `go tool air build` and its Go test subprocesses:
+
+```go
+config, err := agenttest.ExecutorConfigFromEnv(jsexec.DefaultLimits())
+if err != nil {
+    t.Fatal(err)
+}
+factory, err := agenttest.Executor(config)
+if err != nil {
+    t.Fatal(err)
+}
+// Set chatruntime.Input.ExecutorFactory to factory.
+```
+
+The test endpoint carries only framed executor traffic. It does not run model
+loops or grant platform capabilities; the test supplies its model and backend.
+Airlock owns the network-none executor container, with the same image and
+resource recipe used by hosted chat. No Docker socket is mounted into tests.
+One executor may be live per build; close each session before opening another.
+Missing endpoint/auth configuration is an error, not a skipped or fake test.
+For standalone tests, explicitly build a local image with `jsexec.BuildImage`
+and select `agenttest.ExecutorConfig{Image: image, Limits: jsexec.DefaultLimits()}`.
+Both choices execute the same Deno runtime and framed protocol.
+
 Authenticated in-process handler tests attach caller state without private
 transport headers:
 
@@ -317,7 +344,7 @@ declare function do_thing(args: { query: string; limit?: number }): { hits: stri
 
 and calls it as `do_thing({query: "foo", limit: 5})`.
 
-**Naming:** `snake_case` — matches LLM tool conventions and MCP. Built-in VM
+**Naming:** `snake_case` — matches LLM tool conventions and MCP. Built-in JS
 bindings are `camelCase` (or `snake_prefix.camelMethod`) by design — that's how
 the LLM tells platform primitives from agent-declared tools.
 
@@ -330,11 +357,9 @@ the LLM tells platform primitives from agent-declared tools.
   `json:"-"` on cycle-closing fields.
 - **Path fields use `agentsdk.FilePath` (or `[]agentsdk.FilePath`), not
   plain `string`.** FilePath carries a schema marker airlock uses to
-  auto-copy files across A2A and external MCP boundaries — a sibling
-  that calls your tool with `In.File: FilePath` gets your file copied
-  into its own bucket, and `Out.Result: FilePath` lands in the caller's
-  `siblings/{your-slug}/...`. Plain `string` paths are forwarded verbatim
-  and resolve in the callee's own namespace — almost always a 404.
+  resolve files across external MCP boundaries. Inputs identify checked storage
+  references; outputs let callers retrieve files without inline binary data.
+  Plain `string` paths lack this metadata and are forwarded verbatim.
 - **Directory fields use `agentsdk.DirPath`.** Auto-copy is intentionally
   unimplemented for directories (unbounded); for cross-agent directory
   semantics return `[]FilePath` so the caller picks exact files. Still
@@ -346,7 +371,7 @@ the LLM tells platform primitives from agent-declared tools.
   as `FilePath` (auto-copies). `FileInfo` is also fine when the LLM needs
   filename/size/contentType metadata — its `Path` field is already
   `FilePath`, so returning it (or embedding it in an output struct)
-  triggers the same A2A auto-copy. Never base64 strings.
+  carries the same reference metadata. Never base64 strings.
 
 **Error handling:** return `error` from `Execute` — converted to a JS `throw`
 inside `run_js`. Don't panic.
@@ -357,9 +382,9 @@ inside `run_js`. Don't panic.
 **Optional:** `InputExamples: []In{...}` renders `@example` JSDoc lines
 alongside the signature.
 
-**No goja.** You never touch `*goja.Runtime`, `goja.FunctionCall`,
-`vm.ToValue`, or `vm.NewGoError` — the SDK handles the VM boundary. You write
-plain typed Go.
+**Plain typed Go.** Registered tools run in the app with its existing run,
+database, and storage context. Hosted chat executes JavaScript in an isolated
+Deno runtime and invokes app tools through the authenticated capability endpoint.
 
 ## AddInstruction — access-scoped system prompt fragments
 
@@ -974,9 +999,16 @@ as `output` without colliding with framework operations.
 | `conn.*` / `conn__*` | `RegisterConnection` |
 | `topic.*` / `topic__*` | `RegisterTopic` |
 | `mcp.*` / `mcp__*` | `RegisterMCP` |
-| `agent.*` / `agent__*` | A2A sibling capabilities |
 | `run_js` (reserved) | the JS sandbox entry point |
-| `agent__prompt` | open-ended A2A delegation |
+
+JavaScript is an async function body. Await capability calls and explicitly
+return their results, for example `return await tools.lookup({id: "123"});`.
+Every capability takes one object argument matching its canonical input schema.
+Scripts are serial; bounded async callbacks may run within a script. Explicit
+`globalThis` properties can retain data only within the uninterrupted run.
+Approval gates the whole `run_js` call before executor allocation. The shared
+[`chatruntime`](chatruntime/README.md) owns prompt and TypeScript rendering;
+internal sibling delegation is not a chat capability.
 
 Framework primitives (the runtime prompt describes each in detail).
 **Availability**: *all* = every run; *authed* = non-public runs only; *admin* =

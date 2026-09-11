@@ -5,9 +5,6 @@ import (
 	"sync"
 
 	"github.com/airlockrun/agentsdk/wire"
-	"github.com/airlockrun/goai/tool"
-	"github.com/dop251/goja"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -16,49 +13,34 @@ import (
 // and logs; flushed on Complete via /api/agent/run/complete. Never surfaced
 // in the builder API — carried through context instead (see context.go).
 type run struct {
-	agent               *Agent
-	id                  string
-	bridgeID            string
-	conversationID      string
-	parentRunID         string // for A2A/external MCP calls — the caller's run ID from X-Parent-Run-ID; gates __incoming/run-<id>/ reads
-	userID              string // the originating user (anchor for scoped dirs); empty for system jobs, webhooks, and anonymous runs
-	supportedModalities []string
-	callerAccess        Access      // resolved per-turn access level (default AccessAdmin for trusted triggers)
-	autoConfirm         bool        // run_js skips the request_confirmation gate (set for non-interactive runs, e.g. public one-shot bridge sessions)
-	directTools         bool        // expose each capability as its own typed LLM tool instead of a single run_js binding; airlock sets this for public-tier runs today
-	visibleSiblings     []uuid.UUID // per-user sibling IDs A2A-callable on this run; intersected with promptData.Siblings at render time
-	ctx                 context.Context
-	gw                  *goWall // go-call time accumulator (L3 CPU guard)
-	actions             []wire.Action
-	logs                []wire.LogEntry
-	logsBytes           int // running size of logs[].Message; drives the cap in logAppend
-	logger              *zap.Logger
-	loggerOnce          sync.Once
-	vm                  *goja.Runtime
-	vmOnce              sync.Once
-	mu                  sync.Mutex          // guards actions, logs, pendingLogs, attachedKeys, pendingAttachments
-	attachedKeys        map[string]struct{} // keys attached this run for idempotency
-	pendingLogs         []wire.LogEntry     // logs from current executeJS call, drained after each execution
-	pendingAttachments  []tool.Attachment   // attachToContext results, drained by run_js into the tool.Result
-	fileCache           *fileCache          // per-run local-disk read cache (large-file reads spill here)
-	cleanupOnce         sync.Once           // guards cleanupScratch so run.complete can call it on every path
-	platform            string              // channel for the <env> block (web/telegram/discord/a2a); set explicitly per dispatch
-	userDisplayName     string              // originating user's display name for <env> (empty when none)
-	userEmail           string              // originating user's email for <env> (empty when none)
+	agent           *Agent
+	id              string
+	bridgeID        string
+	conversationID  string
+	parentRunID     string // originating run; gates __incoming/run-<id>/ reads
+	userID          string // the originating user (anchor for scoped dirs); empty for system jobs, webhooks, and anonymous runs
+	callerAccess    Access // resolved per-turn access level (default AccessAdmin for trusted triggers)
+	ctx             context.Context
+	actions         []wire.Action
+	logs            []wire.LogEntry
+	logsBytes       int // running size of logs[].Message; drives the cap in logAppend
+	logger          *zap.Logger
+	loggerOnce      sync.Once
+	mu              sync.Mutex // guards actions and logs
+	fileCache       *fileCache // per-run local-disk read cache (large-file reads spill here)
+	cleanupOnce     sync.Once  // guards cleanupScratch so run.complete can call it on every path
+	platform        string     // channel for the <env> block (web/telegram/discord/a2a); set explicitly per dispatch
+	userDisplayName string     // originating user's display name for <env> (empty when none)
+	userEmail       string     // originating user's email for <env> (empty when none)
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {
-	// One go-call accumulator per run, carried in ctx so the central HTTP
-	// seam credits blocking time without wrapping every binding. It feeds
-	// the L3 CPU guard (JS time = wall − time parked in Go calls).
-	gw := &goWall{}
 	return &run{
 		agent:          agent,
 		id:             id,
 		bridgeID:       bridgeID,
 		conversationID: conversationID,
-		ctx:            withGoWall(ctx, gw),
-		gw:             gw,
+		ctx:            ctx,
 		fileCache:      newFileCache(),
 		// Default to admin for trusted eager dispatchers (webhook and timed
 		// fire). Prompt and lazy HTTP dispatchers replace this with their
@@ -67,28 +49,14 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 	}
 }
 
-// checkedCtx returns r.ctx with both the run pointer and the caller
-// attached. VM bindings that reach untrusted territory (storage paths,
-// etc.) call this and then pass the resulting ctx to
-// agent.ResolveFilePath. User-registered tools dispatched from the VM
-// also receive this ctx so their bodies can call ResolveFilePath
-// without losing the caller's access level. Builder Go code that calls
-// the trusted file API directly (agent.OpenFile/ReadFile/...) does not
-// need this — those methods skip the access check.
+// checkedCtx attaches the run and caller for capability access checks and
+// registered tool attribution. Trusted Go file APIs retain their own policy.
 func (r *run) checkedCtx() context.Context {
 	return withCaller(contextWithRun(r.ctx, r), caller{
 		Access: r.callerAccess,
+		UserID: r.userID,
 		RunID:  r.id,
 	})
-}
-
-// vmRuntime lazily builds the per-run goja VM. Called only from inside
-// run_js tool execution — builder code never touches it.
-func (r *run) vmRuntime() *goja.Runtime {
-	r.vmOnce.Do(func() {
-		r.vm = newVM(r, r.agent)
-	})
-	return r.vm
 }
 
 // maxRunLogBytes caps the in-memory run log buffer. Airlock keeps the
@@ -130,12 +98,10 @@ func (r *run) runLogger() *zap.Logger {
 	return r.logger
 }
 
-// --- VM-only Airlock calls (only reachable from run_js JS bindings) ---
-
 // output sends display parts to the run's bound conversation. If topic
 // is empty, delivers to the conversation directly; if set, Airlock routes
 // to all subscribed conversations (topic publish). Backs the `output()`
-// JS binding (media-only) and TopicHandle.Publish (Go, may include text).
+// capability and TopicHandle.Publish (Go, may include text).
 func (r *run) output(ctx context.Context, parts []DisplayPart, topic string) error {
 	for i := range parts {
 		resolveDisplayPart(&parts[i])
@@ -154,18 +120,4 @@ func (r *run) output(ctx context.Context, parts []DisplayPart, topic string) err
 		RunID:          r.id,
 	}
 	return r.agent.client.doJSON(ctx, "POST", "/api/agent/print", req, nil)
-}
-
-func (r *run) subscribeTopic(ctx context.Context, slug string) error {
-	body := struct {
-		ConversationID string `json:"conversationId"`
-	}{r.conversationID}
-	return r.agent.client.doJSON(ctx, "POST", "/api/agent/topic/"+slug+"/subscribe", body, nil)
-}
-
-func (r *run) unsubscribeTopic(ctx context.Context, slug string) error {
-	body := struct {
-		ConversationID string `json:"conversationId"`
-	}{r.conversationID}
-	return r.agent.client.doJSON(ctx, "DELETE", "/api/agent/topic/"+slug+"/subscribe", body, nil)
 }

@@ -5,6 +5,21 @@ delivery. Input must be a struct. Use `JobContext.ID` as the idempotency key.
 `JobContext.ScheduledAt` contains the intended occurrence time for cron and
 delayed jobs and is nil for immediate jobs.
 
+For each agent, Airlock permanently records the contract for each job name and
+version, including inactive versions. Input/output schema hashes, `Timeout`, and
+`MaxAttempts` are immutable. `Description` and `MaxConcurrency` may change.
+Restore the recorded values for an accidental change; intentional contract
+changes require an explicit new version. Keep the original version registered
+with its original contract while queued or running jobs require it. A handler
+that rejects work still needs to preserve that contract; ordinary handler errors
+are terminal, regardless of `MaxAttempts`.
+
+`go tool air build` and `agenttest.New` validate local code using a mock Airlock
+and test database, not the target server's historical contracts. A passing local
+build is not a deployment compatibility check. `go tool air deploy` uploads
+source; Airlock checks the built candidate against its persisted history before
+cutover. Offline validation cannot establish compatibility with that history.
+
 Declare jobs and crons in the definition factory. Registration is offline and
 is included in the complete canonical `Agent.Manifest()`; it must not enqueue or
 perform runtime work. Job handles are late-bound: `Enqueue`, `EnqueueAt`, `Get`,

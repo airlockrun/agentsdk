@@ -226,8 +226,9 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 	mux.HandleFunc("PUT /api/agent/sync", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"promptData": map[string]string{"agentRouteUrl": "https://mock-agent.test"},
+		_ = json.NewEncoder(w).Encode(wire.SyncResponse{
+			RuntimeProtocol: wire.AppRuntimeProtocol,
+			PromptData:      wire.PromptData{AgentRouteURL: "https://mock-agent.test"},
 		})
 	})
 	mux.HandleFunc("POST /api/agent/upgrade", func(w http.ResponseWriter, r *http.Request) {

@@ -92,8 +92,8 @@ func (a *Agent) serveManifest(w io.Writer) {
 	}
 }
 
-// Handler builds the agent's HTTP mux: the framework routes (/prompt,
-// /webhook, /job, /refresh, /health, the A2A and asset endpoints) plus every
+// Handler builds the agent's HTTP mux: capability invocation,
+// /webhook, /job, /refresh, /health, tool and asset endpoints plus every
 // route registered via RegisterRoute, each wrapped with the lazy-run + logging
 // middleware. Serve installs it after syncing with Airlock.
 //
@@ -104,13 +104,12 @@ func (a *Agent) Handler() http.Handler {
 	a.requireRuntime("Handler")
 	a.freeze()
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /prompt", handlePrompt(a))
+	mux.HandleFunc("POST "+wire.RuntimeInvokePath, a.handleRuntimeInvoke)
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
 	mux.HandleFunc("POST /job/{name}/{version}", a.handleJob)
 	mux.HandleFunc("POST /refresh", a.handleRefresh)
 	mux.HandleFunc("GET /health", a.handleHealth)
-	// A2A: airlock's MCP server forwards user-registered tool calls
-	// here so sibling agents can invoke them directly (no LLM loop).
+	// External MCP clients can invoke registered tools without a chat loop.
 	mux.HandleFunc("POST /__air/tool/{name}", a.handleDirectTool)
 	// Bundled frontend assets are same-origin so layouts do not depend on a CDN.
 	mux.HandleFunc("GET /__air/assets/{name}", a.handleAsset)
@@ -182,17 +181,8 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	run.complete(ctx, "success", "", "", "")
 }
 
-// handleDirectTool dispatches a user-registered tool by name without
-// running the LLM loop. Used by Airlock's MCP server endpoint to expose
-// tools to sibling agents (A2A): the calling agent sees a typed
-// `agent_<slug>.toolName(...)` binding, the MCP server forwards the
-// call to airlock, and airlock forwards here with the resolved
-// caller access in X-Caller-Access.
-//
-// Access gating mirrors what the VM does at call time: the caller's
-// access must be >= the tool's registered Access (typically AccessUser).
-// Reject otherwise with 403 — the MCP server propagates that as a
-// JSON-RPC error to the caller.
+// handleDirectTool dispatches external MCP client calls to registered tools.
+// Airlock supplies resolved caller access; insufficient access returns 403.
 func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	rt, ok := a.tools[name]
@@ -223,7 +213,7 @@ func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
 	// HTTP routes.
 	//
 	// Scope keys (parentRun/user) ride on headers airlock sets for
-	// A2A and external MCP tool calls; ResolveFilePath consults them
+	// external MCP tool calls; ResolveFilePath consults them
 	// when gating reads on scoped directories.
 	lazy := &lazyRun{
 		agent:           a,

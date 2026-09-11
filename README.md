@@ -4,7 +4,10 @@ Go SDK for building **cyborg agents** — programs that are half code, half AI �
 
 Cyborg agents are deterministic Go where it makes sense (HTTP routes, webhooks, cron jobs, structured tool execution) and AI-driven where it helps (LLM reasoning, conversation handling, open-ended decisions). agentsdk is the contract your code uses to participate in the airlock platform: register routes, tools, webhooks, crons, and chat surfaces; access scoped storage and per-agent Postgres; and call LLMs through the platform's credential-managing proxy.
 
-If you're not building on Airlock, you don't need this — agentsdk is the glue, not the runtime.
+The root SDK integrates Go apps with Airlock. The public
+[`chatruntime`](chatruntime/README.md) package runs hosted chat independently of
+the SDK root, using explicit Sol models, session persistence, capability dispatch,
+and an isolated Deno executor.
 
 Read the [Airlock documentation](https://airlock.run/docs/) for platform guides and the [Agent SDK and CLI guide](https://airlock.run/docs/agentsdk/) for the authoring workflow.
 
@@ -38,7 +41,32 @@ Inside an agent repository, use the pinned tool for authoring and deployment:
 go tool air toolchain install
 go tool air build
 go tool air deploy -m "Describe this deployment"
+go tool air deploy list --limit 10
+go tool air deploy status --watch --logs
 ```
+
+`deploy list [dir]` shows the newest builds with full build IDs, type, status,
+start time, and message. `--limit` defaults to 10 and accepts 1-50.
+`deploy status [dir]` inspects the latest build, or a specific `--build <UUID>`.
+Both accept `--remote`, `--url`, and `--agent <slug-or-id>` with the same binding
+conflict checks as source deployment, and use the saved login for that URL.
+They do not upload source, start builds, check SDK compatibility, or write the
+workspace. Login refresh can update credentials outside the repository.
+
+Status shows build lifecycle, deployment phase, timestamps, source ref, errors,
+and job blockers. `--logs` adds persisted Docker and Sol logs. `--watch` polls
+every two seconds, pins the selected build even if a newer build starts, and
+prints only new log content; replaced or truncated snapshots are marked and
+reprinted. Ctrl-C cancels the watch. A complete build is historical build state,
+not a claim that its image is currently deployed or that the agent is running.
+
+Both commands support `--json` using the typed API response (`builds` for list,
+`build` for status). Status JSON includes persisted logs even without `--logs`.
+`--watch --json` is rejected. Failed status prints its snapshot, then exits
+nonzero with an error on stderr, including in JSON mode. A building snapshot
+without `--watch` succeeds immediately. An empty build history is an explicit
+error. A valid `deploy list -m "message"` uploads a directory named `list`;
+use `./list` or `./status` to make these directory names unambiguous.
 
 Running `airlock` inside an agent repository delegates non-bootstrap commands
 to `go tool air`; the repository's `go.mod` remains the version source of truth.
@@ -122,6 +150,15 @@ starts the runtime, validates migrations with an up, down-to-zero, up cycle,
 synchronizes declarations, runs `OnStart` hooks, and returns a ready agent.
 `go tool air build` provisions one throwaway PostgreSQL container for the serial
 test run instead of starting one per `agenttest.New` call.
+
+`env.Chat(ctx, scope, input)` exercises the actual shared Sol chat loop with mock
+models and the real authenticated app capability handler. Use `agenttest.MemoryStore`
+for conversation history, `agenttest.Events` for typed events, and
+`agenttest.Executor(ExecutorConfig)` for a lazy Deno factory. Local tests select
+an executor image built with `jsexec.BuildImage`; builders inject `OpenTransport`
+to an isolated host-owned executor without mounting Docker into test containers.
+Text-only and unapproved runs do not allocate an executor. See the
+[chat runtime contract](chatruntime/README.md) for required settings and callbacks.
 
 ## Companion projects
 

@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/airlockrun/goai"
 	"github.com/airlockrun/goai/stream"
@@ -54,6 +55,18 @@ func (a *Agent) prepareGenInput(ctx context.Context, input *stream.Input, r *run
 		wrapped[name] = wrapToolWithRun(t, r)
 	}
 	input.Tools = wrapped
+}
+
+// wrapToolWithRun preserves the generation call's run and caller attribution.
+func wrapToolWithRun(t tool.Tool, run *run) tool.Tool {
+	if t.Execute == nil {
+		return t
+	}
+	inner := t.Execute
+	t.Execute = func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
+		return inner(contextWithRun(run.checkedCtx(), run), input, opts)
+	}
+	return t
 }
 
 // GenerateImage generates an image. A missing Model defaults to the agent's

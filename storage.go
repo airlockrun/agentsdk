@@ -381,10 +381,6 @@ func (a *Agent) ReadRange(ctx context.Context, path string, start, end int64) ([
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("ReadRange")
 	}
-	if gw := goWallFrom(ctx); gw != nil {
-		gw.enter()
-		defer gw.exit()
-	}
 	rc, err := a.OpenFileRange(ctx, path, start, end)
 	if err != nil {
 		return nil, err
@@ -398,13 +394,6 @@ func (a *Agent) ReadRange(ctx context.Context, path string, start, end int64) ([
 func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("ReadFile")
-	}
-	// The body read (io.ReadAll) dominates for large files and happens after
-	// client.do returns headers, so credit the whole op to the go-call
-	// accumulator (nesting-safe with the inner client.do span).
-	if gw := goWallFrom(ctx); gw != nil {
-		gw.enter()
-		defer gw.exit()
 	}
 	rc, err := a.OpenFile(ctx, path)
 	if err != nil {

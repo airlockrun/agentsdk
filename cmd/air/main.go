@@ -129,6 +129,8 @@ Usage:
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
   air deploy [dir] -m <text>      upload source and start a build
+  air deploy list [dir] [flags]  list recent builds (newest first)
+  air deploy status [dir] [flags] inspect or watch one build
   air pull [dir] [flags]          fast-forward a local workspace from Airlock
   air clone <agent> <dir> [flags] clone Airlock source without Git
   air remote default <name>       select the default deployment target
@@ -174,6 +176,27 @@ Deploy flags:
   --description <text>       description for --create
   -m, --message <text>       required build message (single line, 200 bytes max)
   --force                    replace stale Airlock source intentionally
+
+Deploy list/status (dir defaults to "."):
+  --agent <slug-or-id>       existing agent target for a new or matching remote
+  --url <url>                Airlock URL for a new or matching remote
+  --remote <name>            named target (default: configured default_remote)
+  --json                    print the typed API response as JSON
+  list --limit <n>           number of newest builds to show (default 10, range 1-50)
+  status --build <UUID>      inspect this build (default: latest)
+  status --watch             poll every 2 seconds until complete or failed; Ctrl-C cancels
+  status --logs              show persisted Docker and Sol logs; watch prints additions
+
+  Read-only: no upload, build, SDK compatibility check, or workspace writes.
+  Uses saved login credentials; credential refresh may update the login store.
+  Watch pins the selected build, even if a newer build starts. Log snapshot
+  replacements are marked and reprinted. --watch and --json cannot be combined.
+  JSON includes persisted detail logs, regardless of --logs. Failed status exits
+  nonzero after printing the snapshot (also with --json); building snapshots exit
+  successfully without --watch. No builds is an error. Build completion does not
+  describe the agent's current runtime or identify the currently deployed image.
+  A valid deploy list/status -m <text> uploads a directory named list/status;
+  use ./list or ./status to make a directory target unambiguous.
 
 Pull flags:
   --agent <slug-or-id>       existing agent target for a new or matching remote
