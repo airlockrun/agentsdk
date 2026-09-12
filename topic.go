@@ -49,6 +49,7 @@ func (h *TopicHandle) publish(ctx context.Context, userID string, parts []Displa
 		untrusted = true
 		if r := lazy.materialized(); r != nil {
 			runID = r.id
+			ctx = contextWithRun(ctx, r)
 		}
 	}
 	for i := range parts {

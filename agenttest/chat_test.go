@@ -83,7 +83,9 @@ func TestChatInvokesAppUnderBorrowedRun(t *testing.T) {
 			}
 			model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{call, testutil.MockTextResponse("The answer is 42", testutil.MockUsage(10, 10))}})
 			env.Airlock.Reset()
-			result, err := env.Chat(t.Context(), wire.RuntimeContext{AgentID: uuid.Nil.String(), RunID: runID, CallerAccess: wire.AccessUser}, chatruntime.Input{
+			user := &wire.CallerUser{ID: uuid.NewString(), PlatformMember: true}
+			caller := wire.Caller{Kind: "user", Access: wire.AccessUser, User: user, Initiator: user, Origin: wire.CallerOrigin{Interface: "chat", Execution: "request"}}
+			result, err := env.Chat(t.Context(), wire.RuntimeContext{AgentID: uuid.Nil.String(), RunID: runID, Caller: caller, InvocationToken: strings.Repeat("12", 32)}, chatruntime.Input{
 				Message: "Look up the answer", Model: model, ModelLimits: session.ModelLimits{Input: 80000}, MaxSteps: 5,
 				SessionStore: &agenttest.MemoryStore{}, Sink: &agenttest.Events{}, Capabilities: selected, DirectTools: direct, ExecutorFactory: factory,
 				Backend: platformFunc(func(context.Context, chatruntime.Invocation) (tool.Result, error) {

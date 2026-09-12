@@ -11,9 +11,8 @@ import (
 // writes, returns, or consumes. Inside the same process (run_js, Go code)
 // it behaves as a plain string.
 //
-// At MCP boundaries airlock rewrites the path so callees always see one
-// readable in their own bucket: cross-bucket copy for A2A, base64
-// materialization for external MCP clients. Authors don't need to think
+// At MCP boundaries Airlock materializes inline client uploads into checked
+// paths in the app's own storage. Authors don't need to think
 // about this — declaring `FilePath` is the entire opt-in.
 type FilePath string
 

@@ -62,7 +62,7 @@ operations directly, without an app hop. `Input` is the canonical JSON tool inpu
 object; the JS adapter accepts one object argument and unwraps its positional array.
 
 `RuntimeContext` carries `AgentID`, `RunID`, `BridgeID`, `ConversationID`,
-`ParentRunID`, `CallerAccess`, `UserID`, `UserEmail`, `UserDisplayName`, `Platform`,
+`Origin`, `CallerAccess`, `UserID`, `UserEmail`, `UserDisplayName`, `Platform`,
 `SupportedModalities`, and optional `Job` (`ID`, `Attempt`, `LeaseToken`).
 Execution borrows this run, honors HTTP cancellation and a bounded timeout,
 and never creates or completes the run. Job progress and SDK API requests retain

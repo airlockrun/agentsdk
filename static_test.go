@@ -20,7 +20,9 @@ func TestStaticAssetHandler(t *testing.T) {
 
 	t.Run("registered asset", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/static/app.01234567.css", nil))
+		r := httptest.NewRequest(http.MethodGet, "/static/app.01234567.css", nil)
+		r.Header.Set("Authorization", "Bearer "+a.token)
+		handler.ServeHTTP(w, r)
 
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
@@ -41,7 +43,9 @@ func TestStaticAssetHandler(t *testing.T) {
 
 	t.Run("unknown asset", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/static/missing.css", nil))
+		r := httptest.NewRequest(http.MethodGet, "/static/missing.css", nil)
+		r.Header.Set("Authorization", "Bearer "+a.token)
+		handler.ServeHTTP(w, r)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
 		}

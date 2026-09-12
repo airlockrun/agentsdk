@@ -29,6 +29,9 @@ type Env struct {
 // the database, validates migrations with an up, down-to-zero, up cycle from the
 // enclosing Go module, synchronizes declarations, and runs named OnStart hooks
 // before New returns.
+// HTTP requests to Agent.Handler require Authorization: Bearer test-token,
+// including requests with WithUser or WithCaller test contexts.
+// Routes and webhooks also require SetCallerHeader on the test request.
 // TEST_DB_URL is used when explicitly supplied; otherwise New starts a
 // throwaway pgvector container. The factory may wire Agent.DB()'s late-bound
 // handle, but database operations are unavailable until Start. `go tool air

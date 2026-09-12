@@ -16,18 +16,6 @@ const defaultTimeout = 2 * time.Minute
 
 type noUnkeyedLiterals struct{}
 
-// User identifies the human a run is acting for, exposed to handler code via
-// UserFromContext. Hosts expose these claims to run_js through jsexec.Options.User
-// (a read-only `user` binding, null when absent). ID is the stable
-// internal-user uuid (the key to scope agent-owned data by); Email/DisplayName
-// are display claims. All fields are empty for system job/webhook and
-// anonymous runs.
-type User struct {
-	ID          string
-	Email       string
-	DisplayName string
-}
-
 // --- Handler types ---
 
 // WebhookHandlerFunc handles incoming webhook requests. Pass ctx to any

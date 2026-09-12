@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestRegistrationValidation(t *testing.T) {
@@ -276,7 +278,10 @@ func TestHandlerFreezesRegistrationsAndServesPublicRoute(t *testing.T) {
 
 	handler := a.Handler()
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.Header.Set("Authorization", "Bearer "+a.token)
+	setTestCallerHeader(t, r, testWireCaller("anonymous", wire.AccessPublic))
+	handler.ServeHTTP(w, r)
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("public route status = %d, want %d", w.Code, http.StatusNoContent)
 	}

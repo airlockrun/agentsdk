@@ -10,10 +10,10 @@ code share one canonical form).
 
 **Hard rule for tool authors: tool inputs and outputs are *storage* paths,
 never container paths.** A `Source agentsdk.FilePath` field on a tool's `In`
-struct is a storage path the LLM (or a sibling agent over A2A) passed in;
+struct is a storage path the LLM or an external MCP client passed in;
 convert with `string(in.Source)` and pass it through `ResolveFilePath` /
 `agent.OpenFile`. A `Result agentsdk.FilePath` you return is a storage path
-the LLM, chat, or calling sibling will follow back through the same storage
+the LLM, chat, or external MCP client will follow back through the same storage
 namespace. Returning `os.CreateTemp` paths or `localOut.Name()` to the LLM
 gives it a path it cannot read — the framework will 404. When you need a real
 on-disk file (CLI tools like `ffmpeg`, `pdftotext`), use `os.CreateTemp`
@@ -218,7 +218,7 @@ Execute: func(ctx context.Context, in TranscodeIn) (TranscodeOut, error) {
     }
 
     // Upload the result back into storage and return the path as FilePath
-    // so airlock auto-copies it to the caller across A2A boundaries.
+    // so Airlock can expose the exact file to the authorized caller.
     result, err := os.Open(outFile.Name())
     if err != nil {
         return TranscodeOut{}, err

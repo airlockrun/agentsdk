@@ -3,8 +3,8 @@ package agentsdk
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,14 +22,8 @@ import (
 const maxRuntimeInvokeBytes = 4 << 20
 
 func (a *Agent) handleRuntimeInvoke(w http.ResponseWriter, r *http.Request) {
-	// An internal URL alone is not authentication. Only the target agent's
-	// credential authorizes the broker's attribution claims; ingress headers
-	// are deliberately ignored, including X-Caller-Access and X-Run-ID.
-	if a.token == "" || len(r.Header.Values("Authorization")) != 1 ||
-		subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+a.token)) != 1 {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
+	// Handler authenticates host delivery. Invocation attribution comes only
+	// from the scoped protocol body, not X-Caller-Access or X-Run-ID headers.
 	var req wire.RuntimeInvokeRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxRuntimeInvokeBytes))
 	dec.DisallowUnknownFields()
@@ -73,7 +67,7 @@ func (a *Agent) handleRuntimeInvoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown app capability", http.StatusNotFound)
 		return
 	}
-	if !accessSatisfies(Access(req.Context.CallerAccess), Access(selected.Access)) {
+	if !accessSatisfies(Access(req.Context.Caller.Access), Access(selected.Access)) {
 		http.Error(w, "capability requires higher access", http.StatusForbidden)
 		return
 	}
@@ -97,7 +91,7 @@ func (a *Agent) handleRuntimeInvoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := a.executeRuntimeTool(active, executable, req)
-	secrets := []string{a.token}
+	secrets := []string{a.token, req.Context.InvocationToken}
 	if req.Context.Job != nil {
 		secrets = append(secrets, req.Context.Job.LeaseToken)
 	}
@@ -112,10 +106,13 @@ func (a *Agent) handleRuntimeInvoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateRuntimeContext(c wire.RuntimeContext) error {
+	if token, err := hex.DecodeString(c.InvocationToken); err != nil || len(token) != 32 || hex.EncodeToString(token) != c.InvocationToken {
+		return errors.New("invalid invocation token")
+	}
 	if c.AgentID == "" || c.RunID == "" {
 		return errors.New("agentId and runId are required")
 	}
-	for _, id := range []string{c.RunID, c.ParentRunID, c.ConversationID, c.UserID, c.BridgeID} {
+	for _, id := range []string{c.RunID, c.ConversationID, c.BridgeID} {
 		if id == "" {
 			continue
 		}
@@ -123,8 +120,8 @@ func validateRuntimeContext(c wire.RuntimeContext) error {
 			return errors.New("invalid runtime context ID")
 		}
 	}
-	if c.CallerAccess != wire.AccessPublic && c.CallerAccess != wire.AccessUser && c.CallerAccess != wire.AccessAdmin {
-		return errors.New("invalid caller access")
+	if err := c.Caller.Validate(); err != nil {
+		return err
 	}
 	if c.Job != nil {
 		if err := validateJobID(c.Job.ID); err != nil {

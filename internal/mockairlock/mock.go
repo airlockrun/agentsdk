@@ -157,7 +157,9 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 	mux.HandleFunc("POST /api/agent/run/create", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{"runId": "run-mock-123"})
+		_ = json.NewEncoder(w).Encode(wire.CreateRunResponse{RunID: "run-mock-123",
+			Caller: wire.Caller{Kind: "application", Access: wire.AccessPublic,
+				Origin: wire.CallerOrigin{Interface: "application", Execution: "background"}}})
 	})
 	mux.HandleFunc("POST /api/agent/run/complete", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)

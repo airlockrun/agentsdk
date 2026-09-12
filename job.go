@@ -483,11 +483,12 @@ func (a *Agent) handleJob(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutMs)*time.Millisecond)
 	defer cancel()
-	run := newRun(a, runID, r.Header.Get("X-Bridge-ID"), req.InitiatorConversationID, ctx)
-	run.userID = req.InitiatorUserID
-	run.callerAccess = Access(req.CallerAccess)
+	run := newRun(a, runID, r.Header.Get("X-Bridge-ID"), req.ConversationID, ctx)
+	run.invocationToken = r.Header.Get(wire.InvocationTokenHeader)
+	run.setCaller(callerFromWire(req.Caller))
 	ctx = contextWithRun(ctx, run)
 	ctx = contextWithJobRun(ctx, &jobRunContext{agent: a, id: req.ID, attempt: int(req.Attempt), leaseToken: leaseToken})
+	run.ctx = ctx
 
 	status, output, errMsg, panicTrace := executeJob(ctx, job, req)
 	runStatus := status
@@ -528,32 +529,13 @@ func validateJobRunRequest(req wire.JobRunRequest, pathName string, pathVersion 
 	if err := json.Unmarshal(req.Input, &input); err != nil || input == nil {
 		return errors.New("invalid job run request: input must be a JSON object")
 	}
-	if err := validateJobInitiator(req); err != nil {
+	if err := req.Caller.Validate(); err != nil {
 		return fmt.Errorf("invalid job run request: %w", err)
 	}
-	return nil
-}
-
-func validateJobInitiator(req wire.JobRunRequest) error {
-	if req.InitiatorConversationID != "" {
-		if err := validateJobID(req.InitiatorConversationID); err != nil {
-			return errors.New("InitiatorConversationID must be a canonical non-nil UUID")
+	if req.ConversationID != "" {
+		if err := validateJobID(req.ConversationID); err != nil {
+			return errors.New("ConversationID must be a canonical non-nil UUID")
 		}
-	}
-	switch req.InitiatorKind {
-	case "user":
-		if err := validateJobID(req.InitiatorUserID); err != nil {
-			return errors.New("InitiatorUserID must be a canonical non-nil UUID")
-		}
-		if req.CallerAccess != wire.AccessUser && req.CallerAccess != wire.AccessAdmin {
-			return errors.New("user initiator requires user or admin CallerAccess")
-		}
-	case "anonymous", "system":
-		if req.InitiatorUserID != "" || req.CallerAccess != wire.AccessPublic {
-			return fmt.Errorf("%s initiator requires an empty InitiatorUserID and public CallerAccess", req.InitiatorKind)
-		}
-	default:
-		return errors.New("invalid InitiatorKind")
 	}
 	return nil
 }

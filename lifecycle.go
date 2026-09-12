@@ -5,7 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
+
+	"github.com/airlockrun/agentsdk/wire"
+	"go.uber.org/zap"
 )
 
 type startHook struct {
@@ -78,7 +82,31 @@ func (a *Agent) cleanupFailedStart() error {
 	return err
 }
 
-func (a *Agent) runStartHooks(ctx context.Context) error {
+func (a *Agent) runStartHooks(ctx context.Context) (err error) {
+	lazy := &lazyRun{agent: a, triggerRef: "startup", callerAccess: AccessAdmin,
+		caller: callerFromWire(wire.Caller{Kind: "application", Access: wire.AccessAdmin,
+			Origin: wire.CallerOrigin{Interface: "application", Execution: "startup"}})}
+	ctx = contextWithLazyRun(contextWithJobRun(ctx, nil), lazy)
+	defer func() {
+		recovered := recover()
+		if r := lazy.materialized(); r != nil {
+			status, message, kind, trace := "success", "", "", ""
+			if err != nil {
+				status, message, kind = "error", err.Error(), wire.ErrorKindAgent
+			}
+			if recovered != nil {
+				status, message, kind, trace = "error", fmt.Sprint(recovered), wire.ErrorKindAgent, string(debug.Stack())
+			}
+			completionErr := r.complete(ctx, status, message, kind, trace)
+			if recovered != nil && completionErr != nil {
+				agentLogger().Error("record startup completion", zap.Error(completionErr))
+			}
+			err = errors.Join(err, completionErr)
+		}
+		if recovered != nil {
+			panic(recovered)
+		}
+	}()
 	for _, hook := range a.startHooks {
 		if err := hook.run(ctx); err != nil {
 			return fmt.Errorf("agentsdk: startup hook %q: %w", hook.name, err)

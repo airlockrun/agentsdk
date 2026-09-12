@@ -14,7 +14,7 @@ import (
 )
 
 func TestSyncRequiresRuntimeHandshake(t *testing.T) {
-	for _, protocol := range []string{"", "airlock.app-runtime.v2", wire.AppRuntimeProtocol} {
+	for _, protocol := range []string{"", "airlock.app-runtime.v1", "airlock.app-runtime.v3", wire.AppRuntimeProtocol} {
 		t.Run(protocol, func(t *testing.T) {
 			a, _ := testAgent(t)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

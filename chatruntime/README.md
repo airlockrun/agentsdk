@@ -56,6 +56,5 @@ is an explicit host policy for noninteractive runs.
 
 Resume uses `Resume *sol.SuspensionContext` and required `Approved *bool`.
 Only permission suspension is accepted. The host must reject incompatible
-checkpoints before constructing Input. Internal A2A, sibling discovery, and
-delegated checkpoint orchestration are not part of this runtime. External MCP
-servers declared in the manifest are ordinary broker capabilities.
+checkpoints before constructing Input. External MCP servers declared in the
+manifest are ordinary broker capabilities.

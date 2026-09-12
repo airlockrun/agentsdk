@@ -13,7 +13,6 @@ import (
 
 	"github.com/airlockrun/agentsdk/internal/binding"
 
-	"github.com/airlockrun/agentsdk/internal/testcaller"
 	"github.com/airlockrun/agentsdk/wire"
 	_ "github.com/lib/pq" // register "postgres" driver for agent.DB()
 	"go.uber.org/zap"
@@ -137,33 +136,6 @@ func AgentFromContext(ctx context.Context) *Agent {
 	return nil
 }
 
-// UserFromContext returns the human a run is acting for. The second return is
-// false for runs with no originating user, including system job and webhook
-// triggers and anonymous/public prompt runs. ID is the stable internal-user
-// uuid and is the key to scope agent-owned data by; Email/DisplayName are
-// display claims.
-// Reading it never materializes a run, so route handlers can call it freely:
-// /prompt and route runs carry id+email+display name (airlock forwards
-// X-User-ID/Email/Name); the A2A path carries id only.
-func UserFromContext(ctx context.Context) (User, bool) {
-	if r := runFromContext(ctx); r != nil {
-		if r.userID == "" {
-			return User{}, false
-		}
-		return User{ID: r.userID, Email: r.userEmail, DisplayName: r.userDisplayName}, true
-	}
-	if l := lazyRunFromContext(ctx); l != nil {
-		if l.userID == "" {
-			return User{}, false
-		}
-		return User{ID: l.userID, Email: l.userEmail, DisplayName: l.userDisplayName}, true
-	}
-	if test, ok := testcaller.FromContext(ctx); ok && test.UserID != "" {
-		return User{ID: test.UserID, Email: test.Email, DisplayName: test.DisplayName}, true
-	}
-	return User{}, false
-}
-
 // New creates an Agent for dependency wiring and registrations. It performs no
 // database, network, credential, migration, or other runtime initialization;
 // Serve starts the runtime after declarations are complete. Panics if
@@ -233,8 +205,8 @@ func newAgentRegistrationState(cfg Config) *Agent {
 		RetentionHours: 72, // sweeper drops files older than 3 days
 	})
 	// Inbox for files airlock places here on behalf of an external
-	// caller (A2A tool args, prompt-meta files, inline MCP uploads).
-	// Its private provenance policy accepts exact user, conversation, or parent
+	// caller through inline MCP uploads.
+	// Its private provenance policy accepts exact user, conversation, or current
 	// run segments without changing the meaning of public directory scopes.
 	a.directories = append(a.directories, &directory{
 		Path:               reservedIncomingPath,
@@ -244,19 +216,6 @@ func newAgentRegistrationState(cfg Config) *Agent {
 		Description:        "Inbound file scratch (framework-managed; per-scope reads, ephemeral).",
 		RetentionHours:     24,
 		incomingProvenance: true,
-	})
-	// Outbox: airlock copies file results returned from sibling
-	// agents into agents/{this}/siblings/<sibling-slug>/<path>.
-	// Caller's run_js can read these through air.fileRead(); longer retention
-	// than the inbox because the caller may want to keep working with
-	// the file across follow-up turns.
-	a.directories = append(a.directories, &directory{
-		Path:           reservedSiblingsPath,
-		Read:           AccessUser,
-		Write:          AccessUser,
-		List:           AccessUser,
-		Description:    "Files returned by sibling agents (framework-managed; cleaned after 3 days).",
-		RetentionHours: 72,
 	})
 	return a
 }

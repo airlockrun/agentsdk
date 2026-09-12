@@ -37,8 +37,10 @@ func (c *airlockClient) newRequest(ctx context.Context, method, path string, bod
 		return nil, fmt.Errorf("agentsdk: request %s %s: %w", method, path, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	if run := runFromContext(ctx); run != nil && run.id != "" {
-		req.Header.Set("X-Airlock-Run-ID", run.id)
+	if run := runFromContext(ctx); run != nil {
+		for name, value := range run.callbackHeaders() {
+			req.Header.Set(name, value)
+		}
 	}
 	return req, nil
 }
@@ -102,6 +104,7 @@ func (c *airlockClient) doJSONWithHeaders(ctx context.Context, method, path stri
 		req.Header.Set("Content-Type", "application/json")
 	}
 	for name, values := range headers {
+		req.Header.Del(name)
 		for _, value := range values {
 			req.Header.Add(name, value)
 		}

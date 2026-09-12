@@ -15,11 +15,12 @@ import (
 type run struct {
 	agent           *Agent
 	id              string
+	invocationToken string
 	bridgeID        string
 	conversationID  string
-	parentRunID     string // originating run; gates __incoming/run-<id>/ reads
+	caller          Caller
 	userID          string // the originating user (anchor for scoped dirs); empty for system jobs, webhooks, and anonymous runs
-	callerAccess    Access // resolved per-turn access level (default AccessAdmin for trusted triggers)
+	callerAccess    Access // private file-access projection
 	ctx             context.Context
 	actions         []wire.Action
 	logs            []wire.LogEntry
@@ -29,9 +30,6 @@ type run struct {
 	mu              sync.Mutex // guards actions and logs
 	fileCache       *fileCache // per-run local-disk read cache (large-file reads spill here)
 	cleanupOnce     sync.Once  // guards cleanupScratch so run.complete can call it on every path
-	platform        string     // channel for the <env> block (web/telegram/discord/a2a); set explicitly per dispatch
-	userDisplayName string     // originating user's display name for <env> (empty when none)
-	userEmail       string     // originating user's email for <env> (empty when none)
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {
@@ -42,21 +40,25 @@ func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Conte
 		conversationID: conversationID,
 		ctx:            ctx,
 		fileCache:      newFileCache(),
-		// Default to admin for trusted eager dispatchers (webhook and timed
-		// fire). Prompt and lazy HTTP dispatchers replace this with their
-		// resolved caller access before exposing the run to agent code.
-		callerAccess: AccessAdmin,
 	}
 }
 
 // checkedCtx attaches the run and caller for capability access checks and
 // registered tool attribution. Trusted Go file APIs retain their own policy.
 func (r *run) checkedCtx() context.Context {
-	return withCaller(contextWithRun(r.ctx, r), caller{
+	return withCallScope(contextWithRun(r.ctx, r), callScope{
 		Access: r.callerAccess,
 		UserID: r.userID,
 		RunID:  r.id,
 	})
+}
+
+func (r *run) setCaller(c Caller) {
+	c.requireValid()
+	r.caller = c
+	r.callerAccess = c.Access()
+	user, _ := c.User()
+	r.userID = user.ID
 }
 
 // maxRunLogBytes caps the in-memory run log buffer. Airlock keeps the
@@ -119,5 +121,5 @@ func (r *run) output(ctx context.Context, parts []DisplayPart, topic string) err
 		ConversationID: r.conversationID,
 		RunID:          r.id,
 	}
-	return r.agent.client.doJSON(ctx, "POST", "/api/agent/print", req, nil)
+	return r.agent.client.doJSON(contextWithRun(ctx, r), "POST", "/api/agent/print", req, nil)
 }

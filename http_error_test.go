@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestRouteHTTPErrorWritesSafeResponse(t *testing.T) {
@@ -22,7 +24,10 @@ func TestRouteHTTPErrorWritesSafeResponse(t *testing.T) {
 	})
 
 	w := httptest.NewRecorder()
-	a.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/thing", nil))
+	r := httptest.NewRequest(http.MethodGet, "/thing", nil)
+	r.Header.Set("Authorization", "Bearer "+a.token)
+	setTestCallerHeader(t, r, testWireCaller("anonymous", wire.AccessPublic))
+	a.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}

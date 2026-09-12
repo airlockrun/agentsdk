@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,11 +12,11 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
-	"github.com/airlockrun/goai/tool"
 	"go.uber.org/zap"
 )
 
@@ -92,25 +93,28 @@ func (a *Agent) serveManifest(w io.Writer) {
 	}
 }
 
-// Handler builds the agent's HTTP mux: capability invocation,
+// Handler builds the agent's authenticated HTTP mux: capability invocation,
 // /webhook, /job, /refresh, /health, tool and asset endpoints plus every
-// route registered via RegisterRoute, each wrapped with the lazy-run + logging
-// middleware. Serve installs it after syncing with Airlock.
+// route registered via RegisterRoute. Custom routes have run and logging
+// middleware. Serve installs it after syncing with Airlock. Every request except
+// GET/HEAD /health requires exactly one Authorization: Bearer <app token> header,
+// including public routes and assets. Airlock authenticates the external caller
+// and supplies delivery credentials and attribution to this private listener.
 //
 // Handler requires a started runtime, validates and freezes registrations, and
 // does not listen. Tests use it after agenttest.New to exercise routes through
 // the real dispatch (including {param} extraction) with httptest.
 func (a *Agent) Handler() http.Handler {
 	a.requireRuntime("Handler")
+	if strings.TrimSpace(a.token) == "" {
+		panic("agentsdk: Handler requires AIRLOCK_AGENT_TOKEN")
+	}
 	a.freeze()
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+wire.RuntimeInvokePath, a.handleRuntimeInvoke)
 	mux.HandleFunc("POST /webhook/{name}", a.handleWebhook)
 	mux.HandleFunc("POST /job/{name}/{version}", a.handleJob)
 	mux.HandleFunc("POST /refresh", a.handleRefresh)
-	mux.HandleFunc("GET /health", a.handleHealth)
-	// External MCP clients can invoke registered tools without a chat loop.
-	mux.HandleFunc("POST /__air/tool/{name}", a.handleDirectTool)
 	// Bundled frontend assets are same-origin so layouts do not depend on a CDN.
 	mux.HandleFunc("GET /__air/assets/{name}", a.handleAsset)
 	mux.HandleFunc("GET /static/{name}", a.handleStaticAsset)
@@ -123,7 +127,48 @@ func (a *Agent) Handler() http.Handler {
 		mux.HandleFunc(key, a.wrapRoute(key, route.Handler))
 	}
 
-	return mux
+	return a.authenticateHost(mux)
+}
+
+// authenticateHost verifies possession of the shared app credential before any
+// dispatch or attribution parsing. Native app code also holds this credential;
+// it is not a sandbox boundary or proof of a human identity on the host.
+func (a *Agent) authenticateHost(next http.Handler) http.Handler {
+	expected := []byte("Bearer " + a.token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == "/health" {
+			// Call only the built-in probe, never a custom mux match or redirect.
+			a.handleHealth(w, r)
+			return
+		}
+		var authorization string
+		var count int
+		for name, values := range r.Header {
+			if strings.EqualFold(name, "Authorization") {
+				count += len(values)
+				if len(values) != 0 {
+					authorization = values[0]
+				}
+			}
+		}
+		if count != 1 || subtle.ConstantTimeCompare([]byte(authorization), expected) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		for _, name := range []string{"X-Run-ID", "X-Bridge-ID", jobLeaseTokenHeader, wire.InvocationTokenHeader} {
+			count := 0
+			for key, values := range r.Header {
+				if strings.EqualFold(key, name) {
+					count += len(values)
+				}
+			}
+			if count > 1 {
+				http.Error(w, "ambiguous delivery headers", http.StatusBadRequest)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +176,11 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	wh, ok := a.webhooks[name]
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+	metadata, err := wire.DecodeCallerHeader(r.Header)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -148,7 +198,8 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	bridgeID := r.Header.Get("X-Bridge-ID")
 
 	run := newRun(a, runID, bridgeID, "", ctx)
-	run.callerAccess = AccessAdmin // webhook is a trusted server trigger
+	run.invocationToken = r.Header.Get(wire.InvocationTokenHeader)
+	run.setCaller(callerFromWire(metadata))
 	ctx = contextWithRun(ctx, run)
 	ew := newEventWriter(w)
 
@@ -181,107 +232,35 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	run.complete(ctx, "success", "", "", "")
 }
 
-// handleDirectTool dispatches external MCP client calls to registered tools.
-// Airlock supplies resolved caller access; insufficient access returns 403.
-func (a *Agent) handleDirectTool(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	rt, ok := a.tools[name]
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-
-	caller := callerFromRequest(r)
-	user := userFromRequest(r)
-	if !accessSatisfies(caller.Access, rt.access) {
-		http.Error(w, `{"error":"tool requires higher access"}`, http.StatusForbidden)
-		return
-	}
-
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 4*1024*1024))
-	if err != nil {
-		http.Error(w, `{"error":"read body"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Bind a lazyRun into ctx so anything the tool reaches for —
-	// conn_X.Request, agent.Storage, agent.LLM — can
-	// resolve the Agent (and materialize a real run if it actually
-	// performs an LLM call / log / action). Without this, the tool
-	// gets a bare http.Request ctx and any AgentFromContext lookup
-	// panics. Mirrors the lazyRun setup wrapRoute uses for custom
-	// HTTP routes.
-	//
-	// Scope keys (parentRun/user) ride on headers airlock sets for
-	// external MCP tool calls; ResolveFilePath consults them
-	// when gating reads on scoped directories.
-	lazy := &lazyRun{
-		agent:           a,
-		triggerRef:      "mcp-tool:" + name,
-		parentRunID:     r.Header.Get("X-Parent-Run-ID"),
-		userID:          user.ID,
-		userEmail:       user.Email,
-		userDisplayName: user.DisplayName,
-		callerAccess:    caller.Access,
-	}
-
-	timeout := defaultTimeout
-	baseCtx, cancel := context.WithTimeout(r.Context(), timeout)
-	defer cancel()
-	ctx := withCaller(contextWithLazyRun(baseCtx, lazy), caller)
-	sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-	var dispatchErr error
-	var panicTrace string
-
-	defer func() {
-		if rec := recover(); rec != nil {
-			panicTrace = string(debug.Stack())
-			dispatchErr = fmt.Errorf("%v", rec)
-			agentLogger().Error("tool panic", zap.String("tool", name), zap.Any("recover", rec), zap.String("stack", panicTrace))
-			if !sw.wroteHeader {
-				http.Error(sw, `{"error":"tool panicked"}`, http.StatusInternalServerError)
-			}
-		}
-		completeLazyRun(ctx, lazy, sw.status, dispatchErr, panicTrace)
-	}()
-
-	res, err := rt.Execute(ctx, raw, tool.CallOptions{})
-	if err != nil {
-		dispatchErr = err
-		http.Error(sw, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
-		return
-	}
-	sw.Header().Set("Content-Type", "application/json")
-	_, _ = sw.Write([]byte(res.Output))
-}
-
 // wrapRoute converts a RouteHandlerFunc into http.HandlerFunc and completes the
 // Airlock-created route run from the handler's error, panic, and response status.
 // Direct Handler tests without an ingress run retain lazy-run behavior.
 func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		caller := callerFromRequest(r)
-		user := userFromRequest(r)
+		metadata, err := wire.DecodeCallerHeader(r.Header)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		caller := callerFromWire(metadata)
+		user, _ := caller.User()
 		var activeRun *run
 		var lazy *lazyRun
 		var ctx context.Context
 		if runID := r.Header.Get("X-Run-ID"); runID != "" {
 			activeRun = newRun(a, runID, "", "", r.Context())
-			activeRun.userID = user.ID
-			activeRun.userEmail = user.Email
-			activeRun.userDisplayName = user.DisplayName
-			activeRun.callerAccess = caller.Access
+			activeRun.invocationToken = r.Header.Get(wire.InvocationTokenHeader)
+			activeRun.setCaller(caller)
 			ctx = activeRun.checkedCtx()
 		} else {
 			lazy = &lazyRun{
-				agent:           a,
-				triggerRef:      "route:" + key,
-				userID:          user.ID,
-				userEmail:       user.Email,
-				userDisplayName: user.DisplayName,
-				callerAccess:    caller.Access,
+				agent:        a,
+				triggerRef:   "route:" + key,
+				userID:       user.ID,
+				callerAccess: caller.Access(),
+				caller:       caller,
 			}
-			ctx = withCaller(contextWithLazyRun(r.Context(), lazy), caller)
+			ctx = contextWithLazyRun(r.Context(), lazy)
 		}
 		r = r.WithContext(ctx)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
@@ -322,35 +301,6 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 	}
 }
 
-func callerFromRequest(r *http.Request) caller {
-	access := Access(r.Header.Get("X-Caller-Access"))
-	if access == "" {
-		access = callerFromContext(r.Context()).Access
-	}
-	user := userFromRequest(r)
-	return caller{
-		Access: access,
-		UserID: user.ID,
-		RunID:  r.Header.Get("X-Parent-Run-ID"),
-	}
-}
-
-func userFromRequest(r *http.Request) User {
-	if len(r.Header.Values("X-User-ID")) != 0 ||
-		len(r.Header.Values("X-User-Email")) != 0 ||
-		len(r.Header.Values("X-User-Name")) != 0 {
-		return User{
-			ID:          r.Header.Get("X-User-ID"),
-			Email:       r.Header.Get("X-User-Email"),
-			DisplayName: r.Header.Get("X-User-Name"),
-		}
-	}
-	if user, ok := UserFromContext(r.Context()); ok {
-		return user
-	}
-	return User{}
-}
-
 func completeLazyRun(ctx context.Context, lazy *lazyRun, status int, dispatchErr error, panicTrace string) {
 	run := lazy.materialized()
 	if run == nil {
@@ -360,16 +310,18 @@ func completeLazyRun(ctx context.Context, lazy *lazyRun, status int, dispatchErr
 }
 
 func completeHTTPRun(ctx context.Context, run *run, status int, dispatchErr error, panicTrace string) {
+	var err error
 	if dispatchErr != nil {
-		_ = run.complete(ctx, "error", dispatchErr.Error(), wire.ErrorKindAgent, panicTrace)
-		return
-	}
-	if status >= http.StatusInternalServerError {
+		err = run.complete(ctx, "error", dispatchErr.Error(), wire.ErrorKindAgent, panicTrace)
+	} else if status >= http.StatusInternalServerError {
 		errMsg := fmt.Sprintf("HTTP status %d", status)
-		_ = run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, "")
-		return
+		err = run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, "")
+	} else {
+		err = run.complete(ctx, "success", "", "", "")
 	}
-	_ = run.complete(ctx, "success", "", "", "")
+	if err != nil {
+		agentLogger().Error("record HTTP run completion failed", zap.String("run_id", run.id), zap.Error(err))
+	}
 }
 
 // statusWriter wraps http.ResponseWriter to capture the status code.
@@ -378,6 +330,8 @@ type statusWriter struct {
 	status      int
 	wroteHeader bool
 }
+
+func (sw *statusWriter) Unwrap() http.ResponseWriter { return sw.ResponseWriter }
 
 func (sw *statusWriter) WriteHeader(code int) {
 	if sw.wroteHeader {

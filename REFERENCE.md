@@ -35,6 +35,11 @@ migrations, syncs with Airlock, runs named process-local `OnStart` hooks in
 registration order, then serves. Later registration panics. Hooks are for
 disposable local initialization; durable work belongs in a registered job.
 
+`Agent.Handler()` is a private host-to-app listener. Every request except
+`GET`/`HEAD /health` requires exactly one `Authorization: Bearer <AIRLOCK_AGENT_TOKEN>`
+header, including public routes and assets. Airlock supplies credentials and
+caller attribution; app-token possession is not proof of human identity.
+
 At runtime the LLM does **not** see your Go functions directly. It sees one
 tool, `run_js`, a JavaScript VM. Everything you register with `RegisterTool`
 becomes a typed JS global inside that VM; the LLM writes JS that calls your
@@ -50,6 +55,8 @@ triggers (webhooks/crons/bridges), and the per-agent Postgres schema.
 
 Read the relevant companion at its build-container path:
 
+- **[Runtime ingress](reference/ingress.md)** (`/libs/agentsdk/reference/ingress.md`) - host delivery authentication, attribution, health/manifest exceptions, and HTTP tests.
+- **[Caller identity](reference/caller.md)** (`/libs/agentsdk/reference/caller.md`) - snapshots, origin, and test callers.
 - **[Object storage](reference/files.md)** (`/libs/agentsdk/reference/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
   `ResolveFilePath`, shelling out to CLIs over storage, presigned URLs.
@@ -112,19 +119,9 @@ For standalone tests, explicitly build a local image with `jsexec.BuildImage`
 and select `agenttest.ExecutorConfig{Image: image, Limits: jsexec.DefaultLimits()}`.
 Both choices execute the same Deno runtime and framed protocol.
 
-Authenticated in-process handler tests attach caller state without private
-transport headers:
-
-```go
-user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
-req := httptest.NewRequest(http.MethodGet, "/", nil)
-req = req.WithContext(agenttest.WithUser(req.Context(), user)) // AccessUser
-env.Agent.Handler().ServeHTTP(httptest.NewRecorder(), req)
-```
-
-`agenttest.WithCaller(ctx, user, access)` selects explicit access. Identity and
-access are independent; plain contexts are public. Context values do not cross
-`httptest.NewServer`.
+Handler tests require explicit `agenttest` caller state and HTTP delivery
+credentials, including public routes/assets. Examples:
+`/libs/agentsdk/reference/caller.md` and `/libs/agentsdk/reference/ingress.md`.
 
 ## Design principle: register granular tools
 
@@ -274,7 +271,8 @@ agent.Serve() // starts HTTP server, blocks until shutdown
 `agentsdk.New` is pure definition and wiring. `agent.DB()` returns a late-bound
 `*AgentDB` for sqlc constructors; operations fail before startup.
 `agent.OnStart(name, hook)` registers process-local initialization that runs in
-order after sync and before readiness; use jobs for durable work.
+order after sync and before readiness, with an application caller and startup
+execution in the hook context; use jobs for durable work.
 `agent.Manifest()` freezes and returns the complete canonical declaration.
 `AIRLOCK_AGENT_MODE=manifest` emits it offline; normally `Serve` freezes,
 starts, migrates, syncs, runs hooks, and serves.
@@ -759,6 +757,12 @@ handlers use `r.Context()`. Pass that context through. Model calls and logging
 are tracked in the Runs UI for the invoking handler; you never construct a Run
 yourself.
 
+Use `user, ok := agentsdk.CallerFromContext(ctx).User()` for human identity and
+handle absence. Caller reads never create runs or perform I/O; missing state
+panics. App access and platform membership are independent. See
+`/libs/agentsdk/reference/caller.md` for the private snapshot API, origin,
+initiators, and breaking source migration requirements.
+
 ```go
 // Models — all ctx-first; slug must be declared with RegisterModel
 agent.LLM(ctx, slug)                 // streaming chat model (CapText/CapVision)
@@ -819,6 +823,9 @@ Two things they handle for you:
 Calls are proxied through Airlock so token usage is tracked. The wrappers are
 always callable — from a cron, a webhook, or a detached goroutine with no run in
 ctx — because they resolve a run (dispatcher → route-lazy → background) themselves.
+Direct app background calls create their own application execution context;
+they do not mutate the supplied context or make `CallerFromContext` valid on an
+arbitrary context. Caller lookup itself never creates background work.
 
 **Plain text (default model):**
 
@@ -1007,8 +1014,7 @@ Every capability takes one object argument matching its canonical input schema.
 Scripts are serial; bounded async callbacks may run within a script. Explicit
 `globalThis` properties can retain data only within the uninterrupted run.
 Approval gates the whole `run_js` call before executor allocation. The shared
-[`chatruntime`](chatruntime/README.md) owns prompt and TypeScript rendering;
-internal sibling delegation is not a chat capability.
+[`chatruntime`](chatruntime/README.md) owns prompt and TypeScript rendering.
 
 Framework primitives (the runtime prompt describes each in detail).
 **Availability**: *all* = every run; *authed* = non-public runs only; *admin* =

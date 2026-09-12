@@ -22,7 +22,7 @@ func runtimeRequest(a *Agent, id string) wire.RuntimeInvokeRequest {
 	return wire.RuntimeInvokeRequest{
 		RuntimeProtocol: wire.AppRuntimeProtocol,
 		CapabilityID:    id, ToolCallID: "call-1", Input: json.RawMessage(`{}`),
-		Context: wire.RuntimeContext{AgentID: a.agentID, RunID: uuid.NewString(), CallerAccess: wire.AccessUser},
+		Context: wire.RuntimeContext{AgentID: a.agentID, RunID: uuid.NewString(), Caller: testWireCaller("user", wire.AccessUser), InvocationToken: strings.Repeat("ab", 32)},
 	}
 }
 
@@ -39,9 +39,34 @@ func invokeRuntime(t *testing.T, handler http.Handler, req wire.RuntimeInvokeReq
 	r.Header.Set("X-Caller-Access", string(AccessAdmin))
 	r.Header.Set("X-User-ID", uuid.NewString())
 	r.Header.Set("X-Run-ID", uuid.NewString())
+	r.Header[wire.CallerHeader] = []string{"invalid", "ignored"}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
 	return w
+}
+
+func TestRuntimeInvokeCallerKinds(t *testing.T) {
+	for _, kind := range []string{"anonymous", "user", "application"} {
+		t.Run(kind, func(t *testing.T) {
+			a, mock := testAgent(t)
+			req := runtimeRequest(a, "tool//caller")
+			req.Context.Caller = testWireCaller(kind, wire.AccessPublic)
+			req.Context.Caller.Origin = wire.CallerOrigin{Interface: "mcp", Platform: "test-client", ClientID: "oauth-client", Execution: "request"}
+			a.RegisterTool(tool.New("caller").Description("Read caller").Execute(func(ctx context.Context, _ json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
+				if CallerFromContext(ctx) != callerFromWire(req.Context.Caller) {
+					t.Fatal("lost body caller")
+				}
+				return tool.Result{Output: "ok"}, nil
+			}).Build(), AccessPublic)
+			w := invokeRuntime(t, a.Handler(), req, a.token)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if len(mock.Requests()) != 0 {
+				t.Fatal("caller lookup performed I/O")
+			}
+		})
+	}
 }
 
 func TestRuntimeInvokeAuthorization(t *testing.T) {
@@ -54,13 +79,15 @@ func TestRuntimeInvokeAuthorization(t *testing.T) {
 		{"missing auth", func(*wire.RuntimeInvokeRequest) {}, "", 401},
 		{"wrong agent token", func(*wire.RuntimeInvokeRequest) {}, "another-token", 401},
 		{"missing protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "" }, "test-token", 409},
-		{"unknown protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "airlock.app-runtime.v2" }, "test-token", 409},
+		{"old protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "airlock.app-runtime.v1" }, "test-token", 409},
+		{"unknown protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "airlock.app-runtime.v3" }, "test-token", 409},
 		{"wrong agent scope", func(r *wire.RuntimeInvokeRequest) { r.Context.AgentID = "other-agent" }, "test-token", 403},
 		{"missing run", func(r *wire.RuntimeInvokeRequest) { r.Context.RunID = "" }, "test-token", 400},
 		{"invalid run", func(r *wire.RuntimeInvokeRequest) { r.Context.RunID = "not-a-run" }, "test-token", 400},
-		{"missing access", func(r *wire.RuntimeInvokeRequest) { r.Context.CallerAccess = "" }, "test-token", 400},
-		{"invalid access", func(r *wire.RuntimeInvokeRequest) { r.Context.CallerAccess = "superuser" }, "test-token", 400},
-		{"registration access", func(r *wire.RuntimeInvokeRequest) { r.Context.CallerAccess = wire.AccessPublic }, "test-token", 403},
+		{"missing caller", func(r *wire.RuntimeInvokeRequest) { r.Context.Caller = wire.Caller{} }, "test-token", 400},
+		{"missing access", func(r *wire.RuntimeInvokeRequest) { r.Context.Caller.Access = "" }, "test-token", 400},
+		{"invalid access", func(r *wire.RuntimeInvokeRequest) { r.Context.Caller.Access = "superuser" }, "test-token", 400},
+		{"registration access", func(r *wire.RuntimeInvokeRequest) { r.Context.Caller.Access = wire.AccessPublic }, "test-token", 403},
 		{"unknown capability", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "tool//missing" }, "test-token", 404},
 		{"direct alias is not identity", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "tool__check" }, "test-token", 404},
 		{"platform does not execute in app", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "air//http_request" }, "test-token", 404},
@@ -88,9 +115,9 @@ func TestRuntimeInvokeAuthorization(t *testing.T) {
 func TestRuntimeInvokeBorrowsRunAndPreservesResult(t *testing.T) {
 	a, mock := testAgent(t)
 	req := runtimeRequest(a, "tool//check")
-	req.Context.UserID, req.Context.UserEmail, req.Context.UserDisplayName = uuid.NewString(), "user@example.com", "Test User"
-	req.Context.ParentRunID, req.Context.ConversationID, req.Context.BridgeID = uuid.NewString(), uuid.NewString(), uuid.NewString()
-	req.Context.Platform = "web"
+	req.Context.Caller.User.ID = uuid.NewString()
+	req.Context.ConversationID, req.Context.BridgeID = uuid.NewString(), uuid.NewString()
+	req.Context.Caller.Origin = wire.CallerOrigin{Interface: "chat", Platform: "web", ClientID: "browser", Execution: "request"}
 	req.Context.Job = &wire.RuntimeJobContext{ID: uuid.NewString(), Attempt: 2, LeaseToken: uuid.NewString()}
 	req.Input = json.RawMessage(`{"number":42}`)
 	a.RegisterTool(tool.New("check").Description("Check context").Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
@@ -98,14 +125,14 @@ func TestRuntimeInvokeBorrowsRunAndPreservesResult(t *testing.T) {
 			t.Fatal("missing agent")
 		}
 		active := runFromContext(ctx)
-		if active.id != req.Context.RunID || active.parentRunID != req.Context.ParentRunID || active.conversationID != req.Context.ConversationID || active.bridgeID != req.Context.BridgeID || active.platform != "web" {
+		if active.id != req.Context.RunID || active.conversationID != req.Context.ConversationID || active.bridgeID != req.Context.BridgeID || CallerFromContext(ctx).Origin().Platform != "web" {
 			t.Fatalf("lost run context: %+v", active)
 		}
-		user, ok := UserFromContext(ctx)
-		if !ok || user.ID != req.Context.UserID || user.Email != req.Context.UserEmail || user.DisplayName != req.Context.UserDisplayName {
+		user, ok := CallerFromContext(ctx).User()
+		if !ok || user != User(*req.Context.Caller.User) {
 			t.Fatalf("lost user: %+v", user)
 		}
-		if caller := callerFromContext(ctx); caller.Access != AccessUser || caller.UserID != user.ID || caller.RunID != active.id {
+		if caller := callScopeFromContext(ctx); caller.Access != AccessUser || caller.UserID != user.ID || caller.RunID != active.id {
 			t.Fatalf("lost caller: %+v", caller)
 		}
 		job := jobRunFromContext(ctx)
@@ -198,7 +225,7 @@ func TestRuntimeInvokeFileScope(t *testing.T) {
 		t.Run(string(access), func(t *testing.T) {
 			a, mock := testAgent(t)
 			req := runtimeRequest(a, "air//file_read")
-			req.Context.CallerAccess = access
+			req.Context.Caller.Access = access
 			req.Input = json.RawMessage(`{"path":"tmp/test.txt"}`)
 			w := invokeRuntime(t, a.Handler(), req, a.token)
 			var response wire.RuntimeInvokeResponse

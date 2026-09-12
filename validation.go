@@ -42,7 +42,6 @@ var frameworkRoutePatterns = []string{
 	"POST /job/{name}/{version}",
 	"POST /refresh",
 	"GET /health",
-	"POST /__air/tool/{name}",
 	"GET /__air/assets/{name}",
 	"GET /static/{name}",
 }

@@ -611,11 +611,15 @@ func TestHandleJobSuccessAndCallerContext(t *testing.T) {
 		if AgentFromContext(ctx) != a {
 			t.Error("AgentFromContext did not return the dispatching agent")
 		}
-		user, ok := UserFromContext(ctx)
-		if !ok || user.ID != testJobUserID {
-			t.Errorf("UserFromContext = %+v, %t", user, ok)
+		user, ok := CallerFromContext(ctx).User()
+		if !ok || user.ID != testJobUserID || !user.PlatformMember {
+			t.Errorf("Caller.User = %+v, %t", user, ok)
 		}
-		caller := callerFromContext(ctx)
+		initiator, hasInitiator := CallerFromContext(ctx).Initiator()
+		if !hasInitiator || initiator != user || CallerFromContext(ctx).Origin().Execution != ExecutionJob {
+			t.Fatal("job lost initiator or execution")
+		}
+		caller := callScopeFromContext(ctx)
 		if caller.Access != AccessUser || caller.UserID != testJobUserID {
 			t.Errorf("caller = %+v", caller)
 		}
@@ -645,6 +649,30 @@ func TestHandleJobSuccessAndCallerContext(t *testing.T) {
 	}
 	if got := completedRun(t, mock); got.Status != "success" {
 		t.Fatalf("completion = %+v", got)
+	}
+}
+
+func TestHandleJobCallerKinds(t *testing.T) {
+	for _, kind := range []string{"anonymous", "user", "application"} {
+		t.Run(kind, func(t *testing.T) {
+			a, _ := testAgent(t)
+			caller := testWireCaller(kind, wire.AccessPublic)
+			caller.Origin = wire.CallerOrigin{Interface: "schedule", Execution: "job"}
+			definition := testJobDefinition(1)
+			definition.Handler = func(ctx context.Context, _ JobContext, _ testJobInput) (testJobOutput, error) {
+				if CallerFromContext(ctx) != callerFromWire(caller) {
+					t.Fatal("job lost caller metadata")
+				}
+				return testJobOutput{}, nil
+			}
+			RegisterJob(a, definition)
+			req := validJobRunRequest(a)
+			req.Caller = caller
+			w := serveJobRequest(t, a, req, testJobRunID)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 
@@ -821,6 +849,7 @@ func TestHandleJobRejectsUnknownAndContractMismatch(t *testing.T) {
 		RegisterJob(a, testJobDefinition(1))
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/job/other/1", nil)
+		r.Header.Set("Authorization", "Bearer "+a.token)
 		a.Handler().ServeHTTP(w, r)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("status = %d, want 404", w.Code)
@@ -961,6 +990,7 @@ func TestHandleJobCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	r := httptest.NewRequest(http.MethodPost, "/job/convert_video/1", strings.NewReader(string(body))).WithContext(ctx)
+	r.Header.Set("Authorization", "Bearer "+a.token)
 	r.Header.Set("X-Run-ID", testJobRunID)
 	w := httptest.NewRecorder()
 	a.Handler().ServeHTTP(w, r)
@@ -1025,6 +1055,7 @@ func TestHandleJobStrictBoundedRequest(t *testing.T) {
 			a, mock := testAgent(t)
 			RegisterJob(a, testJobDefinition(1))
 			r := httptest.NewRequest(http.MethodPost, "/job/convert_video/1", strings.NewReader(tt.body(a)))
+			r.Header.Set("Authorization", "Bearer "+a.token)
 			r.Header.Set("X-Run-ID", testJobRunID)
 			w := httptest.NewRecorder()
 			a.Handler().ServeHTTP(w, r)
@@ -1067,6 +1098,7 @@ func TestHandleJobCanonicalDeliveryValidation(t *testing.T) {
 				path = "/job/convert_video/1"
 			}
 			r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+			r.Header.Set("Authorization", "Bearer "+a.token)
 			r.Header.Set("X-Run-ID", testJobRunID)
 			w := httptest.NewRecorder()
 			a.Handler().ServeHTTP(w, r)
@@ -1137,6 +1169,7 @@ func serveJobRequest(t *testing.T, a *Agent, request wire.JobRunRequest, runID s
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest(http.MethodPost, "/job/convert_video/1", strings.NewReader(string(body)))
+	r.Header.Set("Authorization", "Bearer "+a.token)
 	if runID != "" {
 		r.Header.Set("X-Run-ID", runID)
 	}
@@ -1152,6 +1185,7 @@ func serveJobRequestWithLeaseToken(t *testing.T, a *Agent, request wire.JobRunRe
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest(http.MethodPost, "/job/convert_video/1", strings.NewReader(string(body)))
+	r.Header.Set("Authorization", "Bearer "+a.token)
 	r.Header.Set("X-Run-ID", runID)
 	r.Header.Set(jobLeaseTokenHeader, leaseToken)
 	w := httptest.NewRecorder()
@@ -1169,12 +1203,14 @@ func boundJobProgressContext(a *Agent, leaseToken string) (JobContext, context.C
 
 func validJobRunRequest(a *Agent) wire.JobRunRequest {
 	job := a.jobs[jobKey{name: "convert_video", version: 1}]
+	caller := testWireCaller("user", wire.AccessUser)
+	caller.User.ID = testJobUserID
+	caller.Origin = wire.CallerOrigin{Interface: "http", Execution: "job"}
 	return wire.JobRunRequest{
 		ID: testJobID, Name: job.name, Version: int32(job.version),
 		InputSchemaHash: job.inputSchemaHash, OutputSchemaHash: job.outputSchemaHash,
 		Attempt: 2, TimeoutMs: job.timeout.Milliseconds(), Input: json.RawMessage(`{"source":"uploads/video.mov"}`),
-		InitiatorKind: "user", InitiatorUserID: testJobUserID, InitiatorConversationID: testJobConversation,
-		CallerAccess: wire.AccessUser,
+		Caller: caller, ConversationID: testJobConversation,
 	}
 }
 
