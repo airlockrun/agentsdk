@@ -12,7 +12,6 @@ import (
 	"github.com/airlockrun/agentsdk/connector/protocol"
 	"github.com/airlockrun/sol/session"
 	"github.com/airlockrun/sol/websearch"
-	"github.com/google/uuid"
 )
 
 type Access string
@@ -215,6 +214,10 @@ type PrintRequest struct {
 	UserID         string        `json:"userId,omitempty"`
 }
 
+type TopicSubscriptionRequest struct {
+	ConversationID string `json:"conversationId"`
+}
+
 type MCPDef struct {
 	Slug          string        `json:"slug,omitempty"`
 	Name          string        `json:"name"`
@@ -266,25 +269,26 @@ type MCPContent struct {
 // synchronization. Slices are deterministically ordered by their identifiers,
 // except Instructions and StartupHooks, whose registration order is semantic.
 type AgentManifest struct {
-	RuntimeProtocol string             `json:"runtimeProtocol"`
-	Version         string             `json:"version"`
-	Description     string             `json:"description"`
-	Emoji           string             `json:"emoji"`
-	Tools           []ToolDef          `json:"tools"`
-	Webhooks        []WebhookDef       `json:"webhooks"`
-	JobHandlers     []JobHandlerDef    `json:"jobHandlers"`
-	JobCrons        []JobCronDef       `json:"jobCrons"`
-	Routes          []RouteDef         `json:"routes"`
-	Topics          []TopicDef         `json:"topics"`
-	MCPServers      []MCPDef           `json:"mcpServers"`
-	Connections     []ConnectionDef    `json:"connections"`
-	EnvVars         []EnvVarDef        `json:"envVars"`
-	Directories     []DirectoryDef     `json:"directories"`
-	Instructions    []InstructionDef   `json:"instructions"`
-	ModelSlots      []ModelSlotDef     `json:"modelSlots"`
-	StaticAssets    []StaticAssetDef   `json:"staticAssets"`
-	StartupHooks    []StartupHookDef   `json:"startupHooks"`
-	Connectors      []ConnectorNeedDef `json:"connectors"`
+	RuntimeProtocol  string             `json:"runtimeProtocol"`
+	Version          string             `json:"version"`
+	Description      string             `json:"description"`
+	Emoji            string             `json:"emoji"`
+	Tools            []ToolDef          `json:"tools"`
+	Webhooks         []WebhookDef       `json:"webhooks"`
+	JobHandlers      []JobHandlerDef    `json:"jobHandlers"`
+	JobCrons         []JobCronDef       `json:"jobCrons"`
+	Routes           []RouteDef         `json:"routes"`
+	Topics           []TopicDef         `json:"topics"`
+	MCPServers       []MCPDef           `json:"mcpServers"`
+	Connections      []ConnectionDef    `json:"connections"`
+	EnvVars          []EnvVarDef        `json:"envVars"`
+	Directories      []DirectoryDef     `json:"directories"`
+	Instructions     []InstructionDef   `json:"instructions"`
+	ModelSlots       []ModelSlotDef     `json:"modelSlots"`
+	StaticAssets     []StaticAssetDef   `json:"staticAssets"`
+	StartupHooks     []StartupHookDef   `json:"startupHooks"`
+	Connectors       []ConnectorNeedDef `json:"connectors"`
+	AgentDefinitions []AgentDefinition  `json:"agentDefinitions,omitempty"`
 }
 
 type ConnectorNeedDef struct {
@@ -415,11 +419,10 @@ type SyncResponse struct {
 }
 
 type PromptData struct {
-	AgentDashboardURL   string        `json:"agentDashboardUrl"`
-	AgentRouteURL       string        `json:"agentRouteUrl"`
-	Siblings            []SiblingInfo `json:"siblings,omitempty"`
-	Capabilities        Capabilities  `json:"capabilities,omitempty"`
-	SupportedModalities []string      `json:"supportedModalities,omitempty"`
+	AgentDashboardURL   string       `json:"agentDashboardUrl"`
+	AgentRouteURL       string       `json:"agentRouteUrl"`
+	Capabilities        Capabilities `json:"capabilities,omitempty"`
+	SupportedModalities []string     `json:"supportedModalities,omitempty"`
 }
 
 type Capabilities struct {
@@ -429,14 +432,6 @@ type Capabilities struct {
 	Embedding     bool `json:"embedding,omitempty"`
 	Image         bool `json:"image,omitempty"`
 	Search        bool `json:"search,omitempty"`
-}
-
-type SiblingInfo struct {
-	ID          uuid.UUID       `json:"id"`
-	Slug        string          `json:"slug"`
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Tools       []MCPToolSchema `json:"tools,omitempty"`
 }
 
 type ToolDef struct {
@@ -496,19 +491,17 @@ type JobManifest struct {
 }
 
 type JobRunRequest struct {
-	ID                      string          `json:"id"`
-	Name                    string          `json:"name"`
-	Version                 int32           `json:"version"`
-	InputSchemaHash         string          `json:"inputSchemaHash"`
-	OutputSchemaHash        string          `json:"outputSchemaHash"`
-	Attempt                 int32           `json:"attempt"`
-	TimeoutMs               int64           `json:"timeoutMs"`
-	Input                   json.RawMessage `json:"input"`
-	ScheduledAt             *time.Time      `json:"scheduledAt,omitempty"`
-	InitiatorKind           string          `json:"initiatorKind"`
-	InitiatorUserID         string          `json:"initiatorUserId"`
-	InitiatorConversationID string          `json:"initiatorConversationId"`
-	CallerAccess            Access          `json:"callerAccess"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	Version          int32           `json:"version"`
+	InputSchemaHash  string          `json:"inputSchemaHash"`
+	OutputSchemaHash string          `json:"outputSchemaHash"`
+	Attempt          int32           `json:"attempt"`
+	TimeoutMs        int64           `json:"timeoutMs"`
+	Input            json.RawMessage `json:"input"`
+	ScheduledAt      *time.Time      `json:"scheduledAt,omitempty"`
+	Caller           Caller          `json:"caller"`
+	ConversationID   string          `json:"conversationId"`
 }
 
 type JobRunResponse struct {
@@ -645,15 +638,19 @@ type ModelProxyRequest struct {
 }
 
 type CreateRunRequest struct {
-	TriggerType    string `json:"triggerType"`
-	TriggerRef     string `json:"triggerRef"`
-	UserID         string `json:"userId,omitempty"`
-	ConversationID string `json:"conversationId,omitempty"`
-	CallerAccess   Access `json:"callerAccess"`
+	TriggerType string `json:"triggerType"`
+	TriggerRef  string `json:"triggerRef"`
 }
 
 type CreateRunResponse struct {
-	RunID string `json:"runId"`
+	RunID           string `json:"runId"`
+	InvocationToken string `json:"invocationToken"`
+	Caller          Caller `json:"caller"`
+}
+
+type UpgradeRequest struct {
+	RunID       string `json:"runId"`
+	Description string `json:"description"`
 }
 
 type LogLevel string
@@ -676,6 +673,9 @@ const (
 )
 
 type RunCompleteRequest struct {
+	JobID      string          `json:"jobId,omitempty"`
+	Attempt    int32           `json:"attempt,omitempty"`
+	LeaseToken string          `json:"leaseToken,omitempty"`
 	RunID      string          `json:"runId"`
 	Status     string          `json:"status"`
 	Error      string          `json:"error,omitempty"`

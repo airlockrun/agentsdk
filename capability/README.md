@@ -23,6 +23,12 @@ for both JavaScript bindings and direct tools.
 Build the complete catalogue before selecting definitions. Catalogue construction
 rejects duplicate IDs and JS/direct aliases, including conflicting access levels.
 Only manifest-declared external MCP servers admit discovery schemas.
+`Catalog` excludes MCP servers with empty access and all task-private tools.
+`DefinitionCatalog(manifest, wire.RuntimeAgentDefinition{Slug: slug,
+ContractHash: hash}, discovery)` validates the exact task contract and replaces
+global tools with its private inventory. Only that definition's bound MCP servers
+are included, including servers without chat access. Fixed operations, connections,
+and topics retain their normal policy. A catalogue is not proof of run authority.
 Definitions describe capabilities, not authorization grants. `AccessPublic` on
 file operations means directory-specific policy must still be checked.
 
@@ -61,9 +67,13 @@ only registered tools and the fixed app operations. The broker handles platform
 operations directly, without an app hop. `Input` is the canonical JSON tool input
 object; the JS adapter accepts one object argument and unwraps its positional array.
 
-`RuntimeContext` carries `AgentID`, `RunID`, `BridgeID`, `ConversationID`,
-`ParentRunID`, `CallerAccess`, `UserID`, `UserEmail`, `UserDisplayName`, `Platform`,
-`SupportedModalities`, and optional `Job` (`ID`, `Attempt`, `LeaseToken`).
+`RuntimeContext` carries `AgentID`, `RunID`, `InvocationToken`, `BridgeID`,
+`ConversationID`, `Caller`, `SupportedModalities`, optional `Job` (`ID`,
+`Attempt`, `LeaseToken`), and optional `Definition` (`Slug`, `ContractHash`).
+The host populates `Definition` from the admitted application-owned task run.
+Scoped callbacks require an application/admin caller without a human initiator
+or job fence. The app resolves tools only from the matching immutable definition;
+neither an unknown tool nor an incompatible hash can fall back to global tools.
 Execution borrows this run, honors HTTP cancellation and a bounded timeout,
 and never creates or completes the run. Job progress and SDK API requests retain
 the run and job attribution. Invocation-local file caches are cleaned up on return.

@@ -20,15 +20,6 @@ func (a *Agent) syncWithAirlock(ctx context.Context) error {
 	a.requireRuntime("sync")
 	a.freeze()
 	manifest := a.buildManifest()
-	// Environment declarations retain their dedicated reconciliation endpoint;
-	// they are also present in the complete manifest so offline inspection and
-	// runtime sync describe the same agent.
-	for _, def := range manifest.EnvVars {
-		if err := a.client.doJSON(ctx, "PUT", "/api/agent/env-vars/"+def.Slug, def, nil); err != nil {
-			return fmt.Errorf("register env var %s: %w", def.Slug, err)
-		}
-	}
-
 	var syncResp wire.SyncResponse
 	if err := a.client.doJSON(ctx, "PUT", "/api/agent/sync", manifest, &syncResp); err != nil {
 		// 409 Conflict from Airlock means agentsdk-version incompatibility —
@@ -223,25 +214,26 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 	}
 
 	return wire.AgentManifest{
-		RuntimeProtocol: wire.AppRuntimeProtocol,
-		Version:         Version,
-		Description:     a.description,
-		Emoji:           a.emoji,
-		Tools:           tools,
-		Webhooks:        webhooks,
-		JobHandlers:     jobManifest.JobHandlers,
-		JobCrons:        jobManifest.JobCrons,
-		Routes:          routes,
-		Topics:          topics,
-		MCPServers:      mcpServers,
-		Connections:     connections,
-		EnvVars:         envVars,
-		Directories:     directories,
-		Instructions:    instructions,
-		ModelSlots:      modelSlots,
-		StaticAssets:    staticAssets,
-		StartupHooks:    startupHooks,
-		Connectors:      connectors,
+		RuntimeProtocol:  wire.AppRuntimeProtocol,
+		Version:          Version,
+		Description:      a.description,
+		Emoji:            a.emoji,
+		Tools:            tools,
+		Webhooks:         webhooks,
+		JobHandlers:      jobManifest.JobHandlers,
+		JobCrons:         jobManifest.JobCrons,
+		Routes:           routes,
+		Topics:           topics,
+		MCPServers:       mcpServers,
+		Connections:      connections,
+		EnvVars:          envVars,
+		Directories:      directories,
+		Instructions:     instructions,
+		ModelSlots:       modelSlots,
+		StaticAssets:     staticAssets,
+		StartupHooks:     startupHooks,
+		Connectors:       connectors,
+		AgentDefinitions: a.buildAgentDefinitions(),
 	}
 }
 

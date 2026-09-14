@@ -3,6 +3,9 @@ package agentsdk
 import (
 	"context"
 	"fmt"
+	"strconv"
+
+	"github.com/airlockrun/agentsdk/wire"
 
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/provider/proxy"
@@ -34,15 +37,22 @@ func (a *Agent) requireSlot(slug string, allowed ...ModelCapability) ModelCapabi
 	panic(fmt.Sprintf("agentsdk: model %q is not registered — call RegisterModel(&ModelSlot{Slug: %q, Capability: ...}) before Serve", slug, slug))
 }
 
-// runIDHeader returns the attribution header airlock uses to tie a proxied
-// model call to its originating run for token/cost accounting. Empty run ID
-// yields nil so no blank header is sent (airlock then records the call
-// unattributed rather than mis-attributed).
-func runIDHeader(runID string) map[string]string {
-	if runID == "" {
+// callbackHeaders binds platform callbacks to this invocation, not merely its
+// public run identifier. Job attempts retain their exact delivery fence.
+func (r *run) callbackHeaders() map[string]string {
+	if r.id == "" {
 		return nil
 	}
-	return map[string]string{"X-Airlock-Run-ID": runID}
+	headers := map[string]string{"X-Airlock-Run-ID": r.id}
+	if r.invocationToken != "" {
+		headers[wire.InvocationTokenHeader] = r.invocationToken
+	}
+	if job := jobRunFromContext(r.ctx); job != nil {
+		headers["X-Airlock-Job-ID"] = job.id
+		headers["X-Airlock-Job-Attempt"] = strconv.Itoa(job.attempt)
+		headers[jobLeaseTokenHeader] = job.leaseToken
+	}
+	return headers
 }
 
 // LLM returns a streaming chat model for the registered slot `slug`. The
@@ -100,7 +110,7 @@ func (a *Agent) proxyLLM(ctx context.Context, slug string, cap ModelCapability) 
 		Token:      a.client.token,
 		Slug:       slug,
 		Capability: string(cap),
-		Headers:    runIDHeader(r.id),
+		Headers:    r.callbackHeaders(),
 	})
 }
 
@@ -111,7 +121,7 @@ func (a *Agent) proxyImage(ctx context.Context, slug string, cap ModelCapability
 		Token:      a.client.token,
 		Slug:       slug,
 		Capability: string(cap),
-		Headers:    runIDHeader(r.id),
+		Headers:    r.callbackHeaders(),
 	})
 }
 
@@ -122,7 +132,7 @@ func (a *Agent) proxyEmbedding(ctx context.Context, slug string, cap ModelCapabi
 		Token:      a.client.token,
 		Slug:       slug,
 		Capability: string(cap),
-		Headers:    runIDHeader(r.id),
+		Headers:    r.callbackHeaders(),
 	})
 }
 
@@ -133,7 +143,7 @@ func (a *Agent) proxySpeech(ctx context.Context, slug string, cap ModelCapabilit
 		Token:      a.client.token,
 		Slug:       slug,
 		Capability: string(cap),
-		Headers:    runIDHeader(r.id),
+		Headers:    r.callbackHeaders(),
 	})
 }
 
@@ -144,7 +154,7 @@ func (a *Agent) proxyTranscription(ctx context.Context, slug string, cap ModelCa
 		Token:      a.client.token,
 		Slug:       slug,
 		Capability: string(cap),
-		Headers:    runIDHeader(r.id),
+		Headers:    r.callbackHeaders(),
 	})
 }
 

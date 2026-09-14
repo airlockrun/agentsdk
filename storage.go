@@ -24,8 +24,7 @@ import (
 const reservedTmpPath = "tmp"
 
 // reservedIncomingPath is the framework-owned ephemeral directory where
-// airlock writes files sent to this agent as A2A tool arguments or as
-// inline uploads from external MCP clients. Tool bodies don't reference
+// Airlock writes inline uploads from external MCP clients. Tool bodies don't reference
 // it directly — args are rewritten at the boundary, so the body
 // receives a path inside this prefix and readFiles it like any other
 // path. Sub-paths carry a scope key (`run-{uuid}` or `conv-{uuid}`);
@@ -33,13 +32,6 @@ const reservedTmpPath = "tmp"
 // caller context, so callers cannot read other callers' uploads even
 // when both are anonymous. Files are auto-cleaned by retention.
 const reservedIncomingPath = "__incoming"
-
-// reservedSiblingsPath is the framework-owned directory where airlock
-// writes files returned from sibling agents' tools. Caller's run_js
-// code receives paths like "siblings/imagebot/results/cropped.png" in
-// tool results and can keep working with them as if they were locally
-// produced. Files are auto-cleaned by retention.
-const reservedSiblingsPath = "siblings"
 
 // ErrNotFound is returned by ResolveFilePath and the storage methods for
 // both "directory not registered" and "caller does not have access" — the
@@ -53,31 +45,31 @@ var ErrInvalidPath = errors.New("agentsdk: invalid path")
 
 // --- Caller plumbing ---
 
-// caller carries the access level of whoever triggered the current
+// callScope carries the access level of whoever triggered the current
 // dispatch. Framework dispatch sites (tool Execute, VM bindings, jobs,
-// webhook, route, subdomain proxy) inject one onto ctx via withCaller.
+// webhook, route, subdomain proxy) inject one onto ctx via withCallScope.
 // Builder Go code that constructs paths itself does NOT need to set a
 // caller — it calls the trusted file API directly (OpenFile/ReadFile/
 // WriteFile/StatFile/ListDir/DeleteFile) which bypasses ResolveFilePath.
-type caller struct {
+type callScope struct {
 	Access Access
 	UserID string // optional, for audit
 	RunID  string // optional, for audit
 }
 
-type callerCtxKey struct{}
+type callScopeCtxKey struct{}
 
-// withCaller attaches a caller to ctx. Used by the framework when
+// withCallScope attaches an access projection to ctx. Used by the framework when
 // dispatching into untrusted territory (LLM-driven VM, public HTTP).
-func withCaller(ctx context.Context, c caller) context.Context {
-	return context.WithValue(ctx, callerCtxKey{}, c)
+func withCallScope(ctx context.Context, c callScope) context.Context {
+	return context.WithValue(ctx, callScopeCtxKey{}, c)
 }
 
-// callerFromContext returns the caller attached to ctx, defaulting to
+// callScopeFromContext returns the access projection attached to ctx, defaulting to
 // AccessPublic when none is set. This is the fail-closed default:
 // forgetting to tag ctx denies access to anything user-or-above.
-func callerFromContext(ctx context.Context) caller {
-	if v, ok := ctx.Value(callerCtxKey{}).(caller); ok {
+func callScopeFromContext(ctx context.Context) callScope {
+	if v, ok := ctx.Value(callScopeCtxKey{}).(callScope); ok {
 		if v.Access == "" {
 			v.Access = AccessPublic
 		}
@@ -88,19 +80,20 @@ func callerFromContext(ctx context.Context) caller {
 		if access == "" {
 			access = AccessPublic
 		}
-		return caller{Access: access, UserID: r.userID, RunID: r.id}
+		return callScope{Access: access, UserID: r.userID, RunID: r.id}
 	}
 	if l := lazyRunFromContext(ctx); l != nil {
 		access := l.callerAccess
 		if access == "" {
 			access = AccessPublic
 		}
-		return caller{Access: access, UserID: l.userID, RunID: l.parentRunID}
+		return callScope{Access: access, UserID: l.userID}
 	}
 	if test, ok := testcaller.FromContext(ctx); ok {
-		return caller{Access: Access(test.Access), UserID: test.UserID}
+		user, _ := callerFromWire(test).User()
+		return callScope{Access: Access(test.Access), UserID: user.ID}
 	}
-	return caller{Access: AccessPublic}
+	return callScope{Access: AccessPublic}
 }
 
 // --- Path normalization ---
@@ -227,7 +220,7 @@ func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperati
 	if d == nil {
 		return "", ErrNotFound
 	}
-	caller := callerFromContext(ctx)
+	caller := callScopeFromContext(ctx)
 	if caller.Access == AccessAdmin {
 		return FilePath(canon), nil
 	}
@@ -283,8 +276,8 @@ func resolveIncomingPath(ctx context.Context, d *directory, canon string, op Fil
 	if identity.conversationID != "" {
 		allowed = append(allowed, "conv-"+identity.conversationID)
 	}
-	if identity.parentRunID != "" {
-		allowed = append(allowed, "run-"+identity.parentRunID)
+	if identity.runID != "" {
+		allowed = append(allowed, "run-"+identity.runID)
 	}
 	for _, expected := range allowed {
 		if segment == expected {
@@ -303,22 +296,22 @@ type fileIdentity struct {
 	userID         string
 	conversationID string
 	runID          string
-	parentRunID    string
 }
 
 func fileIdentityFromContext(ctx context.Context) fileIdentity {
 	if r := runFromContext(ctx); r != nil {
-		return fileIdentity{userID: r.userID, conversationID: r.conversationID, runID: r.id, parentRunID: r.parentRunID}
+		return fileIdentity{userID: r.userID, conversationID: r.conversationID, runID: r.id}
 	}
 	if l := lazyRunFromContext(ctx); l != nil {
-		identity := fileIdentity{userID: l.userID, conversationID: l.conversationID, parentRunID: l.parentRunID}
+		identity := fileIdentity{userID: l.userID, conversationID: l.conversationID}
 		if materialized := l.materialized(); materialized != nil {
 			identity.runID = materialized.id
 		}
 		return identity
 	}
 	if test, ok := testcaller.FromContext(ctx); ok {
-		return fileIdentity{userID: test.UserID}
+		user, _ := callerFromWire(test).User()
+		return fileIdentity{userID: user.ID}
 	}
 	return fileIdentity{}
 }

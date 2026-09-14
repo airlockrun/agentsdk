@@ -64,11 +64,16 @@ func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, errorK
 	if body.Actions == nil {
 		body.Actions = []wire.Action{} // always send array, not null
 	}
+	if job := jobRunFromContext(ctx); job != nil {
+		body.JobID = job.id
+		body.Attempt = int32(job.attempt)
+		body.LeaseToken = job.leaseToken
+	}
 	// Detach from the caller's ctx: final bookkeeping MUST land even if the
 	// /prompt request ctx was cancelled (e.g. Airlock closed the response body
 	// after seeing an error event), otherwise the run stays 'running' forever.
 	// A 10s timeout still bounds the call in case Airlock is wedged.
-	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	detached, cancel := context.WithTimeout(context.WithoutCancel(contextWithRun(ctx, r)), 10*time.Second)
 	defer cancel()
 	return r.agent.client.doJSON(detached, "POST", "/api/agent/run/complete", body, nil)
 }

@@ -16,7 +16,7 @@ func TestPromptUsesCanonicalCatalog(t *testing.T) {
 		InputSchema:   json.RawMessage(`{"type":"object","properties":{"id":{"type":"string"},"tags":{"type":"array","items":{"type":"string"}},"note":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["id"]}`),
 		OutputSchema:  json.RawMessage(`{"type":"object","properties":{"count":{"type":"integer"}}}`),
 		InputExamples: []json.RawMessage{json.RawMessage(`{"id":"abc"}`)},
-	}}, MCPServers: []wire.MCPDef{{Slug: "external"}}}
+	}}, MCPServers: []wire.MCPDef{{Slug: "external", Access: wire.AccessUser}}}
 	defs, err := capability.Catalog(manifest, capability.Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"external": {{Name: "search/issues", InputSchema: json.RawMessage(`{"type":"object"}`)}}}})
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +52,7 @@ func TestPromptUsesCanonicalCatalog(t *testing.T) {
 
 func TestPromptExternalMCPSchemas(t *testing.T) {
 	input := json.RawMessage(`{"type":"object","$defs":{"Filter":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"null"}]}},"properties":{"filters":{"type":"object","additionalProperties":{"$ref":"#/$defs/Filter"}},"cursor":{"type":["string","null"]}},"required":["filters"],"additionalProperties":false}`)
-	manifest := wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "external"}}}
+	manifest := wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "external", Access: wire.AccessUser}}}
 	defs, err := capability.Catalog(manifest, capability.Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"external": {{Name: "search", InputSchema: input}}}})
 	if err != nil {
 		t.Fatal(err)

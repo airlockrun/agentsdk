@@ -7,7 +7,7 @@ import (
 
 // AppRuntimeProtocol identifies the app capability execution contract, independent
 // of SDK semver and the JavaScript executor's framed protocol.
-const AppRuntimeProtocol = "airlock.app-runtime.v1"
+const AppRuntimeProtocol = "airlock.app-runtime.v2"
 
 func CheckAppRuntimeProtocol(reported string) error {
 	if reported != AppRuntimeProtocol {
@@ -17,6 +17,8 @@ func CheckAppRuntimeProtocol(reported string) error {
 }
 
 const RuntimeInvokePath = "/__air/runtime/invoke"
+
+const InvocationTokenHeader = "X-Airlock-Invocation-Token"
 
 const TestExecutorContentType = "application/vnd.airlock.jsexec"
 
@@ -36,18 +38,15 @@ type RuntimeInvokeRequest struct {
 // RuntimeContext borrows an existing same-agent run. The app must not create or
 // complete it. All attribution is supplied by the authenticated broker.
 type RuntimeContext struct {
-	AgentID             string             `json:"agentId"`
-	RunID               string             `json:"runId"`
-	BridgeID            string             `json:"bridgeId,omitempty"`
-	ConversationID      string             `json:"conversationId,omitempty"`
-	ParentRunID         string             `json:"parentRunId,omitempty"`
-	CallerAccess        Access             `json:"callerAccess"`
-	UserID              string             `json:"userId,omitempty"`
-	UserEmail           string             `json:"userEmail,omitempty"`
-	UserDisplayName     string             `json:"userDisplayName,omitempty"`
-	Platform            string             `json:"platform,omitempty"`
-	SupportedModalities []string           `json:"supportedModalities,omitempty"`
-	Job                 *RuntimeJobContext `json:"job,omitempty"`
+	AgentID             string                  `json:"agentId"`
+	RunID               string                  `json:"runId"`
+	InvocationToken     string                  `json:"invocationToken"`
+	BridgeID            string                  `json:"bridgeId,omitempty"`
+	ConversationID      string                  `json:"conversationId,omitempty"`
+	Caller              Caller                  `json:"caller"`
+	SupportedModalities []string                `json:"supportedModalities,omitempty"`
+	Job                 *RuntimeJobContext      `json:"job,omitempty"`
+	Definition          *RuntimeAgentDefinition `json:"definition,omitempty"`
 }
 
 type RuntimeJobContext struct {

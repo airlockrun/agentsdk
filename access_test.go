@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/airlockrun/agentsdk/internal/testcaller"
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestNormalizePath(t *testing.T) {
@@ -49,9 +50,9 @@ func TestResolveFilePathBasicPolicy(t *testing.T) {
 	a.RegisterDirectory("reports", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Reports"})
 	a.RegisterDirectory("reports/public", DirectoryOpts{Read: AccessPublic, Write: AccessAdmin, List: AccessPublic, Description: "Public reports"})
 
-	public := withCaller(context.Background(), caller{Access: AccessPublic})
-	user := withCaller(context.Background(), caller{Access: AccessUser})
-	admin := withCaller(context.Background(), caller{Access: AccessAdmin})
+	public := withCallScope(context.Background(), callScope{Access: AccessPublic})
+	user := withCallScope(context.Background(), callScope{Access: AccessUser})
+	admin := withCallScope(context.Background(), callScope{Access: AccessAdmin})
 
 	tests := []struct {
 		name string
@@ -157,23 +158,23 @@ func TestResolveFilePathTestCallerUser(t *testing.T) {
 		Read: AccessPublic, Write: AccessPublic, List: AccessPublic,
 		Scope: ScopeUser, Description: "Private",
 	})
-	ctx := testcaller.With(context.Background(), testcaller.Caller{UserID: "test-user", Access: string(AccessPublic)})
+	ctx := testcaller.With(context.Background(), testWireCaller("user", wire.AccessPublic))
 	got, err := a.ResolveFilePath(ctx, "private/user-test-user/file.txt", FileOperationRead)
 	if err != nil || got != "private/user-test-user/file.txt" {
 		t.Fatalf("ResolveFilePath() = %q, %v", got, err)
 	}
 }
 
-func TestCallerFromContextFrameworkStatePrecedesTestCaller(t *testing.T) {
+func TestCallScopeFromContextFrameworkStatePrecedesTestCaller(t *testing.T) {
 	a, _ := testAgent(t)
-	testCtx := testcaller.With(context.Background(), testcaller.Caller{Access: string(AccessPublic)})
+	testCtx := testcaller.With(context.Background(), testWireCaller("anonymous", wire.AccessPublic))
 	r := newRun(a, "run-1", "", "", context.Background())
 	r.callerAccess = AccessAdmin
-	if got := callerFromContext(contextWithRun(testCtx, r)).Access; got != AccessAdmin {
+	if got := callScopeFromContext(contextWithRun(testCtx, r)).Access; got != AccessAdmin {
 		t.Errorf("run caller access = %q, want %q", got, AccessAdmin)
 	}
 	lazy := &lazyRun{agent: a, callerAccess: AccessUser}
-	if got := callerFromContext(contextWithLazyRun(testCtx, lazy)).Access; got != AccessUser {
+	if got := callScopeFromContext(contextWithLazyRun(testCtx, lazy)).Access; got != AccessUser {
 		t.Errorf("lazy-run caller access = %q, want %q", got, AccessUser)
 	}
 }

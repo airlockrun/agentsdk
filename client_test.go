@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestAirlockClientRequestHeaders(t *testing.T) {
@@ -19,7 +21,7 @@ func TestAirlockClientRequestHeaders(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	client := newAirlockClient(server.URL, "secret", server.Client())
-	run := &run{id: "bound-run"}
+	run := &run{id: "bound-run", invocationToken: "invocation-secret"}
 	response, err := client.do(contextWithRun(context.Background(), run), http.MethodPost, "/bound", bytes.NewReader([]byte(`{}`)))
 	if err != nil {
 		t.Fatal(err)
@@ -35,10 +37,14 @@ func TestAirlockClientRequestHeaders(t *testing.T) {
 	if got := bound.Header.Get("X-Airlock-Run-ID"); got != "bound-run" {
 		t.Fatalf("X-Airlock-Run-ID = %q", got)
 	}
+	if got := bound.Header.Get(wire.InvocationTokenHeader); got != run.invocationToken {
+		t.Fatalf("invocation token = %q", got)
+	}
 
 	inbound := httptest.NewRequest(http.MethodGet, "https://agent.test/route", nil)
 	inbound.Header.Set("X-Airlock-Run-ID", "inbound-run")
-	ctx := withCaller(inbound.Context(), caller{RunID: "caller-run"})
+	inbound.Header.Set(wire.InvocationTokenHeader, "untrusted-header")
+	ctx := withCallScope(inbound.Context(), callScope{RunID: "caller-run"})
 	response, err = client.do(ctx, http.MethodGet, "/unbound", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -47,5 +53,8 @@ func TestAirlockClientRequestHeaders(t *testing.T) {
 	unbound := <-requests
 	if got := unbound.Header.Get("X-Airlock-Run-ID"); got != "" {
 		t.Fatalf("X-Airlock-Run-ID = %q, want empty", got)
+	}
+	if got := unbound.Header.Get(wire.InvocationTokenHeader); got != "" {
+		t.Fatalf("unbound invocation token = %q", got)
 	}
 }

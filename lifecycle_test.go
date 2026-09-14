@@ -2,12 +2,15 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 type panicReader struct{}
@@ -33,6 +36,38 @@ func TestOnStartRunsInRegistrationOrder(t *testing.T) {
 	}
 }
 
+func TestOnStartCaller(t *testing.T) {
+	a, mock := testAgent(t)
+	outer := newRun(a, "outer-run", "", "", t.Context())
+	outer.setCaller(callerFromWire(testWireCaller("user", wire.AccessUser)))
+	ctx := outer.checkedCtx()
+	a.OnStart("inspect", func(ctx context.Context) error {
+		caller := CallerFromContext(ctx)
+		if caller.Kind() != CallerApplication || caller.Access() != AccessAdmin || caller.Origin() != (Origin{Interface: InterfaceApplication, Execution: ExecutionStartup}) {
+			t.Fatalf("startup caller = %+v", caller)
+		}
+		if _, ok := caller.User(); ok {
+			t.Fatal("startup inherited acting user")
+		}
+		if _, ok := caller.Initiator(); ok {
+			t.Fatal("startup inherited initiator")
+		}
+		if AgentFromContext(ctx) != a || runFromContext(ctx) != nil {
+			t.Fatal("startup binding is not independent")
+		}
+		return nil
+	})
+	if err := a.runStartHooks(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if CallerFromContext(ctx).Kind() != CallerUser {
+		t.Fatal("startup changed input context")
+	}
+	if len(mock.Requests()) != 0 {
+		t.Fatal("startup lookup performed I/O")
+	}
+}
+
 func TestOnStartFailsLoudly(t *testing.T) {
 	a, _ := testAgent(t)
 	want := errors.New("hydrate failed")
@@ -40,6 +75,70 @@ func TestOnStartFailsLoudly(t *testing.T) {
 	err := a.runStartHooks(t.Context())
 	if !errors.Is(err, want) || err.Error() != `agentsdk: startup hook "hydrate": hydrate failed` {
 		t.Fatalf("startup error = %v", err)
+	}
+}
+
+func TestOnStartCompletesMaterializedRun(t *testing.T) {
+	for _, outcome := range []string{"success", "error", "panic"} {
+		t.Run(outcome, func(t *testing.T) {
+			a, mock := testAgent(t)
+			failure := errors.New("startup failed")
+			a.OnStart("logged", func(ctx context.Context) error {
+				a.Logger(ctx).Info("startup log")
+				if CallerFromContext(ctx).Origin().Execution != ExecutionStartup {
+					t.Fatal("materialization changed startup caller")
+				}
+				switch outcome {
+				case "error":
+					return failure
+				case "panic":
+					panic(failure)
+				}
+				return nil
+			})
+			ctx := contextWithJobRun(t.Context(), &jobRunContext{agent: a, id: "outer-job", attempt: 1, leaseToken: "outer-lease"})
+			var gotErr error
+			var gotPanic any
+			func() {
+				defer func() { gotPanic = recover() }()
+				gotErr = a.runStartHooks(ctx)
+			}()
+			if outcome == "error" && !errors.Is(gotErr, failure) || outcome != "error" && gotErr != nil {
+				t.Fatalf("error = %v", gotErr)
+			}
+			if outcome == "panic" && gotPanic != failure || outcome != "panic" && gotPanic != nil {
+				t.Fatalf("panic = %v", gotPanic)
+			}
+			created, completed := 0, 0
+			for _, req := range mock.Requests() {
+				switch req.Path {
+				case "/api/agent/run/create":
+					created++
+				case "/api/agent/run/complete":
+					completed++
+					var body wire.RunCompleteRequest
+					if err := json.Unmarshal(req.Body, &body); err != nil {
+						t.Fatal(err)
+					}
+					wantStatus := "success"
+					if outcome != "success" {
+						wantStatus = "error"
+					}
+					if body.Status != wantStatus || len(body.Logs) != 1 || body.Logs[0].Message != "startup log" {
+						t.Fatalf("completion = %+v", body)
+					}
+					if body.JobID != "" || body.Attempt != 0 || body.LeaseToken != "" {
+						t.Fatal("startup completion inherited job authority")
+					}
+					if (body.PanicTrace != "") != (outcome == "panic") {
+						t.Fatal("startup panic trace mismatch")
+					}
+				}
+			}
+			if created != 1 || completed != 1 {
+				t.Fatalf("created=%d completed=%d, want one of each", created, completed)
+			}
+		})
 	}
 }
 

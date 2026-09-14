@@ -112,7 +112,12 @@ func TestNewStaticAssetRoundTrip(t *testing.T) {
 
 	srv := httptest.NewServer(env.Agent.Handler())
 	defer srv.Close()
-	resp, err := http.Get(srv.URL + "/static/app.css")
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/static/app.css", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer test-token")
+	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

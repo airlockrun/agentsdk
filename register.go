@@ -203,7 +203,7 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 			// but allow the builder's description through. Anywhere else
 			// duplicate registrations panic so builders find conflicts
 			// at startup.
-			if canon == reservedTmpPath || canon == reservedIncomingPath || canon == reservedSiblingsPath {
+			if canon == reservedTmpPath || canon == reservedIncomingPath {
 				if opts.Description != "" {
 					d.Description = opts.Description
 				}

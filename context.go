@@ -19,10 +19,8 @@ func (a *Agent) borrowRuntimeRun(ctx context.Context, scope wire.RuntimeContext)
 		ctx = contextWithJobRun(ctx, &jobRunContext{agent: a, id: scope.Job.ID, attempt: scope.Job.Attempt, leaseToken: scope.Job.LeaseToken})
 	}
 	r := newRun(a, scope.RunID, scope.BridgeID, scope.ConversationID, ctx)
-	r.parentRunID = scope.ParentRunID
-	r.userID, r.userEmail, r.userDisplayName = scope.UserID, scope.UserEmail, scope.UserDisplayName
-	r.callerAccess = Access(scope.CallerAccess)
-	r.platform = scope.Platform
+	r.invocationToken = scope.InvocationToken
+	r.setCaller(callerFromWire(scope.Caller))
 	r.ctx = r.checkedCtx()
 	return r
 }
@@ -46,6 +44,8 @@ func contextWithLazyRun(ctx context.Context, l *lazyRun) context.Context {
 	if l == nil {
 		return ctx
 	}
+	ctx = context.WithValue(ctx, runCtxKey{}, (*run)(nil))
+	ctx = withCallScope(ctx, callScope{Access: l.callerAccess, UserID: l.userID})
 	return context.WithValue(ctx, lazyRunCtxKey{}, l)
 }
 

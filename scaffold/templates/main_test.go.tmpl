@@ -28,9 +28,20 @@ func TestAgentComposition(t *testing.T) {
 		{path: views.AppCSSPath},
 	} {
 		r := httptest.NewRequest(http.MethodGet, tt.path, nil)
+		r.Header.Set("Authorization", "Bearer test-token")
 		if tt.authed {
 			r = r.WithContext(agenttest.WithUser(r.Context(), user))
+		} else {
+			r = r.WithContext(agenttest.WithCallerInfo(r.Context(), agenttest.CallerInfo{
+				Kind:   agentsdk.CallerAnonymous,
+				Access: agentsdk.AccessPublic,
+				Origin: agentsdk.Origin{
+					Interface: agentsdk.InterfaceHTTP,
+					Execution: agentsdk.ExecutionRequest,
+				},
+			}))
 		}
+		agenttest.SetCallerHeader(r)
 		w := httptest.NewRecorder()
 		env.Agent.Handler().ServeHTTP(w, r)
 		if w.Code != http.StatusOK {

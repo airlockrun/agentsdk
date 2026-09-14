@@ -42,7 +42,6 @@ var frameworkRoutePatterns = []string{
 	"POST /job/{name}/{version}",
 	"POST /refresh",
 	"GET /health",
-	"POST /__air/tool/{name}",
 	"GET /__air/assets/{name}",
 	"GET /static/{name}",
 }
@@ -111,6 +110,9 @@ func (a *Agent) validateRegistrations() {
 			panic("agentsdk: duplicate RegisterModel: " + slot.Slug)
 		}
 		seenModels[slot.Slug] = struct{}{}
+	}
+	if err := wire.ValidateAgentDefinitions(a.buildManifest()); err != nil {
+		panic("agentsdk: " + err.Error())
 	}
 }
 
@@ -412,7 +414,9 @@ func validateMCP(m *MCP) {
 		panic(fmt.Sprintf("agentsdk: RegisterMCP(%q): invalid AuthMode %q", m.Slug, m.AuthMode))
 	}
 	validateAuthInjection(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.AuthInjection)
-	validateAccess(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.Access)
+	if m.Access != "" {
+		validateAccess(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.Access)
+	}
 }
 
 func validateInstruction(i *Instruction) {
