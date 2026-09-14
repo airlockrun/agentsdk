@@ -131,6 +131,9 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 		return nil
 	}
 	for _, m := range manifest.MCPServers {
+		if m.Access == "" {
+			continue
+		}
 		if err := addExternal(MCP, m.Slug, m.Slug, m.Access, discovery.MCPSchemas[m.Slug]); err != nil {
 			return nil, err
 		}
@@ -154,4 +157,43 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 	}
 	sort.Slice(defs, func(i, j int) bool { return defs[i].Path.ID() < defs[j].Path.ID() })
 	return defs, nil
+}
+
+// DefinitionCatalog constructs the private tool and bound MCP inventory for an
+// exact task contract. It excludes global app tools and unbound MCPs. Fixed
+// platform operations, connections and topics retain their normal access rules.
+// The host must authenticate scope from a persisted application-owned run.
+func DefinitionCatalog(manifest wire.AgentManifest, scope wire.RuntimeAgentDefinition, discovery Discovery) ([]Definition, error) {
+	if err := wire.ValidateAgentDefinitions(manifest); err != nil {
+		return nil, err
+	}
+	var selected *wire.AgentDefinition
+	for i := range manifest.AgentDefinitions {
+		d := &manifest.AgentDefinitions[i]
+		if d.Slug == scope.Slug && d.ContractHash == scope.ContractHash {
+			selected = d
+			break
+		}
+	}
+	if selected == nil {
+		return nil, fmt.Errorf("unknown agent definition contract %q", scope.Slug)
+	}
+	manifest.Tools = nil
+	for _, t := range selected.Tools {
+		manifest.Tools = append(manifest.Tools, wire.ToolDef{Name: t.Name, Description: t.Description, LLMHint: t.LLMHint,
+			Access: wire.AccessAdmin, InputSchema: t.InputSchema, OutputSchema: t.OutputSchema, InputExamples: t.InputExamples})
+	}
+	bound := make(map[string]bool, len(selected.MCPs))
+	for _, slug := range selected.MCPs {
+		bound[slug] = true
+	}
+	servers := manifest.MCPServers
+	manifest.MCPServers = nil
+	for _, m := range servers {
+		if bound[m.Slug] {
+			m.Access = wire.AccessAdmin
+			manifest.MCPServers = append(manifest.MCPServers, m)
+		}
+	}
+	return Catalog(manifest, discovery)
 }

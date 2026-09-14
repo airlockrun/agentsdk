@@ -111,6 +111,9 @@ func (a *Agent) validateRegistrations() {
 		}
 		seenModels[slot.Slug] = struct{}{}
 	}
+	if err := wire.ValidateAgentDefinitions(a.buildManifest()); err != nil {
+		panic("agentsdk: " + err.Error())
+	}
 }
 
 func validateRegisteredJob(job *registeredJob) {
@@ -411,7 +414,9 @@ func validateMCP(m *MCP) {
 		panic(fmt.Sprintf("agentsdk: RegisterMCP(%q): invalid AuthMode %q", m.Slug, m.AuthMode))
 	}
 	validateAuthInjection(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.AuthInjection)
-	validateAccess(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.Access)
+	if m.Access != "" {
+		validateAccess(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.Access)
+	}
 }
 
 func validateInstruction(i *Instruction) {

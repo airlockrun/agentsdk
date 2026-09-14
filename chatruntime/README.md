@@ -58,3 +58,10 @@ Resume uses `Resume *sol.SuspensionContext` and required `Approved *bool`.
 Only permission suspension is accepted. The host must reject incompatible
 checkpoints before constructing Input. External MCP servers declared in the
 manifest are ordinary broker capabilities.
+
+`JavaScriptTool(ctx, catalog, backend, factory)` exposes the same synchronous
+executor/invoker machinery to application-owned task loops such as
+`agentruntime`. It returns the tool, a required close function, and an error.
+Allocation is lazy; callers close on completion, parking, cancellation, and
+failure. This helper has no interactive approval flow: the host preauthorizes the
+catalog and enforces policy in the backend. It adds no agent-control bindings.

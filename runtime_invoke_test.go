@@ -69,6 +69,88 @@ func TestRuntimeInvokeCallerKinds(t *testing.T) {
 	}
 }
 
+func TestRuntimeInvokeDefinitionScope(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*wire.RuntimeInvokeRequest)
+		status int
+		output string
+	}{
+		{"private", func(*wire.RuntimeInvokeRequest) {}, 200, `{"answer":"private"}`},
+		{"global same name", func(r *wire.RuntimeInvokeRequest) { r.Context.Definition = nil }, 200, "global"},
+		{"no global fallback", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "tool//global_only" }, 404, ""},
+		{"private needs scope", func(r *wire.RuntimeInvokeRequest) { r.Context.Definition = nil; r.CapabilityID = "tool//private_only" }, 404, ""},
+		{"wrong definition", func(r *wire.RuntimeInvokeRequest) { r.Context.Definition.Slug = "missing" }, 409, ""},
+		{"wrong hash", func(r *wire.RuntimeInvokeRequest) { r.Context.Definition.ContractHash = strings.Repeat("0", 64) }, 409, ""},
+		{"invalid hash", func(r *wire.RuntimeInvokeRequest) { r.Context.Definition.ContractHash = "bad" }, 400, ""},
+		{"human", func(r *wire.RuntimeInvokeRequest) { r.Context.Caller = testWireCaller("user", wire.AccessAdmin) }, 400, ""},
+		{"initiator", func(r *wire.RuntimeInvokeRequest) {
+			r.Context.Caller.Initiator = &wire.CallerUser{ID: uuid.NewString()}
+		}, 400, ""},
+		{"missing credential", func(*wire.RuntimeInvokeRequest) {}, 401, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, mock := testAgent(t)
+			taskModel(a)
+			for _, name := range []string{"lookup", "global_only"} {
+				a.RegisterTool(tool.New(name).Description("Global").Execute(func(context.Context, json.RawMessage, tool.CallOptions) (tool.Result, error) {
+					return tool.Result{Output: "global"}, nil
+				}).Build(), AccessAdmin)
+			}
+			d := taskDefinition()
+			for _, name := range []string{"lookup", "private_only"} {
+				d.Tools = append(d.Tools, tool.Typed[taskInput, taskOutput](name).Description("Private lookup").Execute(func(ctx context.Context, in taskInput) (taskOutput, error) {
+					caller := CallerFromContext(ctx)
+					if caller.Kind() != CallerApplication {
+						t.Fatal("lost application caller")
+					}
+					if _, ok := caller.User(); ok {
+						t.Fatal("invented human")
+					}
+					if _, ok := caller.Initiator(); ok {
+						t.Fatal("invented initiator")
+					}
+					if err := a.client.doJSON(ctx, "POST", "/api/agent/print", wire.PrintRequest{}, nil); err != nil {
+						return taskOutput{}, err
+					}
+					return taskOutput{Answer: "private"}, nil
+				}).Build())
+			}
+			h := RegisterAgent(a, d)
+			r := runtimeRequest(a, "tool//lookup")
+			r.Context.Caller = testWireCaller("application", wire.AccessAdmin)
+			r.Context.Definition = &wire.RuntimeAgentDefinition{Slug: h.Slug(), ContractHash: h.ContractHash()}
+			r.Input = json.RawMessage(`{"task":"work"}`)
+			tc.change(&r)
+			token := a.token
+			if tc.name == "missing credential" {
+				token = ""
+			}
+			w := invokeRuntime(t, a.Handler(), r, token)
+			if w.Code != tc.status {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+			}
+			if w.Code == 200 {
+				var reply wire.RuntimeInvokeResponse
+				if err := json.Unmarshal(w.Body.Bytes(), &reply); err != nil {
+					t.Fatal(err)
+				}
+				if reply.Output != tc.output {
+					t.Fatalf("output=%s", reply.Output)
+				}
+			}
+			requests := mock.Requests()
+			if tc.name == "private" {
+				if len(requests) != 1 || requests[0].Path != "/api/agent/print" || requests[0].Header.Get(wire.InvocationTokenHeader) != r.Context.InvocationToken || requests[0].Header.Get("X-Airlock-Run-ID") != r.Context.RunID {
+					t.Fatalf("callback headers=%+v", requests)
+				}
+			} else if len(requests) != 0 {
+				t.Fatalf("unexpected requests=%+v", requests)
+			}
+		})
+	}
+}
+
 func TestRuntimeInvokeAuthorization(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

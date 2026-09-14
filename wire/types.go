@@ -269,25 +269,26 @@ type MCPContent struct {
 // synchronization. Slices are deterministically ordered by their identifiers,
 // except Instructions and StartupHooks, whose registration order is semantic.
 type AgentManifest struct {
-	RuntimeProtocol string             `json:"runtimeProtocol"`
-	Version         string             `json:"version"`
-	Description     string             `json:"description"`
-	Emoji           string             `json:"emoji"`
-	Tools           []ToolDef          `json:"tools"`
-	Webhooks        []WebhookDef       `json:"webhooks"`
-	JobHandlers     []JobHandlerDef    `json:"jobHandlers"`
-	JobCrons        []JobCronDef       `json:"jobCrons"`
-	Routes          []RouteDef         `json:"routes"`
-	Topics          []TopicDef         `json:"topics"`
-	MCPServers      []MCPDef           `json:"mcpServers"`
-	Connections     []ConnectionDef    `json:"connections"`
-	EnvVars         []EnvVarDef        `json:"envVars"`
-	Directories     []DirectoryDef     `json:"directories"`
-	Instructions    []InstructionDef   `json:"instructions"`
-	ModelSlots      []ModelSlotDef     `json:"modelSlots"`
-	StaticAssets    []StaticAssetDef   `json:"staticAssets"`
-	StartupHooks    []StartupHookDef   `json:"startupHooks"`
-	Connectors      []ConnectorNeedDef `json:"connectors"`
+	RuntimeProtocol  string             `json:"runtimeProtocol"`
+	Version          string             `json:"version"`
+	Description      string             `json:"description"`
+	Emoji            string             `json:"emoji"`
+	Tools            []ToolDef          `json:"tools"`
+	Webhooks         []WebhookDef       `json:"webhooks"`
+	JobHandlers      []JobHandlerDef    `json:"jobHandlers"`
+	JobCrons         []JobCronDef       `json:"jobCrons"`
+	Routes           []RouteDef         `json:"routes"`
+	Topics           []TopicDef         `json:"topics"`
+	MCPServers       []MCPDef           `json:"mcpServers"`
+	Connections      []ConnectionDef    `json:"connections"`
+	EnvVars          []EnvVarDef        `json:"envVars"`
+	Directories      []DirectoryDef     `json:"directories"`
+	Instructions     []InstructionDef   `json:"instructions"`
+	ModelSlots       []ModelSlotDef     `json:"modelSlots"`
+	StaticAssets     []StaticAssetDef   `json:"staticAssets"`
+	StartupHooks     []StartupHookDef   `json:"startupHooks"`
+	Connectors       []ConnectorNeedDef `json:"connectors"`
+	AgentDefinitions []AgentDefinition  `json:"agentDefinitions,omitempty"`
 }
 
 type ConnectorNeedDef struct {

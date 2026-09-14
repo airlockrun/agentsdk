@@ -42,6 +42,28 @@ type Mock struct {
 	JobProgressStatus         int
 	ConnectorCommandResponses map[string]json.RawMessage
 	ConnectorJobResponses     map[string]json.RawMessage
+	agentResponses            map[string]agentResponse
+}
+
+type agentResponse struct {
+	status int
+	body   json.RawMessage
+}
+
+// SetAgentResponse configures one exact task-agent method and request URI,
+// including its query string. Unconfigured endpoints fail explicitly.
+func (m *Mock) SetAgentResponse(method, uri string, status int, response any) error {
+	body, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.agentResponses == nil {
+		m.agentResponses = make(map[string]agentResponse)
+	}
+	m.agentResponses[method+" "+uri] = agentResponse{status: status, body: body}
+	return nil
 }
 
 // New creates a mock Airlock server and returns it with its base URL.
@@ -53,6 +75,27 @@ func New() (*Mock, string) {
 func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 	m := &Mock{}
 	mux := http.NewServeMux()
+	for _, pattern := range []string{
+		"POST /api/agent/agents/{definition}/runs",
+		"GET /api/agent/agents/{definition}/runs",
+		"GET /api/agent/agents/{definition}/runs/{id}",
+		"DELETE /api/agent/agents/{definition}/runs/{id}",
+		"POST /api/agent/agents/{definition}/sessions/{session}/continue",
+	} {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			m.record(r)
+			m.mu.Lock()
+			response, ok := m.agentResponses[r.Method+" "+r.URL.RequestURI()]
+			m.mu.Unlock()
+			if !ok {
+				http.Error(w, "task agent response is not configured", http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(response.status)
+			_, _ = w.Write(response.body)
+		})
+	}
 
 	mux.HandleFunc("POST /api/agent/proxy/{slug}", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)

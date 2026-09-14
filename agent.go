@@ -63,18 +63,19 @@ type Agent struct {
 	registrationM sync.Mutex
 	frozen        bool
 
-	tools        map[string]*registeredTool
-	webhooks     map[string]*Webhook
-	jobs         map[jobKey]*registeredJob
-	jobCrons     map[string]*registeredJobCron
-	routes       map[string]*Route
-	auths        map[string]*Connection
-	mcps         map[string]*MCP
-	envVars      map[string]*EnvVar
-	topics       map[string]*Topic
-	staticAssets map[string]*StaticAsset
-	directories  []*directory // registration order; longest-prefix wins at lookup
-	connectors   map[string]*Connector
+	tools            map[string]*registeredTool
+	agentDefinitions map[string]*registeredAgent
+	webhooks         map[string]*Webhook
+	jobs             map[jobKey]*registeredJob
+	jobCrons         map[string]*registeredJobCron
+	routes           map[string]*Route
+	auths            map[string]*Connection
+	mcps             map[string]*MCP
+	envVars          map[string]*EnvVar
+	topics           map[string]*Topic
+	staticAssets     map[string]*StaticAsset
+	directories      []*directory // registration order; longest-prefix wins at lookup
+	connectors       map[string]*Connector
 
 	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
 	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
@@ -175,21 +176,22 @@ func (a *Agent) initializeRuntime() {
 
 func newAgentRegistrationState(cfg Config) *Agent {
 	a := &Agent{
-		phase:        agentDefining,
-		description:  cfg.Description,
-		emoji:        cfg.Emoji,
-		sensitiveSet: make(map[string]struct{}),
-		tools:        make(map[string]*registeredTool),
-		webhooks:     make(map[string]*Webhook),
-		jobs:         make(map[jobKey]*registeredJob),
-		jobCrons:     make(map[string]*registeredJobCron),
-		routes:       make(map[string]*Route),
-		auths:        make(map[string]*Connection),
-		mcps:         make(map[string]*MCP),
-		envVars:      make(map[string]*EnvVar),
-		topics:       make(map[string]*Topic),
-		staticAssets: make(map[string]*StaticAsset),
-		connectors:   make(map[string]*Connector),
+		phase:            agentDefining,
+		description:      cfg.Description,
+		emoji:            cfg.Emoji,
+		sensitiveSet:     make(map[string]struct{}),
+		tools:            make(map[string]*registeredTool),
+		agentDefinitions: make(map[string]*registeredAgent),
+		webhooks:         make(map[string]*Webhook),
+		jobs:             make(map[jobKey]*registeredJob),
+		jobCrons:         make(map[string]*registeredJobCron),
+		routes:           make(map[string]*Route),
+		auths:            make(map[string]*Connection),
+		mcps:             make(map[string]*MCP),
+		envVars:          make(map[string]*EnvVar),
+		topics:           make(map[string]*Topic),
+		staticAssets:     make(map[string]*StaticAsset),
+		connectors:       make(map[string]*Connector),
 	}
 	a.db = &AgentDB{agent: a}
 	// Framework-owned scratch directory — used by run_js output truncation

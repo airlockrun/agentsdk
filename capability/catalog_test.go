@@ -50,7 +50,7 @@ func TestCatalogRejectsConflictsBeforeSelection(t *testing.T) {
 	}{
 		{"duplicate tool access", wire.AgentManifest{Tools: []wire.ToolDef{{Name: "check", Access: wire.AccessPublic}, {Name: "check", Access: wire.AccessAdmin}}}, Discovery{}},
 		{"invalid access", wire.AgentManifest{Tools: []wire.ToolDef{{Name: "check", Access: "invalid"}}}, Discovery{}},
-		{"duplicate external name", wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "github"}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"github": {{Name: "search"}, {Name: "search"}}}}},
+		{"duplicate external name", wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "github", Access: wire.AccessUser}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"github": {{Name: "search"}, {Name: "search"}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Catalog(tc.manifest, tc.discovery); err == nil {
@@ -74,5 +74,42 @@ func TestIdentityDoesNotUsePresentationAliases(t *testing.T) {
 	}
 	if first["search/issues"].ID() == Local(MCP, "canonical/search", "issues").ID() {
 		t.Fatal("identity path ambiguity")
+	}
+}
+
+func TestDefinitionCatalogPrivacy(t *testing.T) {
+	d := wire.AgentDefinition{Slug: "worker", Description: "Work", Instructions: "Finish", ModelSlot: "reasoning",
+		InputSchema: []byte(`{"type":"object"}`), OutputSchema: []byte(`{"type":"object"}`), Budget: wire.AgentBudget{Steps: 150}, MaxAttempts: 1, MaxConcurrency: 1,
+		MCPs: []string{"private"}, Tools: []wire.AgentToolDefinition{{Name: "private_tool", Description: "Private", InputSchema: []byte(`{}`), OutputSchema: []byte(`{}`)}}}
+	d.ContractHash, _ = wire.AgentDefinitionHash(d)
+	m := wire.AgentManifest{AgentDefinitions: []wire.AgentDefinition{d}, ModelSlots: []wire.ModelSlotDef{{Slug: "reasoning", Capability: "text"}},
+		Tools: []wire.ToolDef{{Name: "global_tool", Access: wire.AccessUser}}, MCPServers: []wire.MCPDef{{Slug: "private"}, {Slug: "chat", Access: wire.AccessUser}}}
+	discovery := Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"private": {{Name: "lookup"}}, "chat": {{Name: "search"}}}}
+	for _, scoped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "chat", true: "task"}[scoped], func(t *testing.T) {
+			var defs []Definition
+			var err error
+			if scoped {
+				defs, err = DefinitionCatalog(m, wire.RuntimeAgentDefinition{Slug: d.Slug, ContractHash: d.ContractHash}, discovery)
+			} else {
+				defs, err = Catalog(m, discovery)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := map[string]bool{}
+			for _, def := range defs {
+				found[def.Path.ID()] = true
+			}
+			if found["tool//private_tool"] != scoped || found["mcp/private/lookup"] != scoped || found["tool//global_tool"] == scoped || found["mcp/chat/search"] == scoped {
+				t.Fatalf("inventory=%v", found)
+			}
+		})
+	}
+	if m.MCPServers[0].Access != "" || m.Tools[0].Name != "global_tool" {
+		t.Fatal("catalog mutated manifest")
+	}
+	if _, err := DefinitionCatalog(m, wire.RuntimeAgentDefinition{Slug: d.Slug, ContractHash: "wrong"}, discovery); err == nil {
+		t.Fatal("wrong contract accepted")
 	}
 }

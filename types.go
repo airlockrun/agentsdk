@@ -554,7 +554,7 @@ type MCP struct {
 	// HTTP call: bearer header (default), custom header, query parameter,
 	// or path prefix. Mirrors Connection.AuthInjection.
 	AuthInjection AuthInjection
-	Access        Access // required: who may invoke mcp_{slug}
+	Access        Access // optional: chat exposure; empty restricts use to bound task agents and native callbacks
 }
 
 // MCPToolCallResponse is returned from MCP tool call proxy.

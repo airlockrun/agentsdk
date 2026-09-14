@@ -2,6 +2,7 @@ package agenttest
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 
 	"github.com/airlockrun/agentsdk/internal/mockairlock"
@@ -12,6 +13,14 @@ type MockRequest struct {
 	Method string
 	Path   string
 	Body   []byte
+	Header http.Header
+}
+
+// SetAgentResponse configures an exact task-agent HTTP method and request URI
+// (including query). Supply a wire.AgentRunResponse or wire.ListAgentRunsResponse,
+// or an error body with its HTTP status. Missing responses fail explicitly.
+func (m *MockAirlock) SetAgentResponse(method, uri string, status int, response any) error {
+	return m.mock.SetAgentResponse(method, uri, status, response)
 }
 
 // SetConnectorCommandResponse configures the typed JSON output returned for a
@@ -71,6 +80,7 @@ func mockRequests(requests []mockairlock.Request) []MockRequest {
 			Method: request.Method,
 			Path:   request.Path,
 			Body:   request.Body,
+			Header: request.Header.Clone(),
 		}
 	}
 	return out

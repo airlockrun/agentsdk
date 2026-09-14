@@ -1,23 +1,10 @@
 # agentsdk — API reference
 
-This file documents the agentsdk SDK surface: every `Register*` API, the
-LLM-calling helpers, storage, seal/unseal, built-in JS bindings, and the
-runtime contracts an agent must satisfy. It is the answer to *"what does
-the SDK give me?"*.
-
-It is consumed two ways, and both should treat it as authoritative:
-
-- **The Airlock agent-builder** reads it before generating or upgrading
-  agent code.
-- **You, by hand** — point your editor's AI at
-  `.airlock/toolchain/skills/agentsdk/SKILL.md`; the same reference ships in
-  the `agentsdk` module.
-
-For the orthogonal half — *how* to wire the SDK together inside a real
-agent (file layout, MVC, build chain, NOTES.md convention, UI design
-rules) — read **`AGENTS.md` at the agent's repo root**. That file is
-materialised by the Airlock scaffold once and stays with the agent; this
-file is the canonical SDK reference.
+The canonical SDK reference covers registration, models, storage, credentials,
+JavaScript bindings, and runtime contracts. The Airlock builder reads it before
+generating or upgrading app code. For editor integration use
+`.airlock/toolchain/skills/agentsdk/SKILL.md`. For app layout, MVC, build-chain,
+NOTES.md, and UI conventions, read the scaffolded **`AGENTS.md` at the app root**.
 
 ## Mental model
 
@@ -57,6 +44,7 @@ Read the relevant companion at its build-container path:
 
 - **[Runtime ingress](reference/ingress.md)** (`/libs/agentsdk/reference/ingress.md`) - host delivery authentication, attribution, health/manifest exceptions, and HTTP tests.
 - **[Caller identity](reference/caller.md)** (`/libs/agentsdk/reference/caller.md`) - snapshots, origin, and test callers.
+- **[Task agents](reference/agents.md)** (`/libs/agentsdk/reference/agents.md`) - typed application-owned agents, private tools, budgets, durable IDs, and continuation.
 - **[Object storage](reference/files.md)** (`/libs/agentsdk/reference/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
   `ResolveFilePath`, shelling out to CLIs over storage, presigned URLs.
@@ -560,6 +548,11 @@ if err != nil {
 `MCPHandle.CallTool` returns `*AuthRequiredError` for unauthorized servers,
 same as `ConnectionHandle.Request` — detect it with the same two-value
 `agentsdk.IsAuthRequired(err)` pattern.
+
+`MCP.Access` is optional. Empty access excludes the server from ordinary chat;
+native callbacks and task definitions that explicitly bind its `MCPHandle` may
+use it. Set an explicit access level to expose it in chat. Route access remains
+required. See `/libs/agentsdk/reference/agents.md` for task-scoped MCP bindings.
 
 **`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 plus advertised RFC 7591
 DCR), `MCPAuthOAuth` (manual URLs/client), `MCPAuthToken`, `MCPAuthNone`. Run

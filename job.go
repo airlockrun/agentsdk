@@ -592,8 +592,9 @@ func RegisterJob[In, Out any](a *Agent, job *Job[In, Out]) *JobHandle[In, Out] {
 	if inputType.Kind() != reflect.Struct {
 		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): input type must be a struct", job.Name))
 	}
-	validateJobGoType(job.Name, "input", inputType, make(map[reflect.Type]bool))
-	validateJobGoType(job.Name, "output", reflect.TypeOf((*Out)(nil)).Elem(), make(map[reflect.Type]bool))
+	declaration := fmt.Sprintf("agentsdk: RegisterJob(%q)", job.Name)
+	validateContractGoType(declaration, "input", inputType, make(map[reflect.Type]bool))
+	validateContractGoType(declaration, "output", reflect.TypeOf((*Out)(nil)).Elem(), make(map[reflect.Type]bool))
 	input := schema.MustFromType(*new(In))
 	if input.Type != "object" {
 		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): input type must encode as a JSON object", job.Name))
@@ -659,22 +660,22 @@ func canonicalJobSchema(value json.RawMessage) json.RawMessage {
 	return canonical
 }
 
-func validateJobGoType(jobName, position string, value reflect.Type, visiting map[reflect.Type]bool) {
+func validateContractGoType(declaration, position string, value reflect.Type, visiting map[reflect.Type]bool) {
 	jsonMarshaler := reflect.TypeOf((*json.Marshaler)(nil)).Elem()
 	jsonUnmarshaler := reflect.TypeOf((*json.Unmarshaler)(nil)).Elem()
 	textMarshaler := reflect.TypeOf((*encoding.TextMarshaler)(nil)).Elem()
 	textUnmarshaler := reflect.TypeOf((*encoding.TextUnmarshaler)(nil)).Elem()
 	if value.Implements(jsonMarshaler) || value.Implements(jsonUnmarshaler) || value.Implements(textMarshaler) || value.Implements(textUnmarshaler) ||
 		(value.Kind() != reflect.Pointer && (reflect.PointerTo(value).Implements(jsonMarshaler) || reflect.PointerTo(value).Implements(jsonUnmarshaler) || reflect.PointerTo(value).Implements(textMarshaler) || reflect.PointerTo(value).Implements(textUnmarshaler))) {
-		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s type %s has custom JSON encoding unsupported by reflected job schemas", jobName, position, value))
+		panic(fmt.Sprintf("%s: %s type %s has custom JSON encoding unsupported by reflected schemas", declaration, position, value))
 	}
 	if visiting[value] {
-		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s type %s is recursive", jobName, position, value))
+		panic(fmt.Sprintf("%s: %s type %s is recursive", declaration, position, value))
 	}
 	switch value.Kind() {
 	case reflect.Pointer:
 		visiting[value] = true
-		validateJobGoType(jobName, position, value.Elem(), visiting)
+		validateContractGoType(declaration, position, value.Elem(), visiting)
 		delete(visiting, value)
 	case reflect.Struct:
 		visiting[value] = true
@@ -685,7 +686,7 @@ func validateJobGoType(jobName, position string, value reflect.Type, visiting ma
 				continue
 			}
 			if field.Anonymous {
-				panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s field %s is embedded and unsupported by reflected job schemas", jobName, position, field.Name))
+				panic(fmt.Sprintf("%s: %s field %s is embedded and unsupported by reflected schemas", declaration, position, field.Name))
 			}
 			fieldName := field.Name
 			if tag := field.Tag.Get("json"); tag != "" {
@@ -695,42 +696,42 @@ func validateJobGoType(jobName, position string, value reflect.Type, visiting ma
 				}
 				for _, option := range parts[1:] {
 					if option != "" && option != "omitempty" {
-						panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s field %s uses unsupported json option %q", jobName, position, field.Name, option))
+						panic(fmt.Sprintf("%s: %s field %s uses unsupported json option %q", declaration, position, field.Name, option))
 					}
 				}
 			}
 			if _, exists := names[fieldName]; exists {
-				panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s has duplicate JSON field %q", jobName, position, fieldName))
+				panic(fmt.Sprintf("%s: %s has duplicate JSON field %q", declaration, position, fieldName))
 			}
 			names[fieldName] = struct{}{}
 			if field.Tag.Get("enum") != "" && field.Type.Kind() != reflect.String {
-				panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s field %s uses enum on a non-string type", jobName, position, field.Name))
+				panic(fmt.Sprintf("%s: %s field %s uses enum on a non-string type", declaration, position, field.Name))
 			}
 			if field.Tag.Get("default") != "" && field.Type.Kind() != reflect.String {
-				panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s field %s uses default on a non-string type", jobName, position, field.Name))
+				panic(fmt.Sprintf("%s: %s field %s uses default on a non-string type", declaration, position, field.Name))
 			}
-			validateJobGoType(jobName, position+" field "+field.Name, field.Type, visiting)
+			validateContractGoType(declaration, position+" field "+field.Name, field.Type, visiting)
 		}
 		delete(visiting, value)
 	case reflect.Slice:
 		if value.Elem().Kind() == reflect.Uint8 {
-			panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s type %s encodes as base64 and is unsupported by reflected job schemas", jobName, position, value))
+			panic(fmt.Sprintf("%s: %s type %s encodes as base64 and is unsupported by reflected schemas", declaration, position, value))
 		}
 		visiting[value] = true
-		validateJobGoType(jobName, position, value.Elem(), visiting)
+		validateContractGoType(declaration, position, value.Elem(), visiting)
 		delete(visiting, value)
 	case reflect.Array:
 		visiting[value] = true
-		validateJobGoType(jobName, position, value.Elem(), visiting)
+		validateContractGoType(declaration, position, value.Elem(), visiting)
 		delete(visiting, value)
 	case reflect.Map, reflect.Interface:
-		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s type %s is unsupported by reflected job schemas", jobName, position, value))
+		panic(fmt.Sprintf("%s: %s type %s is unsupported by reflected schemas", declaration, position, value))
 	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.Float32, reflect.Float64, reflect.String:
 		return
 	default:
-		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): %s type %s is unsupported", jobName, position, value))
+		panic(fmt.Sprintf("%s: %s type %s is unsupported", declaration, position, value))
 	}
 }
 

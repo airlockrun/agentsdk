@@ -51,7 +51,22 @@ func (a *Agent) handleRuntimeInvoke(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "capabilityId, toolCallId and input are required", http.StatusBadRequest)
 		return
 	}
-	catalog, err := capability.Catalog(a.Manifest(), capability.Discovery{})
+	manifest := a.Manifest()
+	var scoped *registeredAgent
+	if scope := req.Context.Definition; scope != nil {
+		scoped = a.agentDefinitions[scope.Slug]
+		if scoped == nil || scoped.definition.ContractHash != scope.ContractHash {
+			http.Error(w, "agent definition contract mismatch", http.StatusConflict)
+			return
+		}
+	}
+	var catalog []capability.Definition
+	var err error
+	if scoped != nil {
+		catalog, err = capability.DefinitionCatalog(manifest, *req.Context.Definition, capability.Discovery{})
+	} else {
+		catalog, err = capability.Catalog(manifest, capability.Discovery{})
+	}
 	if err != nil {
 		http.Error(w, "invalid agent capability catalogue", http.StatusInternalServerError)
 		return
@@ -77,12 +92,17 @@ func (a *Agent) handleRuntimeInvoke(w http.ResponseWriter, r *http.Request) {
 	defer active.cleanupScratch()
 	var executable tool.Tool
 	if selected.Path.Kind() == capability.Tool {
-		rt, ok := a.tools[selected.Path.CanonicalOperation()]
-		if !ok || !accessSatisfies(active.callerAccess, rt.access) {
-			http.Error(w, "tool registration unavailable", http.StatusForbidden)
-			return
+		if scoped != nil {
+			// A scoped callback never resolves through the global tool registry.
+			executable = scoped.tools[selected.Path.CanonicalOperation()]
+		} else {
+			rt, ok := a.tools[selected.Path.CanonicalOperation()]
+			if !ok || !accessSatisfies(active.callerAccess, rt.access) {
+				http.Error(w, "tool registration unavailable", http.StatusForbidden)
+				return
+			}
+			executable = rt.Tool
 		}
-		executable = rt.Tool
 	} else {
 		executable = runtimeLocalTools(a, active)[selected.Path.CanonicalOperation()]
 	}
@@ -122,6 +142,17 @@ func validateRuntimeContext(c wire.RuntimeContext) error {
 	}
 	if err := c.Caller.Validate(); err != nil {
 		return err
+	}
+	if d := c.Definition; d != nil {
+		if !localIdentifierPattern.MatchString(d.Slug) || len(d.Slug) > 58 {
+			return errors.New("invalid agent definition slug")
+		}
+		if hash, err := hex.DecodeString(d.ContractHash); err != nil || len(hash) != 32 || hex.EncodeToString(hash) != d.ContractHash {
+			return errors.New("invalid agent definition contract hash")
+		}
+		if c.Caller.Kind != "application" || c.Caller.Initiator != nil || c.Caller.Access != wire.AccessAdmin || c.Job != nil {
+			return errors.New("agent definition requires an application-owned caller without a job fence")
+		}
 	}
 	if c.Job != nil {
 		if err := validateJobID(c.Job.ID); err != nil {
