@@ -1,5 +1,11 @@
 // This isolate never evaluates snippets. Its only network grant is the Go
 // supervisor's Unix socket; every snippet runs in a permission-denied worker.
+// Deno 2.9.6 lazily starts its process-wide signal thread after 500 ms for
+// SIGUSR1 inspector activation. Initialize it before ready so the supervisor's
+// thread baseline includes runtime infrastructure, not just short-lived tasks.
+const signalWarmup = () => {};
+Deno.addSignalListener("SIGUSR1", signalWarmup);
+Deno.removeSignalListener("SIGUSR1", signalWarmup);
 const conn = await Deno.connect({ transport: "unix", path: Deno.args[0] });
 const worker = new Worker(new URL("./worker.mjs", import.meta.url), {
   type: "module",
