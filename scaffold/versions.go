@@ -29,5 +29,5 @@ const (
 	// go.mod `go` directive and its Dockerfile `FROM golang:` tag. Three-
 	// component form matches what `go mod tidy` rewrites the directive to on
 	// Go 1.21+, so go.work/go.mod version checks don't trip.
-	GoVersion = "1.26.0"
+	GoVersion = "1.26.6"
 )

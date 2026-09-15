@@ -273,6 +273,148 @@ func TestDocker(t *testing.T) {
 			t.Fatal(string(r.Output))
 		}
 	})
+	t.Run("sequential_platform_callbacks", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			fail bool
+		}{
+			{name: "success"},
+			{name: "error", fail: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				o := Options{Limits: DefaultLimits(), Bindings: []Binding{
+					{Name: "http_request", Path: []string{"air", "httpRequest"}},
+					{Name: "web_search", Path: []string{"air", "webSearch"}},
+				}}
+				s, err := NewDockerSession(ctx, image, o)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				var calls int
+				callback := InvokerFunc(func(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+					calls++
+					wantName, wantArgs := "http_request", `[{"method":"GET","url":"https://example.com"}]`
+					if calls == 2 {
+						wantName, wantArgs = "web_search", `[{"query":"current UTC time","count":2}]`
+					}
+					if name != wantName || string(args) != wantArgs {
+						t.Errorf("callback %d: %s %s; want %s %s", calls, name, args, wantName, wantArgs)
+					}
+					// Cross Deno's 500 ms signal-thread initialization grace period.
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(time.Second):
+					}
+					if tc.fail {
+						return nil, errors.New("mock callback failure")
+					}
+					if name == "http_request" {
+						return json.RawMessage(`{"status":200,"body":"Example Domain"}`), nil
+					}
+					return json.RawMessage(`{"Results":null,"Synthesis":"Mock UTC time","Provider":"openai"}`), nil
+				})
+				r, err := s.Execute(ctx, `const results = {}; try { results.http = await air.httpRequest({method:"GET",url:"https://example.com"}); } catch(e) { results.http = e.message; } try { results.search = await air.webSearch({query:"current UTC time",count:2}); } catch(e) { results.search = e.message; } globalThis.results = results; return results;`, callback)
+				want := `{"http":{"status":200,"body":"Example Domain"},"search":{"Results":null,"Synthesis":"Mock UTC time","Provider":"openai"}}`
+				if tc.fail {
+					want = `{"http":"mock callback failure","search":"mock callback failure"}`
+				}
+				if err != nil || string(r.Output) != want || calls != 2 {
+					t.Fatalf("calls=%d output=%s err=%v", calls, r.Output, err)
+				}
+				r = run(t, s, `return globalThis.results;`)
+				if string(r.Output) != want {
+					t.Fatalf("retained output=%s want=%s", r.Output, want)
+				}
+				r = run(t, s, `return await air.httpRequest({method:"GET",url:"https://example.com"});`)
+				if string(r.Output) != `[{"method":"GET","url":"https://example.com"}]` {
+					t.Fatalf("reused callback output=%s", r.Output)
+				}
+			})
+		}
+	})
+	t.Run("todo_session_reuse", func(t *testing.T) {
+		o := Options{Limits: DefaultLimits(), Bindings: []Binding{
+			{Name: "list", Path: []string{"tools", "list"}},
+			{Name: "create", Path: []string{"tools", "create"}},
+			{Name: "toggle", Path: []string{"tools", "toggle"}},
+		}}
+		s, err := NewDockerSession(ctx, image, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		type todo struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			Done  bool   `json:"done"`
+		}
+		ids := []string{"550e8400-e29b-41d4-a716-446655440000", "550e8400-e29b-41d4-a716-446655440001"}
+		todos := []todo{}
+		var calls, creates, toggles int
+		callback := InvokerFunc(func(_ context.Context, name string, args json.RawMessage) (json.RawMessage, error) {
+			calls++
+			switch name {
+			case "list":
+				if string(args) != `[{}]` {
+					return nil, errors.New("unexpected list arguments")
+				}
+			case "create":
+				var in []struct{ Title string }
+				if err := json.Unmarshal(args, &in); err != nil || len(in) != 1 || creates >= len(ids) {
+					return nil, errors.New("unexpected create arguments or replay")
+				}
+				todos = append(todos, todo{ID: ids[creates], Title: in[0].Title})
+				creates++
+			case "toggle":
+				want, _ := json.Marshal([]any{map[string]any{"ids": ids}})
+				if string(args) != string(want) || toggles != 0 {
+					return nil, errors.New("unexpected toggle UUID array or replay")
+				}
+				for i := range todos {
+					todos[i].Done = !todos[i].Done
+				}
+				toggles++
+			default:
+				return nil, errors.New("unexpected todo tool")
+			}
+			return json.Marshal(todos)
+		})
+		for _, tc := range []struct {
+			name, code, want string
+			idle             time.Duration
+			calls            int
+		}{
+			{"list_create_two", `const items = await tools.list({}); await tools.create({title:"one"}); const created = await tools.create({title:"two"}); globalThis.todoIDs = created.map(item => item.id); return [items.length, created.map(item => item.title)];`, `[0,["one","two"]]`, 0, 3},
+			{"list", `const items = await tools.list({}); return items.map(item => item.done);`, `[false,false]`, 0, 4},
+			// Cross Deno's lazy signal initialization threshold between Execute calls.
+			{"toggle", `const items = await tools.toggle({ids: globalThis.todoIDs}); return items.map(item => item.done);`, `[true,true]`, time.Second, 5},
+			{"read", `const items = await tools.list({}); return [items.map(item => item.done), items.every((item, i) => item.id === globalThis.todoIDs[i])];`, `[[true,true],true]`, 0, 6},
+			{"read_again", `const items = await tools.list({}); return items.map(item => item.done);`, `[true,true]`, 0, 7},
+		} {
+			if !t.Run(tc.name, func(t *testing.T) {
+				time.Sleep(tc.idle)
+				r, err := s.Execute(ctx, tc.code, callback)
+				if err != nil || string(r.Output) != tc.want || calls != tc.calls {
+					t.Fatalf("calls=%d creates=%d toggles=%d output=%s want=%s err=%v", calls, creates, toggles, r.Output, tc.want, err)
+				}
+			}) {
+				return
+			}
+		}
+		if creates != 2 || toggles != 1 {
+			t.Fatalf("creates=%d toggles=%d", creates, toggles)
+		}
+	})
+	t.Run("reuse_after_idle", func(t *testing.T) {
+		s := newSession(t)
+		run(t, s, `globalThis.retained = 42;`)
+		time.Sleep(time.Second)
+		if r := run(t, s, `return retained;`); string(r.Output) != "42" {
+			t.Fatalf("retained output=%s", r.Output)
+		}
+	})
 	t.Run("host_capability_validation", func(t *testing.T) {
 		s := newSession(t)
 		var calls atomic.Int32

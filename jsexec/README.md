@@ -109,6 +109,11 @@ non-reusable because those controls can disable accounting. These are lifecycle
 checks, not replacements for Deno permissions or container resource isolation.
 They do not purport to await every arbitrary user-created JavaScript Promise.
 
+The trusted controller initializes Deno's process-wide signal machinery before
+reporting ready and removes its temporary listener. This includes the pinned
+runtime's lazily started SIGUSR1 signal thread in the supervisor's native-thread
+baseline, so callback latency and idle time do not look like leaked workers.
+
 ## Isolation
 
 ```text
