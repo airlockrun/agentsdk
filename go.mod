@@ -4,7 +4,7 @@ go 1.26.6
 
 require (
 	github.com/a-h/templ v0.3.1020
-	github.com/airlockrun/goai v0.1.8
+	github.com/airlockrun/goai v0.1.9
 	github.com/airlockrun/sol v0.1.11
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
