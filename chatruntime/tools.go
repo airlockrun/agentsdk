@@ -59,7 +59,7 @@ func (r *runtime) tools() tool.Set {
 		return set
 	}
 	set["run_js"] = tool.New("run_js").
-		Description("Execute an async JavaScript function body. Await capability calls; explicitly return the result. Supply a short description of the effect. Request confirmation for external side effects that need user approval.").
+		Description("Execute an async JavaScript function body. This is the only provider tool in JavaScript mode. To use a capability, call run_js with code such as return await tools.tool_name({...});. tools.*, conn.*, mcp.*, air.*, and other declared names are bindings usable only inside this code, never provider tool names. Await capability calls; explicitly return the result. Supply a short description of the effect. Request confirmation for external side effects that need user approval.").
 		SchemaFromStruct(struct {
 			Code                string `json:"code"`
 			Description         string `json:"description"`

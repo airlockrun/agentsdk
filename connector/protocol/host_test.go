@@ -117,6 +117,10 @@ func TestValidateHostConnectorInventoryMutationRequest(t *testing.T) {
 	if err := ValidateHostConnectorInventoryMutationRequest(valid); err != nil {
 		t.Fatal(err)
 	}
+	valid.ManagementAttempt = &ActiveAttempt{JobID: "11111111-1111-4111-8111-111111111111", AttemptToken: "22222222-2222-4222-8222-222222222222"}
+	if err := ValidateHostConnectorInventoryMutationRequest(valid); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name   string
@@ -130,6 +134,18 @@ func TestValidateHostConnectorInventoryMutationRequest(t *testing.T) {
 		}},
 		{name: "zero revision", mutate: func(request *HostConnectorInventoryMutationRequest) {
 			request.Revision = 0
+		}},
+		{name: "missing management token", mutate: func(request *HostConnectorInventoryMutationRequest) {
+			request.ManagementAttempt = &ActiveAttempt{JobID: valid.ManagementAttempt.JobID}
+		}},
+		{name: "zero management job", mutate: func(request *HostConnectorInventoryMutationRequest) {
+			request.ManagementAttempt = &ActiveAttempt{JobID: "00000000-0000-0000-0000-000000000000", AttemptToken: valid.ManagementAttempt.AttemptToken}
+		}},
+		{name: "management removal fence", mutate: func(request *HostConnectorInventoryMutationRequest) {
+			request.Kind = HostConnectorMutationRemove
+			request.Active = nil
+			request.DisplayName = ""
+			request.ManagementAttempt = valid.ManagementAttempt
 		}},
 		{name: "mutation enum", mutate: func(request *HostConnectorInventoryMutationRequest) {
 			request.Kind = "replace"

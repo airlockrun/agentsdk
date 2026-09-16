@@ -4,11 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/airlockrun/agentsdk/capability"
 	"github.com/airlockrun/goai/tool"
 )
+
+func TestJavaScriptModeAdvertisesOnlyRunJS(t *testing.T) {
+	tools := (&runtime{input: Input{}}).tools()
+	if len(tools) != 1 {
+		t.Fatalf("tools = %v", tools.Names())
+	}
+	runJS, ok := tools["run_js"]
+	if !ok {
+		t.Fatalf("tools = %v, want run_js", tools.Names())
+	}
+	for _, want := range []string{"only provider tool", "call run_js with code such as return await tools.tool_name({...});", "tools.*, conn.*, mcp.*, air.*", "only inside this code", "never provider tool names"} {
+		if !strings.Contains(runJS.Description, want) {
+			t.Errorf("run_js description missing %q: %s", want, runJS.Description)
+		}
+	}
+	if !strings.Contains(string(runJS.InputSchema), `"code"`) || strings.Contains(string(runJS.InputSchema), "tools.") {
+		t.Fatalf("run_js input schema = %s", runJS.InputSchema)
+	}
+}
 
 type testBackend func(context.Context, Invocation) (tool.Result, error)
 

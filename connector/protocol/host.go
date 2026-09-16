@@ -100,7 +100,6 @@ type HostSyncRequest struct {
 type HostSyncResponse struct {
 	HostID           string `json:"hostId"`
 	HeartbeatSeconds int    `json:"heartbeatSeconds"`
-	LongPollSeconds  int    `json:"longPollSeconds"`
 }
 
 type HostConnectorMutationKind string
@@ -120,12 +119,13 @@ type ObservedConnectorArtifact struct {
 // HostConnectorInventoryMutationRequest is one durable, monotonic mutation for
 // a physical connector installation. A remove mutation is a tombstone.
 type HostConnectorInventoryMutationRequest struct {
-	InstallationID string                     `json:"installationId"`
-	Revision       uint64                     `json:"revision"`
-	Kind           HostConnectorMutationKind  `json:"kind"`
-	DisplayName    string                     `json:"displayName,omitempty"`
-	Active         *ObservedConnectorArtifact `json:"active,omitempty"`
-	Rollback       *ObservedConnectorArtifact `json:"rollback,omitempty"`
+	ManagementAttempt *ActiveAttempt             `json:"managementAttempt,omitempty"`
+	InstallationID    string                     `json:"installationId"`
+	Revision          uint64                     `json:"revision"`
+	Kind              HostConnectorMutationKind  `json:"kind"`
+	DisplayName       string                     `json:"displayName,omitempty"`
+	Active            *ObservedConnectorArtifact `json:"active,omitempty"`
+	Rollback          *ObservedConnectorArtifact `json:"rollback,omitempty"`
 }
 
 // HostConnectorInventoryMutationResponse acknowledges the durable revision and
@@ -187,6 +187,13 @@ func ValidateHostSyncRequest(request HostSyncRequest) error {
 }
 
 func ValidateHostConnectorInventoryMutationRequest(request HostConnectorInventoryMutationRequest) error {
+	if request.ManagementAttempt != nil {
+		job, jobErr := uuid.Parse(request.ManagementAttempt.JobID)
+		token, tokenErr := uuid.Parse(request.ManagementAttempt.AttemptToken)
+		if jobErr != nil || tokenErr != nil || job == uuid.Nil || token == uuid.Nil || request.Kind != HostConnectorMutationUpsert {
+			return errors.New("connector protocol: invalid inventory management attempt")
+		}
+	}
 	if err := validateInstallationID(request.InstallationID); err != nil {
 		return err
 	}
@@ -299,15 +306,6 @@ func validateHostStorageOrigins(origins []string) error {
 	return nil
 }
 
-type HostPollRequest struct {
-	ActiveManagementAttempts []ActiveAttempt `json:"activeManagementAttempts,omitempty"`
-	ActiveConnectorAttempts  []ActiveAttempt `json:"activeConnectorAttempts,omitempty"`
-}
-
-type HostPollResponse struct {
-	Work []HostWork `json:"work"`
-}
-
 type HostWorkKind string
 
 const (
@@ -344,11 +342,12 @@ type HostManagementEvent struct {
 }
 
 type HostManagementCompletion struct {
-	JobID        string          `json:"jobId"`
-	AttemptToken string          `json:"attemptToken"`
-	Status       string          `json:"status"`
-	Output       json.RawMessage `json:"output,omitempty"`
-	Error        string          `json:"error,omitempty"`
+	InventoryRevision uint64          `json:"inventoryRevision,omitempty"`
+	JobID             string          `json:"jobId"`
+	AttemptToken      string          `json:"attemptToken"`
+	Status            string          `json:"status"`
+	Output            json.RawMessage `json:"output,omitempty"`
+	Error             string          `json:"error,omitempty"`
 }
 
 // ChildEnvelope is the framed JSON protocol between airlock-host and one

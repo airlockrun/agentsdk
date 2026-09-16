@@ -103,7 +103,6 @@ func TestControlValidationPreventsDispatch(t *testing.T) {
 		{"complete", `{"kind":"output","output":{"answer":1},"unexpected":true}`},
 		{"complete", `{"kind":"output","output":{"answer":1},"question":""}`},
 		{"complete", `null`},
-		{"unknown", `{}`},
 		{"run_js", `{"code":"return 1"}`},
 	} {
 		t.Run(tc.name+tc.args, func(t *testing.T) {
@@ -122,6 +121,18 @@ func TestControlValidationPreventsDispatch(t *testing.T) {
 				t.Fatal(c.log)
 			}
 		})
+	}
+}
+
+func TestControlValidationRejectsUnavailableToolBeforeDispatch(t *testing.T) {
+	in, _ := input(batch(call("invalid", "unknown", `{}`), complete("done")))
+	addChild(&in)
+	result, err := Run(t.Context(), in)
+	if result != nil || err == nil || !strings.Contains(err.Error(), "unavailable tool 'unknown'") {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	if strings.Join(in.Controller.(*controller).log, ",") != "model" {
+		t.Fatal(in.Controller.(*controller).log)
 	}
 }
 

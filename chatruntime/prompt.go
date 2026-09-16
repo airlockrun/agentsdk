@@ -11,6 +11,7 @@ import (
 
 const javascriptInstructions = `JavaScript environment:
 run_js executes an async function body in an isolated runtime. Use await for every capability call and an explicit return for the result. Each capability accepts one object matching its declared input schema. Console output is bounded.
+run_js is the only provider tool you may call in this mode. To use a declared capability, call run_js with code such as return await tools.tool_name({...});. tools.*, conn.*, mcp.*, air.*, and other declared names are JavaScript bindings usable only inside run_js code, never provider tool names.
 Scripts execute serially. Within a script, bounded concurrent async callbacks are allowed; await all work before returning. Do not leave background work running.
 Local let/const declarations do not persist between scripts. Explicit properties on globalThis may retain data for this uninterrupted run only. Completion, cancellation, or suspension destroys that state; never depend on it across turns or approvals.
 The realm has no ambient network, filesystem, process, or platform credentials. Use only the declared capabilities.
