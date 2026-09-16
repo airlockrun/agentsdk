@@ -25,7 +25,7 @@ func TestPromptUsesCanonicalCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"You help with records.", "async function body", "globalThis", "before any JavaScript executes", "declare const tools:", "lookup(args:", "id: string;", "tags?: string[];", "note?: string | null;", "Promise<", "count?: number;", "Read before writing", `await tools.lookup({"id":"abc"})`, "declare const mcp:", "search_issues(args:"} {
+	for _, want := range []string{"You help with records.", "async function body", "run_js is the only provider tool", "call run_js with code such as return await tools.tool_name({...});", "tools.*, conn.*, mcp.*, air.*", "bindings usable only inside run_js code, never provider tool names", "globalThis", "before any JavaScript executes", "declare const tools:", "lookup(args:", "id: string;", "tags?: string[];", "note?: string | null;", "Promise<", "count?: number;", "Read before writing", `await tools.lookup({"id":"abc"})`, "declare const mcp:", "search_issues(args:"} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("missing %q in prompt:\n%s", want, prompt)
 		}
