@@ -117,12 +117,20 @@ type DirectoryDef struct {
 	Scope          DirectoryScope `json:"scope,omitempty"`
 }
 
+type TopicEnrollment string
+
+const (
+	TopicEnrollmentDefaultOn  TopicEnrollment = "default_on"
+	TopicEnrollmentDefaultOff TopicEnrollment = "default_off"
+)
+
 type TopicDef struct {
-	Slug        string `json:"slug"`
-	Description string `json:"description"`
-	LLMHint     string `json:"llmHint,omitempty"`
-	Access      Access `json:"access"`
-	PerUser     bool   `json:"perUser,omitempty"`
+	Slug        string          `json:"slug"`
+	Description string          `json:"description"`
+	LLMHint     string          `json:"llmHint,omitempty"`
+	Access      Access          `json:"access"`
+	PerUser     bool            `json:"perUser,omitempty"`
+	Enrollment  TopicEnrollment `json:"enrollment,omitempty"`
 }
 
 type DisplayPart struct {

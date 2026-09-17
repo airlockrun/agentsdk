@@ -12,6 +12,29 @@ import (
 	"github.com/airlockrun/agentsdk/wire"
 )
 
+func TestTopicEnrollment(t *testing.T) {
+	for _, enrollment := range []TopicEnrollment{"", TopicEnrollmentDefaultOn, TopicEnrollmentDefaultOff, "invalid"} {
+		t.Run(string(enrollment), func(t *testing.T) {
+			topic := &Topic{Slug: "alerts", Description: "Alerts", Access: AccessPublic, Enrollment: enrollment}
+			defer func() {
+				if panicked := recover() != nil; panicked != (enrollment == "invalid") {
+					t.Fatalf("validation panic = %t", panicked)
+				}
+			}()
+			validateTopic(topic)
+			if enrollment == "" && topic.Enrollment != TopicEnrollmentDefaultOff {
+				t.Fatal("omitted enrollment not normalized")
+			}
+			a, _ := testAgent(t)
+			a.RegisterTopic(topic)
+			manifest := a.buildManifest()
+			if len(manifest.Topics) != 1 || manifest.Topics[0].Enrollment != topic.Enrollment {
+				t.Fatal("enrollment missing from manifest")
+			}
+		})
+	}
+}
+
 func TestRegistrationValidation(t *testing.T) {
 	noopWebhook := func(context.Context, []byte, *EventWriter) error { return nil }
 	noopRoute := func(http.ResponseWriter, *http.Request) error { return nil }

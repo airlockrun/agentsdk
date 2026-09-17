@@ -130,6 +130,7 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 			LLMHint:     t.LLMHint,
 			Access:      toWireAccess(t.Access),
 			PerUser:     t.PerUser,
+			Enrollment:  t.Enrollment,
 		})
 	}
 

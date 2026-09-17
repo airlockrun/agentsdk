@@ -112,6 +112,9 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 		}
 	}
 	for _, t := range manifest.Topics {
+		if t.Enrollment != "" && t.Enrollment != wire.TopicEnrollmentDefaultOn && t.Enrollment != wire.TopicEnrollmentDefaultOff {
+			return nil, fmt.Errorf("topic %q: invalid enrollment %q", t.Slug, t.Enrollment)
+		}
 		for _, op := range []string{"subscribe", "unsubscribe"} {
 			defs = append(defs, Definition{Path: Local(Topic, t.Slug, op), Target: Platform, Access: t.Access, Description: t.Description, LLMHint: t.LLMHint, InputSchema: schema.MustFromType(struct{}{}).MustJSON()})
 		}

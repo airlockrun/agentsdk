@@ -73,6 +73,49 @@ func TestValidateHostedConnectorManifestProtocolMinorBound(t *testing.T) {
 	}
 }
 
+func TestHostSyncAccessModes(t *testing.T) {
+	for _, test := range []struct {
+		wire string
+		mode RemoteAccessMode
+	}{
+		{"full", RemoteAccessFull},
+		{"manage", RemoteAccessManage},
+		{"updates", RemoteAccessUpdates},
+		{"none", RemoteAccessNone},
+	} {
+		t.Run(test.wire, func(t *testing.T) {
+			request := validHostSyncRequest()
+			request.Host.AccessMode = test.mode
+			body, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Contains(body, []byte(`"accessMode":"`+test.wire+`"`)) {
+				t.Fatalf("noncanonical wire value: %s", body)
+			}
+			var decoded HostSyncRequest
+			if err := json.Unmarshal(body, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateHostSyncRequest(decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Host.AccessMode != test.mode {
+				t.Fatalf("decoded mode = %q", decoded.Host.AccessMode)
+			}
+		})
+	}
+	for _, mode := range []RemoteAccessMode{"", "unknown", "manage_connectors", "update_only", "manage-connectors", "Manage", "Updates", " manage "} {
+		t.Run("invalid/"+string(mode), func(t *testing.T) {
+			request := validHostSyncRequest()
+			request.Host.AccessMode = mode
+			if err := ValidateHostSyncRequest(request); err == nil {
+				t.Fatal("invalid access mode accepted")
+			}
+		})
+	}
+}
+
 func TestValidateHostSyncRequestBounds(t *testing.T) {
 	manifest := SummarizeManifest(validProtocolTestManifest(t))
 	status := HostedConnectorStatus{InstallationID: "11111111-1111-4111-8111-111111111111", Manifest: manifest, Readiness: ReadinessReady}

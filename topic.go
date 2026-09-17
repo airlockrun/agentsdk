@@ -14,7 +14,8 @@ type TopicHandle struct {
 	agent   *Agent
 }
 
-// Publish sends display parts to all conversations subscribed to this topic.
+// Publish sends display parts to effectively enrolled users' bridge routes,
+// with a best-effort live mirror in an open app conversation.
 // It panics on a PerUser topic — those deliver only via PublishToUser, so a
 // broadcast would leak one user's content to every subscriber.
 func (h *TopicHandle) Publish(ctx context.Context, parts []DisplayPart) error {
@@ -27,8 +28,8 @@ func (h *TopicHandle) Publish(ctx context.Context, parts []DisplayPart) error {
 	return h.publish(ctx, "", parts)
 }
 
-// PublishToUser sends display parts only to the given user's conversations
-// subscribed to this topic. userID is the internal-user uuid (User.ID).
+// PublishToUser sends display parts only to the given user's enrolled bridge
+// routes, with a live web mirror. userID is the internal-user UUID.
 func (h *TopicHandle) PublishToUser(ctx context.Context, userID string, parts []DisplayPart) error {
 	if !h.agent.runtimeAvailable() {
 		return h.agent.runtimeUnavailable("TopicHandle.PublishToUser")

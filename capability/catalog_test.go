@@ -50,6 +50,7 @@ func TestCatalogRejectsConflictsBeforeSelection(t *testing.T) {
 	}{
 		{"duplicate tool access", wire.AgentManifest{Tools: []wire.ToolDef{{Name: "check", Access: wire.AccessPublic}, {Name: "check", Access: wire.AccessAdmin}}}, Discovery{}},
 		{"invalid access", wire.AgentManifest{Tools: []wire.ToolDef{{Name: "check", Access: "invalid"}}}, Discovery{}},
+		{"invalid topic enrollment", wire.AgentManifest{Topics: []wire.TopicDef{{Slug: "alerts", Access: wire.AccessPublic, Enrollment: "invalid"}}}, Discovery{}},
 		{"duplicate external name", wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "github", Access: wire.AccessUser}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"github": {{Name: "search"}, {Name: "search"}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
