@@ -30,12 +30,15 @@ const (
 	maxHostVersionBytes           = 256
 )
 
+// RemoteAccessMode controls remote management, not connector jobs or cancellations.
 type RemoteAccessMode string
 
 const (
-	RemoteAccessFull       RemoteAccessMode = "full"
-	RemoteAccessUpdateOnly RemoteAccessMode = "update_only"
-	RemoteAccessNone       RemoteAccessMode = "none"
+	RemoteAccessFull RemoteAccessMode = "full"
+	// RemoteAccessManage permits install, update, rollback, and remove, but not shell.
+	RemoteAccessManage  RemoteAccessMode = "manage"
+	RemoteAccessUpdates RemoteAccessMode = "updates"
+	RemoteAccessNone    RemoteAccessMode = "none"
 )
 
 type HostInfo struct {
@@ -147,7 +150,7 @@ func ValidateHostSyncRequest(request HostSyncRequest) error {
 		return errors.New("connector protocol: unsupported host platform and architecture")
 	}
 	switch request.Host.AccessMode {
-	case RemoteAccessFull, RemoteAccessUpdateOnly, RemoteAccessNone:
+	case RemoteAccessFull, RemoteAccessManage, RemoteAccessUpdates, RemoteAccessNone:
 	default:
 		return fmt.Errorf("connector protocol: invalid remote access mode %q", request.Host.AccessMode)
 	}

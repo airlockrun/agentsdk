@@ -309,6 +309,12 @@ func validateTopic(t *Topic) {
 		panic(fmt.Sprintf("agentsdk: RegisterTopic(%q): Description is required", t.Slug))
 	}
 	validateAccess(fmt.Sprintf("RegisterTopic(%q)", t.Slug), t.Access)
+	if t.Enrollment == "" {
+		t.Enrollment = TopicEnrollmentDefaultOff
+	}
+	if t.Enrollment != TopicEnrollmentDefaultOn && t.Enrollment != TopicEnrollmentDefaultOff {
+		panic(fmt.Sprintf("agentsdk: RegisterTopic(%q): invalid Enrollment", t.Slug))
+	}
 }
 
 func validateConnection(c *Connection) {

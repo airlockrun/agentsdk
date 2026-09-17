@@ -701,22 +701,11 @@ not exposed to agent code, which always goes through a registered slug.
 
 ## RegisterTopic
 
-```go
-alerts := agent.RegisterTopic(&agentsdk.Topic{
-    Slug:        "alerts",
-    Description: "System alerts",
-    Access:      agentsdk.AccessUser,
-})
-
-alerts.Publish(ctx, []agentsdk.DisplayPart{
-    {Type: "text", Text: "Daily report is ready"},
-    {Type: "file", Source: "reports/daily.pdf", Filename: "report.pdf"},
-})
-```
-
-The runtime LLM subscribes the current conversation via
-`topic.<slug>.subscribe()`.
-`Description` and `Access` are required.
+`Description` and `Access` are required; omitted enrollment means default-off.
+Topic delivery uses enrolled bridge routes with a best-effort live web mirror.
+`agent.ListUsers(ctx)` provides the tenant directory for addressing recipients.
+See **`/libs/agentsdk/reference/notifications.md`** for enrollment, subscription,
+delivery failure semantics, and the typed user-directory API.
 
 ## RegisterDirectory — file storage
 

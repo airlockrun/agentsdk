@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // defaultTimeout is the default execution timeout for webhooks.
@@ -327,18 +329,26 @@ const (
 
 // --- Topic ---
 
+type TopicEnrollment = wire.TopicEnrollment
+
+const (
+	TopicEnrollmentDefaultOn  = wire.TopicEnrollmentDefaultOn
+	TopicEnrollmentDefaultOff = wire.TopicEnrollmentDefaultOff
+)
+
 // Topic is the self-contained declaration registered via agent.RegisterTopic.
-// Conversations subscribe to a topic via topic_{slug}.subscribe() in run_js;
+// Users enroll in a topic via topic.<slug>.subscribe() in run_js;
 // builders publish via the *TopicHandle returned by RegisterTopic.
 type Topic struct {
 	noUnkeyedLiterals
 
 	Slug        string
 	Description string
-	LLMHint     string // optional model-only guidance
-	Access      Access // required: who may subscribe via topic_{slug}.subscribe()
+	LLMHint     string          // optional model-only guidance
+	Access      Access          // required: who may enroll and receive notifications
+	Enrollment  TopicEnrollment // omitted means default-off; user overrides take precedence
 	// PerUser forbids broadcast: Publish panics, only PublishToUser delivers
-	// (to the named user's subscribed conversations). Use for personal feeds
+	// (to the named user's enrolled routes). Use for personal feeds
 	// (reminders, alerts) where a broadcast would leak across users.
 	PerUser bool
 }
