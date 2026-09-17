@@ -703,9 +703,10 @@ not exposed to agent code, which always goes through a registered slug.
 
 `Description` and `Access` are required; omitted enrollment means default-off.
 Topic delivery uses enrolled bridge routes with a best-effort live web mirror.
-`agent.ListUsers(ctx)` provides the tenant directory for addressing recipients.
-See **`/libs/agentsdk/reference/notifications.md`** for enrollment, subscription,
-delivery failure semantics, and the typed user-directory API.
+`agent.ListMembers(ctx, agentsdk.ListMembersOptions{})` pages current-app members
+with actual direct/group-derived grants, including public; no grant means excluded.
+Users are deduplicated at their highest effective access (admin > user > public).
+See **`/libs/agentsdk/reference/notifications.md`** for pagination and notifications.
 
 ## RegisterDirectory — file storage
 
