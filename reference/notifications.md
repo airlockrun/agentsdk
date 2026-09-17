@@ -1,4 +1,4 @@
-# Notifications and User Directory
+# Notifications and Member Directory
 
 ## Topic Declaration
 
@@ -47,13 +47,28 @@ conversation. It is not persisted in web history or replayed on reconnect.
 Bridge notifications are stored in the bridge transcript but excluded from LLM
 context.
 
-## ListUsers
+## ListMembers
 
-`users, err := agent.ListUsers(ctx)` returns the tenant-wide human directory as
-`[]agentsdk.DirectoryUser`, containing only `ID`, `Email`, and `DisplayName`.
-This matches the platform's human-selectable directory scope, including users
-without app grants. The current app credential authorizes the request; startup
+`page, err := agent.ListMembers(ctx, agentsdk.ListMembersOptions{})` returns a
+page of the current app's members as `agentsdk.MemberPage`. Membership requires
+an actual direct or group-derived grant, including a `public` grant. Users with
+no grant are excluded. Users are deduplicated, with `Access` set to their highest
+effective access across those grants (`admin` > `user` > `public`):
+
+- `Members []agentsdk.Member`: each member has `User agentsdk.User` and
+  `Access agentsdk.Access`, the user's highest effective access to this app.
+- `User` contains `ID`, `Email`, `DisplayName`, and `PlatformMember`. Directory
+  users always have `PlatformMember: true`, including those with public app access.
+- `NextCursor string`: pass this opaque value as `ListMembersOptions.Cursor` to
+  fetch the next page. An empty cursor marks the final page.
+
+`ListMembersOptions.Limit` is zero for the host default of 100, or an explicit
+value from 1 through 1000. Negative values and values above 1000 return errors.
+The SDK calls `GET /api/agent/members` with optional `limit` and `cursor` query
+parameters; a zero limit is omitted so the host supplies its default.
+
+The current app credential authorizes the request; startup
 and application-owned contexts work without substituting the app owner or a
-human caller. IDs are addresses, not authority. Notification eligibility and
-enrollment remain separate checks. The directory is unpaginated, matching the
-platform directory API, and is not exposed as a JavaScript capability.
+human caller. IDs and access snapshots are not authority. Notification eligibility
+and enrollment remain separate checks. The directory is not exposed as a
+JavaScript capability.
