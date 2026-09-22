@@ -568,23 +568,13 @@ type MCP struct {
 }
 
 // MCPToolCallResponse is returned from MCP tool call proxy.
-type MCPToolCallResponse struct {
-	Content []MCPContent `json:"content"`
-	IsError bool         `json:"isError"`
-}
+type MCPToolCallResponse = wire.MCPToolCallResponse
 
 // MCPContent is a single content block in an MCP tool response.
 // MCP defines five content types; we keep the fields we surface to JS
 // callers. URI is set for resource_link; Data + MimeType for
 // image/audio; Name for resource_link display.
-type MCPContent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Name     string `json:"name,omitempty"`
-	MimeType string `json:"mimeType,omitempty"`
-	Data     string `json:"data,omitempty"`
-}
+type MCPContent = wire.MCPContent
 
 // Instruction is the self-contained declaration passed to agent.AddInstruction.
 // The Text fragment is appended to the system prompt for runs whose caller

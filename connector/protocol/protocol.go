@@ -24,6 +24,8 @@ const (
 	Major = 1
 	Minor = 0
 
+	FeatureHostedChildV1 = "hosted-child-v1"
+
 	// MaxEnvelopeBytes matches Airlock's connector protocol request limit.
 	MaxEnvelopeBytes = 1 << 20
 	// MaxJobPayloadBytes reserves enough room for the JSON completion envelope,

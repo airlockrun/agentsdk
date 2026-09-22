@@ -39,8 +39,7 @@ func (h *MCPHandle) CallTool(ctx context.Context, toolName string, args any) (*M
 	if err := h.agent.client.doJSON(ctx, "POST", "/api/agent/mcp/"+h.slug+"/tools/call", req, &resp); err != nil {
 		return nil, fmt.Errorf("MCPHandle.CallTool %s/%s: %w", h.slug, toolName, err)
 	}
-	result := mcpToolCallResponseFromWire(resp)
-	return &result, nil
+	return &resp, nil
 }
 
 func encodeMCPArgs(args any) (json.RawMessage, error) {

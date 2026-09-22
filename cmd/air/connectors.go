@@ -65,13 +65,13 @@ func cmdConnectors(args []string) error {
 			return writeProtoJSON(&response)
 		}
 		writer := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(writer, "ID\tDISPLAY NAME\tKIND\tREADINESS\tLAST SEEN")
+		fmt.Fprintln(writer, "ID\tDISPLAY NAME\tKIND\tREADINESS\tDETAIL\tLAST SEEN")
 		for _, item := range response.Connectors {
 			lastSeen := "never"
 			if item.LastSeenAt != nil {
 				lastSeen = item.LastSeenAt.AsTime().Format("2006-01-02 15:04:05Z07:00")
 			}
-			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", item.Id, item.DisplayName, item.Kind, item.Readiness, lastSeen)
+			fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\n", item.Id, item.DisplayName, item.Kind, item.Readiness, item.ReadinessMessage, lastSeen)
 		}
 		return writer.Flush()
 	}
@@ -86,7 +86,25 @@ func cmdConnectors(args []string) error {
 	if item == nil {
 		return errors.New("Airlock returned an empty connector")
 	}
-	fmt.Printf("ID: %s\nDisplay name: %s\nKind: %s\nContract: %s\nReadiness: %s\nArtifact: %s\nInterface hash: %s\nDescription: %s\nInterface:\n%s\n", item.Id, item.DisplayName, item.Kind, item.ContractId, item.Readiness, item.ArtifactVersion, item.InterfaceHash, item.Description, item.InterfaceJson)
+	fmt.Printf("ID: %s\nDisplay name: %s\nKind: %s\nContract: %s\nReadiness: %s\nReadiness detail: %s\nArtifact: %s\nInterface hash: %s\nDescription: %s\n", item.Id, item.DisplayName, item.Kind, item.ContractId, item.Readiness, item.ReadinessMessage, item.ArtifactVersion, item.InterfaceHash, item.Description)
+	if item.HostId != "" {
+		var host airlockv1.GetHostResponse
+		if err := doProto(ctx, resolvedURL, http.MethodGet, "/api/v1/hosts/"+url.PathEscape(item.HostId), token, nil, &host); err != nil {
+			fmt.Printf("Management diagnostics: unavailable: %v\n", err)
+		} else {
+			for _, job := range host.ManagementJobs {
+				if job.ConnectorId != item.Id {
+					continue
+				}
+				fmt.Printf("Latest management job: %s (%s)\n", job.Kind, job.Status)
+				if job.ErrorMessage != "" {
+					fmt.Printf("Management error: %s\n", job.ErrorMessage)
+				}
+				break
+			}
+		}
+	}
+	fmt.Printf("Interface:\n%s\n", item.InterfaceJson)
 	return nil
 }
 

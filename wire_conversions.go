@@ -45,18 +45,3 @@ func fileInfoFromWire(info wire.FileInfo) FileInfo {
 		LastModified: info.LastModified,
 	}
 }
-
-func mcpToolCallResponseFromWire(resp wire.MCPToolCallResponse) MCPToolCallResponse {
-	content := make([]MCPContent, len(resp.Content))
-	for i, item := range resp.Content {
-		content[i] = MCPContent{
-			Type:     item.Type,
-			Text:     item.Text,
-			URI:      item.URI,
-			Name:     item.Name,
-			MimeType: item.MimeType,
-			Data:     item.Data,
-		}
-	}
-	return MCPToolCallResponse{Content: content, IsError: resp.IsError}
-}

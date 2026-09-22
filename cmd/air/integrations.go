@@ -239,9 +239,10 @@ func listMCPTools(slug string, flags integrationTargetFlags) error {
 		return err
 	}
 	type listedTool struct {
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		InputSchema json.RawMessage `json:"inputSchema"`
+		Name         string          `json:"name"`
+		Description  string          `json:"description"`
+		InputSchema  json.RawMessage `json:"inputSchema"`
+		OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 	}
 	result := struct {
 		Instructions string       `json:"instructions,omitempty"`
@@ -252,7 +253,7 @@ func listMCPTools(slug string, flags integrationTargetFlags) error {
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{}`)
 		}
-		result.Tools[i] = listedTool{Name: item.Name, Description: item.Description, InputSchema: schema}
+		result.Tools[i] = listedTool{Name: item.Name, Description: item.Description, InputSchema: schema, OutputSchema: item.OutputSchemaJson}
 	}
 	encoded, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -322,9 +323,10 @@ func consumeIntegrationTargetFlag(args []string, index *int, flags *integrationT
 }
 
 type mcpProbeTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"inputSchema"`
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 var mcpProbeNonPublicPrefixes = []netip.Prefix{
@@ -542,9 +544,13 @@ func probeMCP(rawURL string) error {
 		Tools:        make([]mcpProbeTool, 0),
 		Auth:         <-authResult,
 	}
-	for _, item := range client.GetTools().Ordered(nil) {
+	tools, err := client.GetTools(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range tools.Ordered(nil) {
 		result.Tools = append(result.Tools, mcpProbeTool{
-			Name: strings.TrimPrefix(item.Name, "probe_"), Description: item.Description, InputSchema: item.InputSchema,
+			Name: strings.TrimPrefix(item.Name, "probe_"), Description: item.Description, InputSchema: item.InputSchema, OutputSchema: item.OutputSchema,
 		})
 	}
 	return printMCPProbe(result)
