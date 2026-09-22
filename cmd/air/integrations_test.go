@@ -384,11 +384,14 @@ func serveProbeMCP(w http.ResponseWriter, r *http.Request, unauthorized bool) {
 		return
 	}
 	results := map[string]any{
-		"initialize": map[string]any{
-			"protocolVersion": mcp.LatestProtocolVersion,
-			"instructions":    "Use carefully.",
+		"server/discover": map[string]any{
+			"resultType":        "complete",
+			"supportedVersions": []string{mcp.LatestProtocolVersion},
+			"capabilities":      map[string]any{"tools": map[string]any{}},
+			"instructions":      "Use carefully.",
 		},
 		"tools/list": map[string]any{
+			"resultType": "complete",
 			"tools": []map[string]any{{
 				"name": "lookup", "description": "Look up a value", "inputSchema": map[string]any{"type": "object"},
 			}},

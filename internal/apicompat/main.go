@@ -125,7 +125,7 @@ func run() error {
 		fmt.Fprintln(os.Stderr, message)
 	}
 	if breaking {
-		fmt.Printf("API compatibility: allowing pre-1.0 prerelease %s against %s\n", current, baseline)
+		fmt.Printf("API compatibility: allowing pre-1.0 development series %s against %s\n", current, baseline)
 		return nil
 	}
 	return fmt.Errorf("%d incompatible API change(s) in compatibility series %s", len(incompatible), compatibilitySeries("v"+current))
@@ -186,7 +186,7 @@ func selectBaseline(tags []string, current string, currentTagged bool) (baseline
 	if semver.Compare(current, latest) <= 0 {
 		return "", false, fmt.Errorf("current version %s is not newer than %s", current, latest)
 	}
-	if semver.Major(current) == "v0" && semver.Prerelease(current) != "" {
+	if semver.Major(current) == "v0" {
 		hasStableSeries := false
 		for _, tag := range valid {
 			if compatibilitySeries(tag) == compatibilitySeries(current) && semver.Prerelease(tag) == "" {

@@ -239,10 +239,11 @@ type MCPDef struct {
 }
 
 type MCPToolSchema struct {
-	ServerSlug  string          `json:"serverSlug"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
+	ServerSlug   string          `json:"serverSlug"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"inputSchema"`
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
 }
 
 type MCPAuthStatus struct {
@@ -259,17 +260,34 @@ type MCPToolCallRequest struct {
 }
 
 type MCPToolCallResponse struct {
-	Content []MCPContent `json:"content"`
-	IsError bool         `json:"isError"`
+	Content           []MCPContent    `json:"content"`
+	IsError           bool            `json:"isError"`
+	StructuredContent json.RawMessage `json:"structuredContent,omitempty"`
+	Meta              json.RawMessage `json:"_meta,omitempty"`
 }
 
 type MCPContent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Name     string `json:"name,omitempty"`
-	MimeType string `json:"mimeType,omitempty"`
-	Data     string `json:"data,omitempty"`
+	Type        string              `json:"type"`
+	Text        string              `json:"text,omitempty"`
+	URI         string              `json:"uri,omitempty"`
+	Name        string              `json:"name,omitempty"`
+	MimeType    string              `json:"mimeType,omitempty"`
+	Data        string              `json:"data,omitempty"`
+	Resource    *MCPResourceContent `json:"resource,omitempty"`
+	Description string              `json:"description,omitempty"`
+	Title       string              `json:"title,omitempty"`
+	Annotations json.RawMessage     `json:"annotations,omitempty"`
+	Icons       json.RawMessage     `json:"icons,omitempty"`
+	Size        *int64              `json:"size,omitempty"`
+	Meta        json.RawMessage     `json:"_meta,omitempty"`
+}
+
+type MCPResourceContent struct {
+	URI      string          `json:"uri"`
+	MimeType string          `json:"mimeType,omitempty"`
+	Text     string          `json:"text,omitempty"`
+	Blob     string          `json:"blob,omitempty"`
+	Meta     json.RawMessage `json:"_meta,omitempty"`
 }
 
 // AgentManifest is the complete canonical declaration of an agent image. The

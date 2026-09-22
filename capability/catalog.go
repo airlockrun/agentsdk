@@ -129,7 +129,24 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 			return err
 		}
 		for _, t := range tools {
-			defs = append(defs, Definition{Path: paths[t.Name], Target: Platform, Access: access, Description: t.Description, InputSchema: t.InputSchema})
+			var output json.RawMessage
+			if len(t.OutputSchema) > 0 {
+				// Platform MCP calls return the complete response envelope; the
+				// remote output schema describes only its structuredContent field.
+				output, err = json.Marshal(map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"content":           map[string]any{"type": []string{"array", "null"}, "items": map[string]any{"type": "object"}},
+						"isError":           map[string]any{"type": "boolean"},
+						"structuredContent": t.OutputSchema,
+					},
+					"required": []string{"content", "isError"},
+				})
+				if err != nil {
+					return fmt.Errorf("MCP output schema for %s: %w", t.Name, err)
+				}
+			}
+			defs = append(defs, Definition{Path: paths[t.Name], Target: Platform, Access: access, Description: t.Description, InputSchema: t.InputSchema, OutputSchema: output})
 		}
 		return nil
 	}

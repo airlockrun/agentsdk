@@ -1,12 +1,43 @@
 package capability
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/airlockrun/agentsdk/wire"
 )
+
+func TestMCPOutputSchemaDescribesResponseEnvelope(t *testing.T) {
+	remote := json.RawMessage(`{"type":"array","items":{"type":"integer"}}`)
+	defs, err := Catalog(wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "external", Access: wire.AccessUser}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"external": {{Name: "lookup", OutputSchema: remote}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range defs {
+		if d.Path.Kind() == MCP {
+			var output struct {
+				Type       string                     `json:"type"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			}
+			if err := json.Unmarshal(d.OutputSchema, &output); err != nil {
+				t.Fatal(err)
+			}
+			var structured struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(output.Properties["structuredContent"], &structured); err != nil {
+				t.Fatal(err)
+			}
+			if output.Type != "object" || structured.Type != "array" || len(output.Properties["content"]) == 0 || len(output.Properties["isError"]) == 0 {
+				t.Fatalf("MCP envelope schema mismatch: %s", d.OutputSchema)
+			}
+			return
+		}
+	}
+	t.Fatal("MCP tool not found")
+}
 
 func TestCatalog(t *testing.T) {
 	if len(Fixed()) != 30 {

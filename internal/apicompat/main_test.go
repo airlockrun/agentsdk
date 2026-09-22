@@ -27,6 +27,13 @@ func TestSelectBaseline(t *testing.T) {
 			wantBreaking: true,
 		},
 		{
+			name:         "first stable release after prereleases",
+			tags:         []string{"v0.6.2", "v0.7.0-rc.4", "v0.7.0-rc.5"},
+			current:      "v0.7.0",
+			wantBaseline: "v0.7.0-rc.5",
+			wantBreaking: true,
+		},
+		{
 			name:         "prerelease preserves stable zero-major series",
 			tags:         []string{"v0.3.0", "v0.4.0"},
 			current:      "v0.4.1-rc.1",

@@ -216,7 +216,7 @@ func (r *Runtime) Manifest() protocol.Manifest {
 	}
 	manifest := protocol.Manifest{
 		ProtocolMajor: protocol.Major, ProtocolMinor: protocol.Minor,
-		Features: []string{"cancellation", "commands", "directories", "hosted-child-v1", "long-jobs"},
+		Features: []string{"cancellation", "commands", "directories", protocol.FeatureHostedChildV1, "long-jobs"},
 		Targets:  targets, Interface: iface, InterfaceHash: interfaceHash, ArtifactDigest: artifactDigest, Settings: settings,
 	}
 	if err := protocol.ValidateManifest(manifest); err != nil {
