@@ -198,7 +198,7 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 //	    Read: agentsdk.AccessUser, Write: agentsdk.AccessUser, List: agentsdk.AccessUser,
 //	    Description: "User uploads",
 //	})
-//	err := agent.WriteFile(ctx, "uploads/doc.pdf", reader, "application/pdf")
+//	_, err := agent.WriteFile(ctx, "uploads/doc.pdf", reader, "application/pdf")
 func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) *DirectoryHandle {
 	done := a.beginRegistration("RegisterDirectory")
 	defer done()

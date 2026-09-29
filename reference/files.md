@@ -26,9 +26,13 @@ application-owned agents. It is not part of the human access hierarchy;
 `AccessAdmin` does not satisfy it. Native Go code remains trusted with its app's
 storage and can use every app-owned path directly.
 
-`RetentionHours` opts a directory into age-based cleanup. `Scope` can partition
-paths by run, conversation, or user. Use scoping only when caller isolation is a
-requirement; it changes the physical path returned from writes.
+`RetentionHours` opts a directory into age-based cleanup. `Scope` partitions
+paths checked through `ResolveFilePath` by run, conversation, or user. Runtime
+writes and lists receive the resolved physical path with the scope segment;
+reads, overwrites, and deletes require a matching scoped path. Trusted native
+storage calls continue to use the exact app-relative path supplied by app code.
+An unbound admin can address exact non-internal paths without scope insertion;
+runtime-bound admin calls follow the selected scope.
 
 The framework declares `tmp` as user-readable/writable/listable scratch with a
 72-hour retention period. Calling `RegisterDirectory("tmp", ...)` returns a valid
@@ -74,9 +78,11 @@ share, err := agent.ShareFileURL(ctx, "reports/q1.csv", time.Hour)
 ```
 
 These methods do not call `ResolveFilePath`. Native app code is trusted with its
-own storage. `FileRef.ID` remains stable across content replacement;
-`FileRef.ContentID` is an optimistic fence. `SetFileIndex` fails if content
-changed after `StatFileRef`, and an empty index restores automatic extraction.
+own storage, so these methods normalize and use the exact app-relative path they
+receive, including in a directory declared with `Scope`. `FileRef.ID` remains
+stable across content replacement; `FileRef.ContentID` is an optimistic fence.
+`SetFileIndex` fails if content changed after `StatFileRef`, and an empty index
+restores automatic extraction.
 
 ## Untrusted paths
 
