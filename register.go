@@ -17,6 +17,15 @@ func WithLLMHint(hint string) RegisterOption {
 	return func(rt *registeredTool) { rt.llmHint = hint }
 }
 
+// WithFileInputs declares the registered app directory where Airlock copies all
+// materialized FilePath inputs before invoking the tool.
+func WithFileInputs(directory *DirectoryHandle) RegisterOption {
+	return func(rt *registeredTool) {
+		rt.fileInputsSet = true
+		rt.fileInputDirectory = directory
+	}
+}
+
 // RegisterTool registers a goai tool.Tool the LLM can invoke, at the given
 // access level. Build the tool once with
 // tool.Typed[In,Out] (or tool.New) and pass the same value here and to the
@@ -37,7 +46,7 @@ func (a *Agent) RegisterTool(t tool.Tool, access Access, opts ...RegisterOption)
 		}
 		o(rt)
 	}
-	validateRegisteredTool(rt)
+	a.validateRegisteredTool(rt)
 	if _, exists := a.tools[rt.Name]; exists {
 		panic("agentsdk: duplicate RegisterTool: " + rt.Name)
 	}
@@ -105,7 +114,7 @@ func (a *Agent) RegisterTopic(t *Topic) *TopicHandle {
 // returned handle for compile-time-bound proxy calls:
 //
 //	gmail := agent.RegisterConnection(&agentsdk.Connection{
-//	    Slug: "gmail", Name: "Gmail", BaseURL: "https://gmail.googleapis.com", ...,
+//	    Slug: "gmail", Name: "Gmail", BaseURL: "https://gmail.googleapis.com", BindingMode: agentsdk.BindingPerUser, ...,
 //	})
 //	body, err := gmail.Request(ctx, agentsdk.RequestOpts{Path: "/messages"})
 func (a *Agent) RegisterConnection(c *Connection) *ConnectionHandle {
@@ -190,7 +199,7 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 //	    Description: "User uploads",
 //	})
 //	err := agent.WriteFile(ctx, "uploads/doc.pdf", reader, "application/pdf")
-func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
+func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) *DirectoryHandle {
 	done := a.beginRegistration("RegisterDirectory")
 	defer done()
 	canon, err := normalizePath(path)
@@ -203,11 +212,11 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 			// but allow the builder's description through. Anywhere else
 			// duplicate registrations panic so builders find conflicts
 			// at startup.
-			if canon == reservedTmpPath || canon == reservedIncomingPath {
+			if canon == reservedTmpPath {
 				if opts.Description != "" {
 					d.Description = opts.Description
 				}
-				return
+				return &DirectoryHandle{agent: a, path: canon}
 			}
 			panic("agentsdk: duplicate RegisterDirectory: " + canon)
 		}
@@ -224,13 +233,14 @@ func (a *Agent) RegisterDirectory(path string, opts DirectoryOpts) {
 	}
 	validateDirectory(d)
 	a.directories = append(a.directories, d)
+	return &DirectoryHandle{agent: a, path: canon}
 }
 
 // RegisterMCP registers a remote MCP server dependency and returns a handle
 // for calling its tools. Synced to Airlock on Serve(). Use the returned
 // handle for compile-time-bound tool calls:
 //
-//	github := agent.RegisterMCP(&agentsdk.MCP{Slug: "github", URL: "https://api.github.com/mcp"})
+//	github := agent.RegisterMCP(&agentsdk.MCP{Slug: "github", URL: "https://api.github.com/mcp", BindingMode: agentsdk.BindingPerUser})
 //	result, err := github.CallTool(ctx, "search_repos", args)
 func (a *Agent) RegisterMCP(m *MCP) *MCPHandle {
 	done := a.beginRegistration("RegisterMCP")

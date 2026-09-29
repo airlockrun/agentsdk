@@ -56,10 +56,16 @@ RUN --mount=type=bind,from=goproxy,target=/goproxy \
     if [ -n "$(find db/queries -type f -name '*.sql' -print -quit)" ]; then .airlock/toolchain/bin/sqlc generate; fi && \
     go tool templ generate && \
     .airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify && \
-    go build -o /agent .
+    go build -o /agent . && \
+    go tool air stage-runtime-files /build /runtime-files
 
 # Runtime
 FROM {{.AgentBaseImage}}
+
+# airlock.toml selects application files that must exist at runtime. The
+# staging command applies source-bundle ignores and preserves their paths and
+# executable bits under /app. A missing manifest produces an empty directory.
+COPY --from=builder /runtime-files/ /app/
 
 # Agent-specified system setup (optional). Same script the builder tested
 # against locally — runs as root so it can apt-get install, curl-bash an

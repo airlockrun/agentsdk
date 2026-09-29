@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/buildconfig"
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/agentsdk/sourcebundle"
@@ -51,6 +52,9 @@ func cmdDeploy(args []string) error {
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "go.mod")); err != nil {
 		return fmt.Errorf("deploy requires an agent repo with go.mod in %s: %w", f.dir, err)
+	}
+	if _, err := buildconfig.Load(f.dir); err != nil {
+		return fmt.Errorf("validate runtime files: %w", err)
 	}
 	binding, _, err := loadAgentBinding(f.dir)
 	if err != nil {

@@ -59,6 +59,9 @@ type Input struct {
 	AutoConfirm     bool
 	Redactor        func(string) string
 	ForceCompact    bool
+	// JavaScriptPrelude defines host-authored convenience bindings inside each
+	// script. It carries no credentials and is not supplied by model input.
+	JavaScriptPrelude string
 	// Resume accepts only a permission checkpoint produced by this runtime.
 	// Approval is required when Resume is set; false explicitly denies the call.
 	Resume   *sol.SuspensionContext

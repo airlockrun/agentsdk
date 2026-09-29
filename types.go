@@ -101,8 +101,8 @@ type Connection struct {
 	Headers           map[string]string
 	AuthInjection     AuthInjection
 	SetupInstructions string
-	LLMHint           string // appended to the connection block in the system prompt
-	Access            Access // required: who may invoke conn_{slug}
+	LLMHint           string      // appended to the connection block in the system prompt
+	BindingMode       BindingMode // required: shared app credential or per-user credential
 }
 
 // ConnectionResponse is the streaming primitive returned by
@@ -278,8 +278,13 @@ type directory struct {
 	// passes it around, and access just works for the caller who wrote
 	// it. Default ScopeNone preserves today's behaviour.
 	Scope DirectoryScope
+}
 
-	incomingProvenance bool
+// DirectoryHandle identifies a directory registered on one app. Pass it to
+// WithFileInputs to select where Airlock materializes FilePath tool inputs.
+type DirectoryHandle struct {
+	agent *Agent
+	path  string
 }
 
 // DirectoryOpts is the option struct accepted by RegisterDirectory.
@@ -516,9 +521,19 @@ func extForMimeOrType(mimeType, partType string) string {
 type Access string
 
 const (
-	AccessAdmin  Access = "admin"
-	AccessUser   Access = "user"
-	AccessPublic Access = "public"
+	AccessAdmin    Access = "admin"
+	AccessUser     Access = "user"
+	AccessPublic   Access = "public"
+	AccessInternal Access = "internal"
+)
+
+// BindingMode controls whether a connection or MCP credential is shared by the
+// app or independently authorized for each user.
+type BindingMode string
+
+const (
+	BindingShared  BindingMode = "shared"
+	BindingPerUser BindingMode = "per_user"
 )
 
 // --- Auth modes ---
@@ -564,7 +579,7 @@ type MCP struct {
 	// HTTP call: bearer header (default), custom header, query parameter,
 	// or path prefix. Mirrors Connection.AuthInjection.
 	AuthInjection AuthInjection
-	Access        Access // optional: chat exposure; empty restricts use to bound task agents and native callbacks
+	BindingMode   BindingMode // required: shared app credential or per-user credential
 }
 
 // MCPToolCallResponse is returned from MCP tool call proxy.

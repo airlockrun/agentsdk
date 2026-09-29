@@ -1,5 +1,36 @@
 # Durable jobs
 
+## Asynchronous tools
+
+`RegisterAsyncTool` exposes a typed durable job as a tool that returns immediately
+after acceptance. Register the declaration in the agent definition factory:
+
+```go
+agentsdk.RegisterAsyncTool(agent, &agentsdk.AsyncTool[ReportInput, ReportOutput]{
+    Access: agentsdk.AccessUser,
+    Job: &agentsdk.Job[ReportInput, ReportOutput]{
+        Name: "generate_report",
+        Description: "Generate an account report.",
+        Version: 1,
+        Timeout: 10 * time.Minute,
+        MaxAttempts: 3,
+        MaxConcurrency: 2,
+        Handler: func(ctx context.Context, job agentsdk.JobContext, in ReportInput) (ReportOutput, error) {
+            return ReportOutput{Path: "reports/" + job.ID + ".pdf"}, nil
+        },
+    },
+})
+```
+
+The immediate result is an `AsyncTask` with a `job:<uuid>` ID. Hosted global chat
+and global MCP expose `tasks.get({id})`, `tasks.wait({id, timeoutMs: 30000})`, and
+`tasks.cancel({id})`. Task handles identify logical work, not execution attempts.
+Job handlers retain their typed contract, progress, cancellation and idempotency
+requirements. Registering the async tool also registers its job contract; do not
+register a second job with the same name/version.
+
+## Job contracts
+
 Jobs are typed, versioned contracts with durable lifecycle state and at-least-once
 delivery. Input must be a struct. Use `JobContext.ID` as the idempotency key.
 `JobContext.ScheduledAt` contains the intended occurrence time for cron and

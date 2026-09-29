@@ -143,42 +143,63 @@ func TestRegistrationValidation(t *testing.T) {
 			name: "connection base URL",
 			want: "absolute http(s) URL",
 			call: func(a *Agent) {
-				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "://bad", AuthMode: ConnectionAuthNone, Access: AccessUser})
+				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "://bad", AuthMode: ConnectionAuthNone, BindingMode: BindingPerUser})
 			},
 		},
 		{
 			name: "binding slug is snake case",
 			want: "lowercase snake_case",
 			call: func(a *Agent) {
-				a.RegisterConnection(&Connection{Slug: "bad__slug", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, Access: AccessUser})
+				a.RegisterConnection(&Connection{Slug: "bad__slug", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, BindingMode: BindingPerUser})
 			},
 		},
 		{
 			name: "binding slug length",
 			want: "1-44 characters",
 			call: func(a *Agent) {
-				a.RegisterConnection(&Connection{Slug: "a" + strings.Repeat("b", maxBindingSlugLength), Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, Access: AccessUser})
+				a.RegisterConnection(&Connection{Slug: "a" + strings.Repeat("b", maxBindingSlugLength), Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, BindingMode: BindingPerUser})
 			},
 		},
 		{
 			name: "connection auth mode",
 			want: "invalid AuthMode",
 			call: func(a *Agent) {
-				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuth("basic"), Access: AccessUser})
+				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuth("basic"), BindingMode: BindingPerUser})
+			},
+		},
+		{
+			name: "connection binding mode required",
+			want: "BindingMode is required",
+			call: func(a *Agent) {
+				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone})
+			},
+		},
+		{
+			name: "connection binding mode valid",
+			want: "invalid BindingMode",
+			call: func(a *Agent) {
+				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, BindingMode: BindingMode("tenant")})
 			},
 		},
 		{
 			name: "connection reserved OAuth auth param",
 			want: "AuthParams key \"redirect_URI\" is reserved",
 			call: func(a *Agent) {
-				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthOAuth, AuthURL: "https://example.com/auth", TokenURL: "https://example.com/token", AuthParams: map[string]string{"redirect_URI": "https://evil.example"}, Access: AccessUser})
+				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthOAuth, AuthURL: "https://example.com/auth", TokenURL: "https://example.com/token", AuthParams: map[string]string{"redirect_URI": "https://evil.example"}, BindingMode: BindingPerUser})
 			},
 		},
 		{
 			name: "mcp URL",
 			want: "absolute http(s) URL",
 			call: func(a *Agent) {
-				a.RegisterMCP(&MCP{Slug: "docs", Name: "Docs", URL: "file:///tmp/mcp", AuthMode: MCPAuthNone, Access: AccessUser})
+				a.RegisterMCP(&MCP{Slug: "docs", Name: "Docs", URL: "file:///tmp/mcp", AuthMode: MCPAuthNone, BindingMode: BindingPerUser})
+			},
+		},
+		{
+			name: "mcp binding mode required",
+			want: "BindingMode is required",
+			call: func(a *Agent) {
+				a.RegisterMCP(&MCP{Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthNone})
 			},
 		},
 		{
@@ -249,7 +270,7 @@ func TestRegistrationsAreCopied(t *testing.T) {
 	route.Description = "Mutated"
 
 	connection := &Connection{
-		Slug: "api", Name: "API", Description: "Example API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, Access: AccessUser,
+		Slug: "api", Name: "API", Description: "Example API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone, BindingMode: BindingPerUser,
 		Scopes: []string{"read"}, AuthParams: map[string]string{"prompt": "consent"}, Headers: map[string]string{"Accept": "application/json"},
 	}
 	a.RegisterConnection(connection)

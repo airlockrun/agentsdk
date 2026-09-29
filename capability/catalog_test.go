@@ -11,7 +11,7 @@ import (
 
 func TestMCPOutputSchemaDescribesResponseEnvelope(t *testing.T) {
 	remote := json.RawMessage(`{"type":"array","items":{"type":"integer"}}`)
-	defs, err := Catalog(wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "external", Access: wire.AccessUser}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"external": {{Name: "lookup", OutputSchema: remote}}}})
+	defs, err := Catalog(wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "external", BindingMode: wire.BindingPerUser}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"external": {{Name: "lookup", OutputSchema: remote}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,9 +45,9 @@ func TestCatalog(t *testing.T) {
 	}
 	manifest := wire.AgentManifest{
 		Tools:       []wire.ToolDef{{Name: "output", Access: wire.AccessAdmin, InputSchema: []byte(`{"type":"object"}`)}},
-		Connections: []wire.ConnectionDef{{Slug: "mail", Access: wire.AccessUser}},
+		Connections: []wire.ConnectionDef{{Slug: "mail", BindingMode: wire.BindingPerUser}},
 		Topics:      []wire.TopicDef{{Slug: "alerts", Access: wire.AccessPublic}},
-		MCPServers:  []wire.MCPDef{{Slug: "github", Access: wire.AccessAdmin}},
+		MCPServers:  []wire.MCPDef{{Slug: "github", BindingMode: wire.BindingShared}},
 	}
 	discovery := Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{
 		"github":     {{Name: "search/issues"}, {Name: "search_issues"}},
@@ -82,7 +82,7 @@ func TestCatalogRejectsConflictsBeforeSelection(t *testing.T) {
 		{"duplicate tool access", wire.AgentManifest{Tools: []wire.ToolDef{{Name: "check", Access: wire.AccessPublic}, {Name: "check", Access: wire.AccessAdmin}}}, Discovery{}},
 		{"invalid access", wire.AgentManifest{Tools: []wire.ToolDef{{Name: "check", Access: "invalid"}}}, Discovery{}},
 		{"invalid topic enrollment", wire.AgentManifest{Topics: []wire.TopicDef{{Slug: "alerts", Access: wire.AccessPublic, Enrollment: "invalid"}}}, Discovery{}},
-		{"duplicate external name", wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "github", Access: wire.AccessUser}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"github": {{Name: "search"}, {Name: "search"}}}}},
+		{"duplicate external name", wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "github", BindingMode: wire.BindingPerUser}}}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"github": {{Name: "search"}, {Name: "search"}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := Catalog(tc.manifest, tc.discovery); err == nil {
@@ -115,7 +115,7 @@ func TestDefinitionCatalogPrivacy(t *testing.T) {
 		MCPs: []string{"private"}, Tools: []wire.AgentToolDefinition{{Name: "private_tool", Description: "Private", InputSchema: []byte(`{}`), OutputSchema: []byte(`{}`)}}}
 	d.ContractHash, _ = wire.AgentDefinitionHash(d)
 	m := wire.AgentManifest{AgentDefinitions: []wire.AgentDefinition{d}, ModelSlots: []wire.ModelSlotDef{{Slug: "reasoning", Capability: "text"}},
-		Tools: []wire.ToolDef{{Name: "global_tool", Access: wire.AccessUser}}, MCPServers: []wire.MCPDef{{Slug: "private"}, {Slug: "chat", Access: wire.AccessUser}}}
+		Tools: []wire.ToolDef{{Name: "global_tool", Access: wire.AccessUser}}, MCPServers: []wire.MCPDef{{Slug: "private", BindingMode: wire.BindingShared}, {Slug: "chat", BindingMode: wire.BindingPerUser}}}
 	discovery := Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"private": {{Name: "lookup"}}, "chat": {{Name: "search"}}}}
 	for _, scoped := range []bool{false, true} {
 		t.Run(map[bool]string{false: "chat", true: "task"}[scoped], func(t *testing.T) {
@@ -133,12 +133,13 @@ func TestDefinitionCatalogPrivacy(t *testing.T) {
 			for _, def := range defs {
 				found[def.Path.ID()] = true
 			}
-			if found["tool//private_tool"] != scoped || found["mcp/private/lookup"] != scoped || found["tool//global_tool"] == scoped || found["mcp/chat/search"] == scoped {
+			wantPrivateMCP := true
+			if found["tool//private_tool"] != scoped || found["mcp/private/lookup"] != wantPrivateMCP || found["tool//global_tool"] == scoped || found["mcp/chat/search"] == scoped {
 				t.Fatalf("inventory=%v", found)
 			}
 		})
 	}
-	if m.MCPServers[0].Access != "" || m.Tools[0].Name != "global_tool" {
+	if m.MCPServers[0].BindingMode != wire.BindingShared || m.Tools[0].Name != "global_tool" {
 		t.Fatal("catalog mutated manifest")
 	}
 	if _, err := DefinitionCatalog(m, wire.RuntimeAgentDefinition{Slug: d.Slug, ContractHash: "wrong"}, discovery); err == nil {

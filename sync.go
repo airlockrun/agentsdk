@@ -66,7 +66,7 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 			AuthMode: wire.ConnectionAuth(c.AuthMode), AuthURL: c.AuthURL, TokenURL: c.TokenURL,
 			Scopes: append([]string(nil), c.Scopes...), AuthParams: cloneStringMap(c.AuthParams), Headers: cloneStringMap(c.Headers),
 			AuthInjection: toWireAuthInjection(c.AuthInjection), SetupInstructions: c.SetupInstructions,
-			LLMHint: c.LLMHint, Access: toWireAccess(c.Access),
+			LLMHint: c.LLMHint, BindingMode: wire.BindingMode(c.BindingMode),
 		})
 	}
 
@@ -142,13 +142,14 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 			examples[i] = append(json.RawMessage(nil), ex.Input...)
 		}
 		tools = append(tools, wire.ToolDef{
-			Name:          t.Name,
-			Description:   t.Description,
-			LLMHint:       t.llmHint,
-			Access:        toWireAccess(t.access),
-			InputSchema:   append(json.RawMessage(nil), t.InputSchema...),
-			OutputSchema:  append(json.RawMessage(nil), t.OutputSchema...),
-			InputExamples: examples,
+			Name:               t.Name,
+			Description:        t.Description,
+			LLMHint:            t.llmHint,
+			Access:             toWireAccess(t.access),
+			InputSchema:        append(json.RawMessage(nil), t.InputSchema...),
+			OutputSchema:       append(json.RawMessage(nil), t.OutputSchema...),
+			InputExamples:      examples,
+			FileInputDirectory: fileInputDirectoryPath(t.fileInputDirectory),
 		})
 	}
 
@@ -164,7 +165,7 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 			TokenURL:      m.TokenURL,
 			Scopes:        append([]string(nil), m.Scopes...),
 			AuthInjection: toWireAuthInjection(m.AuthInjection),
-			Access:        toWireAccess(m.Access),
+			BindingMode:   wire.BindingMode(m.BindingMode),
 		})
 	}
 
@@ -245,6 +246,13 @@ func sortedKeys[V any](values map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func fileInputDirectoryPath(handle *DirectoryHandle) string {
+	if handle == nil {
+		return ""
+	}
+	return handle.path
 }
 
 func (a *Agent) buildJobManifest() wire.JobManifest {

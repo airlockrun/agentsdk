@@ -88,7 +88,7 @@ mutating the supplied context. An arbitrary context does not acquire caller
 state merely because it is passed to an SDK operation.
 
 Sync and capability invocation require `wire.AppRuntimeProtocol` equal to
-`airlock.app-runtime.v2`, independently of SDK semver. The manifest includes all
+`airlock.app-runtime.v3`, independently of SDK semver. The manifest includes all
 environment declarations. App-created code/background runs accept only trigger
 metadata, never user, conversation, or access assertions. Runtime origin is
 host-supplied, and upgrades require an existing admitted run ID. An incompatible

@@ -45,6 +45,33 @@ func TestNormalizePath(t *testing.T) {
 	}
 }
 
+func TestInternalAccessIsNotHumanRank(t *testing.T) {
+	if accessSatisfies(AccessAdmin, AccessInternal) {
+		t.Fatal("admin satisfied internal access")
+	}
+	if accessSatisfies(AccessInternal, AccessAdmin) {
+		t.Fatal("internal access satisfied admin access")
+	}
+	if !accessSatisfies(AccessInternal, AccessInternal) {
+		t.Fatal("internal access did not satisfy itself")
+	}
+}
+
+func TestResolveFilePathInternalDirectory(t *testing.T) {
+	a, _ := testAgent(t)
+	a.RegisterDirectory("private", DirectoryOpts{
+		Read: AccessInternal, Write: AccessInternal, List: AccessInternal, Description: "Private",
+	})
+	admin := withCallScope(context.Background(), callScope{Access: AccessAdmin})
+	if _, err := a.ResolveFilePath(admin, "private/file.txt", FileOperationRead); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("admin read error = %v, want ErrNotFound", err)
+	}
+	internal := withCallScope(context.Background(), callScope{Access: AccessInternal})
+	if got, err := a.ResolveFilePath(internal, "private/file.txt", FileOperationRead); err != nil || got != "private/file.txt" {
+		t.Fatalf("internal read = %q, %v", got, err)
+	}
+}
+
 func TestResolveFilePathBasicPolicy(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterDirectory("reports", DirectoryOpts{Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Reports"})

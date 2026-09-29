@@ -24,7 +24,7 @@ a.RegisterModel(&agentsdk.ModelSlot{
 source := a.RegisterMCP(&agentsdk.MCP{
     Slug: "source", Name: "Research source", URL: "https://example.com/mcp",
     AuthMode: agentsdk.MCPAuthNone,
-    // Access is omitted: no ordinary chat exposure.
+    BindingMode: agentsdk.BindingShared,
 })
 research := agentsdk.RegisterAgent(a, &agentsdk.AgentDefinition[ResearchInput, ResearchOutput]{
     Slug: "researcher",
@@ -57,7 +57,9 @@ an executor and input/output schemas. These tools are private to the definition,
 not added to `RegisterTool` or another definition. Two definitions can each have
 a tool of the same name with independent implementations. A scoped invocation
 does not fall back to global tools. Tool descriptions, schemas, and input examples
-form part of the persisted contract.
+form part of the persisted contract. The task-agent TypeScript declarations bind
+them as `tools.<name>` inside `run_js`; this private namespace is not exposed to
+web, bridge, or global MCP conversations.
 
 `MCPs []*agentsdk.MCPHandle` binds only explicitly selected servers. Empty
 `MCP.Access` means no ordinary chat exposure; it does not disable native calls

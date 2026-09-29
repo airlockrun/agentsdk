@@ -132,6 +132,8 @@ func TestMaterialize(t *testing.T) {
 		"AIRLOCK_AGENT_MODE=manifest",
 		"After the factory returns, startup validates source migrations with an up",
 		"down-to-zero, up cycle",
+		`runtime_files = ["python-app/", "templates/", "static/"]`,
+		"Go registrations remain authoritative",
 	} {
 		if !strings.Contains(string(agentsMD), want) {
 			t.Errorf("AGENTS.md missing lifecycle guidance %q", want)
@@ -285,6 +287,10 @@ func TestMaterialize(t *testing.T) {
 	}
 	if !strings.Contains(dockerfileStr, "setup.sh") {
 		t.Error("Dockerfile missing setup.sh hook")
+	}
+	if !strings.Contains(dockerfileStr, "go tool air stage-runtime-files /build /runtime-files") ||
+		!strings.Contains(dockerfileStr, "COPY --from=builder /runtime-files/ /app/") {
+		t.Error("Dockerfile missing validated runtime file staging")
 	}
 	if !strings.Contains(dockerfileStr, "type=cache,target=/var/lib/apt/lists") {
 		t.Error("Dockerfile missing apt cache mount")

@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/agentsdk/buildconfig"
 	"github.com/airlockrun/agentsdk/internal/bootstrap"
 	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -80,6 +81,8 @@ func run(args []string) error {
 		return cmdToolchain(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "stage-runtime-files":
+		return cmdStageRuntimeFiles(args[1:])
 	case "integrations":
 		return cmdIntegrations(args[1:])
 	case "env":
@@ -554,6 +557,9 @@ func runBuild(dir string) error {
 	if _, err := os.Stat(filepath.Join(dir, "go.mod")); err != nil {
 		return fmt.Errorf("build requires an agent repo with go.mod in %s: %w", dir, err)
 	}
+	if _, err := buildconfig.Load(dir); err != nil {
+		return fmt.Errorf("validate runtime files: %w", err)
+	}
 	if err := ensureToolchain(dir, filepath.Join(dir, localToolchainPrefix)); err != nil {
 		return err
 	}
@@ -600,6 +606,16 @@ func runBuild(dir string) error {
 	}
 	if err := buildConnectors(dir, outputDir); err != nil {
 		return err
+	}
+	return nil
+}
+
+func cmdStageRuntimeFiles(args []string) error {
+	if len(args) != 2 {
+		return errors.New("stage-runtime-files requires source and destination directories")
+	}
+	if err := buildconfig.Stage(args[0], args[1]); err != nil {
+		return fmt.Errorf("stage runtime files: %w", err)
 	}
 	return nil
 }

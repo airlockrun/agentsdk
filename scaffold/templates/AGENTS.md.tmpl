@@ -100,6 +100,7 @@ assumption in `NOTES.md`.
 ├── connectors/        # optional immediate connector main packages
 ├── <contract>/        # shared typed connector definitions
 ├── Dockerfile         # Generated — do not edit
+├── airlock.toml       # (optional) runtime file packaging
 ├── setup.sh           # (optional) system setup — runs as root at image build
 ├── go.mod
 ├── sqlc.yaml
@@ -124,6 +125,34 @@ process-local initialization that needs the started and synchronized runtime;
 durable work belongs in a registered job. `Agent.Manifest()` freezes and returns
 the complete canonical declaration, and `AIRLOCK_AGENT_MODE=manifest` emits it
 without runtime environment, database, migrations, or network.
+
+If the user specifically asks to import an existing non-Go app, such as a
+FastAPI service, keep the normal Go SDK shape and make `main.go` a thin wrapper:
+
+- Keep application and domain logic in its original language. Register Go HTTP
+  routes and tools that delegate to the service; route access and
+  `CallerFromContext` handling remain in the host-facing Go wrapper.
+- List service source and runtime assets in root `airlock.toml`; Airlock copies
+  exact files and recursive directories with their repository-relative layout
+  under `/app`. Use `setup.sh` for the language runtime and dependencies. It can
+  read selected dependency files such as `/app/python-app/requirements.txt`.
+  Go embedding remains suitable for tiny immutable helper files, but is not
+  required for packaging an external service.
+- Keep the SDK listener on `:8080` and bind the imported service to localhost on
+  a separate internal port. The thin Go wrapper owns all SDK registrations and
+  starts the subprocess from a named `OnStart` hook with its working directory
+  under `/app`. Supervise it, use a bounded readiness check, fail startup on
+  error, and stop the process when the hook context is canceled.
+
+Example packaging manifest:
+
+```toml
+[build]
+runtime_files = ["python-app/", "templates/", "static/"]
+```
+
+The manifest affects build packaging only. It does not declare capabilities,
+languages, ports, or entrypoints; Go registrations remain authoritative.
 
 Handlers read `agentsdk.CallerFromContext(ctx)` (routes use `r.Context()`). Its
 private snapshot exposes `Kind()`, `Access()`, `User()`, `Initiator()`, and
@@ -413,7 +442,8 @@ the compiled agent image through up, down, and up before deployment.
 **Never modify `Dockerfile`** — Airlock regenerates it. System packages,
 language runtimes, and binary tools the agent needs at runtime go in
 `setup.sh`, which runs as root at image build time and is baked into
-the runtime image. Example:
+the runtime image. Files selected by `airlock.toml` are available under `/app`
+before this script runs. Example:
 
 ```bash
 # setup.sh

@@ -938,6 +938,16 @@ func TestWriteSourceArchiveSkipsLocalState(t *testing.T) {
 	}
 }
 
+func TestRunBuildValidatesRuntimeFilesBeforeToolchain(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
+	mustWrite(t, filepath.Join(dir, "airlock.toml"), "[build]\nruntime_files = [\"missing\"]\n")
+	err := runBuild(dir)
+	if err == nil || !strings.Contains(err.Error(), "runtime files") || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("runBuild() error = %v", err)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -72,7 +72,7 @@ func TestExecutorDenoSharedChat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	def := capability.Definition{Path: capability.Local(capability.Tool, "", "double"), Target: capability.App, InputSchema: json.RawMessage(`{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"]}`)}
+	def := capability.Definition{Path: capability.Qualified(capability.AppTool, "app-id", "calculator", "double"), Target: capability.App, InputSchema: json.RawMessage(`{"type":"object","properties":{"value":{"type":"integer"}},"required":["value"]}`)}
 	var mu sync.Mutex
 	var calls []string
 	backend := platformFunc(func(ctx context.Context, in chatruntime.Invocation) (tool.Result, error) {
@@ -92,7 +92,7 @@ func TestExecutorDenoSharedChat(t *testing.T) {
 		return testutil.MockToolCallResponse(id, "run_js", map[string]any{"code": code, "description": "Calculate doubled values"}, testutil.MockUsage(10, 10))
 	}
 	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{
-		js("first", `const values = await Promise.all([tools.double({value: 10}), tools.double({value: 11})]); globalThis.total = values[0].value + values[1].value; console.log("calculated"); return globalThis.total;`),
+		js("first", `const values = await Promise.all([apps.calculator.tools.double({value: 10}), apps.calculator.tools.double({value: 11})]); globalThis.total = values[0].value + values[1].value; console.log("calculated"); return globalThis.total;`),
 		js("second", `air.log("caller", user.displayName); return {total: globalThis.total, type: typeof values, user};`),
 		testutil.MockTextResponse("42", testutil.MockUsage(10, 10)),
 	}})
