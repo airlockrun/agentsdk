@@ -31,8 +31,8 @@ paths checked through `ResolveFilePath` by run, conversation, or user. Runtime
 writes and lists receive the resolved physical path with the scope segment;
 reads, overwrites, and deletes require a matching scoped path. Trusted native
 storage calls continue to use the exact app-relative path supplied by app code.
-An unbound admin can address exact non-internal paths without scope insertion;
-runtime-bound admin calls follow the selected scope.
+An admin outside a run can address exact non-internal paths without scope
+insertion. Admin calls in real and lazy runs follow the selected scope.
 
 The framework declares `tmp` as user-readable/writable/listable scratch with a
 72-hour retention period. Calling `RegisterDirectory("tmp", ...)` returns a valid

@@ -212,7 +212,7 @@ func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperati
 	}
 	cap, _ := dirCap(d, op)
 	caller := callScopeFromContext(ctx)
-	if caller.Access == AccessAdmin && cap != AccessInternal {
+	if caller.Access == AccessAdmin && cap != AccessInternal && !runBoundFromContext(ctx) {
 		return FilePath(canon), nil
 	}
 	if !accessSatisfies(caller.Access, cap) {
@@ -247,6 +247,10 @@ func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperati
 		return FilePath(d.Path + "/" + expected + "/" + rest), nil
 	}
 	return "", ErrNotFound
+}
+
+func runBoundFromContext(ctx context.Context) bool {
+	return runFromContext(ctx) != nil || lazyRunFromContext(ctx) != nil
 }
 
 func (a *Agent) resolveFilePath(ctx context.Context, path string, op FileOperation) (string, error) {

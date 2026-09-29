@@ -166,6 +166,62 @@ func TestResolveFilePathExactScopes(t *testing.T) {
 	}
 }
 
+func TestResolveFilePathAdminScopeBinding(t *testing.T) {
+	a, mock := testAgent(t)
+	for path, scope := range map[string]DirectoryScope{
+		"users":         ScopeUser,
+		"conversations": ScopeConversation,
+		"runs":          ScopeRun,
+	} {
+		a.RegisterDirectory(path, DirectoryOpts{
+			Read: AccessAdmin, Write: AccessAdmin, List: AccessAdmin,
+			Scope: scope, Description: path,
+		})
+	}
+
+	unbound := withCallScope(context.Background(), callScope{Access: AccessAdmin})
+	if got, err := a.ResolveFilePath(unbound, "users/unscoped.txt", FileOperationRead); err != nil || got != "users/unscoped.txt" {
+		t.Fatalf("unbound admin read = %q, %v", got, err)
+	}
+
+	r := newRun(a, "run-current", "", "conv-current", context.Background())
+	r.callerAccess = AccessAdmin
+	r.userID = "user-current"
+	ctx := r.checkedCtx()
+	for _, tc := range []struct {
+		name string
+		path string
+		op   FileOperation
+		want FilePath
+		err  error
+	}{
+		{name: "user write", path: "users/file.txt", op: FileOperationWrite, want: "users/user-user-current/file.txt"},
+		{name: "conversation list", path: "conversations", op: FileOperationList, want: "conversations/conv-conv-current"},
+		{name: "run read", path: "runs/run-run-current/file.txt", op: FileOperationRead, want: "runs/run-run-current/file.txt"},
+		{name: "wrong user denied", path: "users/user-other/file.txt", op: FileOperationRead, err: ErrNotFound},
+		{name: "wrong scope denied", path: "conversations/run-run-current/file.txt", op: FileOperationWrite, err: ErrNotFound},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := a.ResolveFilePath(ctx, tc.path, tc.op)
+			if !errors.Is(err, tc.err) || got != tc.want {
+				t.Fatalf("ResolveFilePath() = %q, %v; want %q, %v", got, err, tc.want, tc.err)
+			}
+		})
+	}
+
+	lazy := &lazyRun{agent: a, callerAccess: AccessAdmin, userID: "lazy-user", conversationID: "lazy-conv"}
+	lazyCtx := contextWithLazyRun(context.Background(), lazy)
+	if got, err := a.ResolveFilePath(lazyCtx, "conversations/file.txt", FileOperationWrite); err != nil || got != "conversations/conv-lazy-conv/file.txt" {
+		t.Fatalf("lazy conversation write = %q, %v", got, err)
+	}
+	if _, err := a.ResolveFilePath(lazyCtx, "runs/file.txt", FileOperationWrite); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("lazy run write error = %v, want ErrNotFound", err)
+	}
+	if lazy.materialized() != nil || len(mock.Requests()) != 0 {
+		t.Fatal("file resolution materialized a lazy run or performed I/O")
+	}
+}
+
 func TestResolveFilePathDoesNotFallbackIdentity(t *testing.T) {
 	a, _ := testAgent(t)
 	a.RegisterDirectory("private", DirectoryOpts{
