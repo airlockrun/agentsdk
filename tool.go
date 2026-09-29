@@ -13,6 +13,8 @@ import "github.com/airlockrun/goai/tool"
 // the agent's GenerateText/StreamText sub-calls unchanged.
 type registeredTool struct {
 	tool.Tool
-	access  Access
-	llmHint string
+	access             Access
+	llmHint            string
+	fileInputDirectory *DirectoryHandle
+	fileInputsSet      bool
 }

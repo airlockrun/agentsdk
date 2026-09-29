@@ -7,7 +7,7 @@ import (
 
 // AppRuntimeProtocol identifies the app capability execution contract, independent
 // of SDK semver and the JavaScript executor's framed protocol.
-const AppRuntimeProtocol = "airlock.app-runtime.v2"
+const AppRuntimeProtocol = "airlock.app-runtime.v3"
 
 func CheckAppRuntimeProtocol(reported string) error {
 	if reported != AppRuntimeProtocol {

@@ -65,6 +65,16 @@ func TestDeployUpdateAgentBaseImage(t *testing.T) {
 	}
 }
 
+func TestDeployValidatesRuntimeFilesBeforeUpload(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
+	mustWrite(t, filepath.Join(dir, "airlock.toml"), "[build]\nruntime_files = [\"missing\"]\n")
+	err := cmdDeploy([]string{dir, "-m", "test invalid manifest"})
+	if err == nil || !strings.Contains(err.Error(), "runtime files") || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("cmdDeploy() error = %v", err)
+	}
+}
+
 func TestDeployAgentBaseImageRequiresMetadataOrDockerfileImage(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "Dockerfile"), "# no runtime stage\n")

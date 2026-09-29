@@ -23,7 +23,7 @@ type runtime struct {
 func validateCapabilities(defs []capability.Definition) error {
 	ids, direct, js := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, d := range defs {
-		if d.Path.Kind() < capability.Air || d.Path.Kind() > capability.MCP {
+		if d.Path.Kind() < capability.Air || d.Path.Kind() > capability.ResourceConnection {
 			return errors.New("chatruntime: invalid capability kind")
 		}
 		if d.Target != capability.App && d.Target != capability.Platform && d.Target != capability.Executor {
@@ -59,7 +59,7 @@ func (r *runtime) tools() tool.Set {
 		return set
 	}
 	set["run_js"] = tool.New("run_js").
-		Description("Execute an async JavaScript function body. This is the only provider tool in JavaScript mode. To use a capability, call run_js with code such as return await tools.tool_name({...});. tools.*, conn.*, mcp.*, air.*, and other declared names are bindings usable only inside this code, never provider tool names. Await capability calls; explicitly return the result. Supply a short description of the effect. Request confirmation for external side effects that need user approval.").
+		Description("Execute an async JavaScript function body. This is the only provider tool in JavaScript mode. Call capabilities by their exact fully qualified names from the generated declarations, such as platform.operation(...) or apps.<alias>.tools.<name>(...). A namespace exists only when declared; these bindings are usable only inside run_js code, never as provider tool names. Await capability calls; explicitly return the result. Supply a short description of the effect. Request confirmation for external side effects that need user approval.").
 		SchemaFromStruct(struct {
 			Code                string `json:"code"`
 			Description         string `json:"description"`
@@ -104,7 +104,7 @@ func (r *runtime) tools() tool.Set {
 				r.executor = executor
 			}
 			callback := &invoker{backend: r.input.Backend, callID: opts.ToolCallID, catalog: r.input.Capabilities}
-			result, err := r.executor.Execute(ctx, args.Code, callback)
+			result, err := r.executor.Execute(ctx, r.input.JavaScriptPrelude+args.Code, callback)
 			var output strings.Builder
 			for _, log := range result.Logs {
 				fmt.Fprintf(&output, "[%s] %s\n", log.Level, log.Message)

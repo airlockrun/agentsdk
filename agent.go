@@ -206,19 +206,6 @@ func newAgentRegistrationState(cfg Config) *Agent {
 		Description:    "Ephemeral scratch (auto-managed by the framework — truncated tool output, generated media).",
 		RetentionHours: 72, // sweeper drops files older than 3 days
 	})
-	// Inbox for files airlock places here on behalf of an external
-	// caller through inline MCP uploads.
-	// Its private provenance policy accepts exact user, conversation, or current
-	// run segments without changing the meaning of public directory scopes.
-	a.directories = append(a.directories, &directory{
-		Path:               reservedIncomingPath,
-		Read:               AccessAdmin,
-		Write:              AccessAdmin,
-		List:               AccessAdmin,
-		Description:        "Inbound file scratch (framework-managed; per-scope reads, ephemeral).",
-		RetentionHours:     24,
-		incomingProvenance: true,
-	})
 	return a
 }
 

@@ -50,3 +50,18 @@ func TestRuntimeContextRequiresInvocationProof(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDefinitionInvocationUsesInternalFileAccess(t *testing.T) {
+	a := &Agent{}
+	scope := wire.RuntimeContext{
+		RunID: "run", Caller: testWireCaller("application", wire.AccessAdmin),
+		Definition: &wire.RuntimeAgentDefinition{Slug: "worker", ContractHash: strings.Repeat("1", 64)},
+	}
+	run := a.borrowRuntimeRun(context.Background(), scope)
+	if run.callerAccess != AccessInternal || callScopeFromContext(run.checkedCtx()).Access != AccessInternal {
+		t.Fatalf("definition file access = %q, want %q", run.callerAccess, AccessInternal)
+	}
+	if run.caller.Access() != AccessAdmin {
+		t.Fatalf("definition caller access = %q, want %q", run.caller.Access(), AccessAdmin)
+	}
+}

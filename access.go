@@ -19,6 +19,9 @@ func accessRank(a Access) int {
 // something registered at level `required`. Empty `required` defaults to
 // AccessUser (matches existing implicit behavior).
 func accessSatisfies(caller, required Access) bool {
+	if caller == AccessInternal || required == AccessInternal {
+		return caller == AccessInternal && required == AccessInternal
+	}
 	if required == "" {
 		required = AccessUser
 	}

@@ -5,9 +5,8 @@ package scaffold
 // (go.mod.tmpl's templ require, Dockerfile.tmpl's tailwind/daisyui ARGs), so a
 // materialized agent can never drift from them. The airlock agent-builder
 // image bakes the same toolchain at fixed paths for its iterative codegen loop;
-// its Dockerfile ARGs are literals validated against these consts by
-// airlock/scripts/check-versions.sh (Docker can't read a Go const, so the ARG
-// stays a literal and the check enforces equality).
+// its Dockerfile ARGs are literals validated against these consts by HQ
+// automation. Docker cannot read a Go constant, so the check enforces equality.
 //
 // HTMXVersion lives in the agentsdk root package (assets.go) because htmx ships
 // as an embedded runtime asset, not a build-time fetch. The Lucide catalog's

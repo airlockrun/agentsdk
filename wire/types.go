@@ -17,9 +17,17 @@ import (
 type Access string
 
 const (
-	AccessAdmin  Access = "admin"
-	AccessUser   Access = "user"
-	AccessPublic Access = "public"
+	AccessAdmin    Access = "admin"
+	AccessUser     Access = "user"
+	AccessPublic   Access = "public"
+	AccessInternal Access = "internal"
+)
+
+type BindingMode string
+
+const (
+	BindingShared  BindingMode = "shared"
+	BindingPerUser BindingMode = "per_user"
 )
 
 type ConnectionAuth string
@@ -69,7 +77,7 @@ type ConnectionDef struct {
 	AuthInjection     AuthInjection     `json:"authInjection"`
 	SetupInstructions string            `json:"setupInstructions,omitempty"`
 	LLMHint           string            `json:"llmHint,omitempty"`
-	Access            Access            `json:"access,omitempty"`
+	BindingMode       BindingMode       `json:"bindingMode"`
 }
 
 type Action struct {
@@ -235,7 +243,7 @@ type MCPDef struct {
 	TokenURL      string        `json:"tokenUrl,omitempty"`
 	Scopes        []string      `json:"scopes,omitempty"`
 	AuthInjection AuthInjection `json:"authInjection"`
-	Access        Access        `json:"access,omitempty"`
+	BindingMode   BindingMode   `json:"bindingMode"`
 }
 
 type MCPToolSchema struct {
@@ -461,13 +469,14 @@ type Capabilities struct {
 }
 
 type ToolDef struct {
-	Name          string            `json:"name"`
-	Description   string            `json:"description"`
-	LLMHint       string            `json:"llmHint,omitempty"`
-	Access        Access            `json:"access"`
-	InputSchema   json.RawMessage   `json:"inputSchema,omitempty"`
-	OutputSchema  json.RawMessage   `json:"outputSchema,omitempty"`
-	InputExamples []json.RawMessage `json:"inputExamples,omitempty"`
+	Name               string            `json:"name"`
+	Description        string            `json:"description"`
+	LLMHint            string            `json:"llmHint,omitempty"`
+	Access             Access            `json:"access"`
+	InputSchema        json.RawMessage   `json:"inputSchema,omitempty"`
+	OutputSchema       json.RawMessage   `json:"outputSchema,omitempty"`
+	InputExamples      []json.RawMessage `json:"inputExamples,omitempty"`
+	FileInputDirectory string            `json:"fileInputDirectory,omitempty"`
 }
 
 type RouteDef struct {
@@ -649,6 +658,24 @@ type ShareFileRequest struct {
 type ShareFileResponse struct {
 	URL         string `json:"url"`
 	ExpiresAtMs int64  `json:"expiresAtMs"`
+}
+
+type StorageFileRef struct {
+	ID          string `json:"id"`
+	ContentID   string `json:"contentId"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	ContentType string `json:"contentType"`
+	Size        int64  `json:"size"`
+}
+
+type StorageFileRefRequest struct {
+	Path string `json:"path"`
+}
+
+type StorageSetIndexRequest struct {
+	File StorageFileRef `json:"file"`
+	Text string         `json:"text"`
 }
 
 type LLMProxyRequest struct {

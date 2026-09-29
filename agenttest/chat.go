@@ -68,7 +68,11 @@ func (b *chatBackend) Invoke(ctx context.Context, invocation chatruntime.Invocat
 	if selected.Target != capability.App {
 		return tool.Result{}, errors.New("executor intrinsic cannot be dispatched")
 	}
-	body, err := json.Marshal(wire.RuntimeInvokeRequest{RuntimeProtocol: wire.AppRuntimeProtocol, Context: b.scope, CapabilityID: invocation.CapabilityID, ToolCallID: invocation.ToolCallID, Input: invocation.Input})
+	capabilityID := invocation.CapabilityID
+	if selected.Path.Kind() == capability.AppTool {
+		capabilityID = capability.Local(capability.Tool, "", selected.Path.CanonicalOperation()).ID()
+	}
+	body, err := json.Marshal(wire.RuntimeInvokeRequest{RuntimeProtocol: wire.AppRuntimeProtocol, Context: b.scope, CapabilityID: capabilityID, ToolCallID: invocation.ToolCallID, Input: invocation.Input})
 	if err != nil {
 		return tool.Result{}, err
 	}

@@ -14,7 +14,7 @@ import (
 )
 
 func TestSyncRequiresRuntimeHandshake(t *testing.T) {
-	for _, protocol := range []string{"", "airlock.app-runtime.v1", "airlock.app-runtime.v3", wire.AppRuntimeProtocol} {
+	for _, protocol := range []string{"", "airlock.app-runtime.v1", "airlock.app-runtime.v2", wire.AppRuntimeProtocol} {
 		t.Run(protocol, func(t *testing.T) {
 			a, _ := testAgent(t)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +41,7 @@ func TestSyncWithAirlock(t *testing.T) {
 		AuthMode:    ConnectionAuthOAuth,
 		AuthURL:     "https://accounts.google.com/o/oauth2/auth",
 		TokenURL:    "https://oauth2.googleapis.com/token",
-		Access:      AccessUser,
+		BindingMode: BindingPerUser,
 	})
 	a.RegisterTool(addTool("lookup", "Look up a record"), AccessUser)
 	a.RegisterWebhook(&Webhook{
@@ -60,7 +60,7 @@ func TestSyncWithAirlock(t *testing.T) {
 		Read: AccessAdmin, Write: AccessAdmin, List: AccessAdmin, Description: "Local cache",
 	})
 	a.RegisterMCP(&MCP{
-		Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthNone, Access: AccessUser,
+		Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthNone, BindingMode: BindingShared,
 	})
 	a.AddInstruction(&Instruction{Text: "Prefer concise answers.", Access: []Access{AccessUser}})
 	a.RegisterModel(&ModelSlot{Slug: "writer", Capability: CapText, Description: "Writing model"})
@@ -117,7 +117,7 @@ func TestSyncWithAirlock(t *testing.T) {
 	if len(body.StartupHooks) != 1 || body.StartupHooks[0].Name != "hydrate-cache" {
 		t.Fatalf("startup hooks = %+v", body.StartupHooks)
 	}
-	if len(body.Connections) != 1 || body.Connections[0].Slug != "gmail" {
+	if len(body.Connections) != 1 || body.Connections[0].Slug != "gmail" || body.Connections[0].BindingMode != wire.BindingPerUser {
 		t.Fatalf("expected gmail connection in sync batch, got %+v", body.Connections)
 	}
 	if len(body.Tools) != 1 || body.Tools[0].Name != "lookup" {
@@ -136,7 +136,7 @@ func TestSyncWithAirlock(t *testing.T) {
 	if !foundCache {
 		t.Fatalf("directories = %+v", body.Directories)
 	}
-	if len(body.MCPServers) != 1 || body.MCPServers[0].Slug != "docs" {
+	if len(body.MCPServers) != 1 || body.MCPServers[0].Slug != "docs" || body.MCPServers[0].BindingMode != wire.BindingShared {
 		t.Fatalf("MCP servers = %+v", body.MCPServers)
 	}
 	if len(body.Instructions) != 1 || body.Instructions[0].Text != "Prefer concise answers." {

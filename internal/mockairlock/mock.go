@@ -46,8 +46,9 @@ type Mock struct {
 }
 
 type agentResponse struct {
-	status int
-	body   json.RawMessage
+	status      int
+	body        json.RawMessage
+	contentType string
 }
 
 // SetAgentResponse configures one exact task-agent method and request URI,
@@ -62,7 +63,7 @@ func (m *Mock) SetAgentResponse(method, uri string, status int, response any) er
 	if m.agentResponses == nil {
 		m.agentResponses = make(map[string]agentResponse)
 	}
-	m.agentResponses[method+" "+uri] = agentResponse{status: status, body: body}
+	m.agentResponses[method+" "+uri] = agentResponse{status: status, body: body, contentType: "application/json"}
 	return nil
 }
 
@@ -88,10 +89,10 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 			response, ok := m.agentResponses[r.Method+" "+r.URL.RequestURI()]
 			m.mu.Unlock()
 			if !ok {
-				http.Error(w, "task agent response is not configured", http.StatusInternalServerError)
+				http.Error(w, "API response is not configured", http.StatusInternalServerError)
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Content-Type", response.contentType)
 			w.WriteHeader(response.status)
 			_, _ = w.Write(response.body)
 		})

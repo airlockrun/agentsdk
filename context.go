@@ -21,6 +21,9 @@ func (a *Agent) borrowRuntimeRun(ctx context.Context, scope wire.RuntimeContext)
 	r := newRun(a, scope.RunID, scope.BridgeID, scope.ConversationID, ctx)
 	r.invocationToken = scope.InvocationToken
 	r.setCaller(callerFromWire(scope.Caller))
+	if scope.Definition != nil {
+		r.callerAccess = AccessInternal
+	}
 	r.ctx = r.checkedCtx()
 	return r
 }

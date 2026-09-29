@@ -36,7 +36,8 @@ credentials do. JavaScript receives a frozen lexical `user` object, or `null`.
 For local tests, set `agenttest.ExecutorConfig.User` to the same identity as
 `Env.Chat`'s `wire.RuntimeContext`. This display context never authorizes calls.
 
-JS executes as an async function body: `return await tools.lookup({id: "123"});`.
+JS executes as an async function body. Call only paths present in the generated
+declarations, for example `return await platform.inspectApp({app: "orders"});`.
 Model tool calls are serial. A script may await bounded concurrent callbacks.
 Explicit `globalThis` data can persist across scripts in one uninterrupted run;
 it does not survive suspension, completion, cancellation, or replica movement.

@@ -23,6 +23,12 @@ const (
 	Connection
 	Topic
 	MCP
+	Host
+	AppTool
+	AppFile
+	AppDatabase
+	ResourceTool
+	ResourceConnection
 )
 
 // Path carries canonical transport identity and presentation aliases.
@@ -45,9 +51,32 @@ func Local(kind Kind, namespace, operation string) Path {
 	}
 }
 
+// Qualified keeps a host-resolved target identity separate from its JS alias.
+// Only host-facing namespaces accept this constructor; app-local capabilities
+// retain their manifest identities when delivered to an app runtime.
+func Qualified(kind Kind, target, alias, operation string) Path {
+	if kind < Host || kind > ResourceConnection || operation == "" || (kind != Host && (target == "" || alias == "")) {
+		panic("binding: qualified capability requires a supported kind, target, alias and operation")
+	}
+	return Path{kind: kind, canonicalNamespace: target, namespaceAlias: alias, canonicalOperation: operation, operationAlias: operation}
+}
+
+// AppAlias maps valid app slugs bijectively into safe JS property names. Slugs
+// contain no underscores; an underscore prefix escapes digits and JS internals.
+func AppAlias(slug string) string {
+	alias := strings.ReplaceAll(slug, "-", "_")
+	if alias == "" {
+		panic("binding: app slug is required")
+	}
+	if alias[0] >= '0' && alias[0] <= '9' || alias == "constructor" || alias == "prototype" || alias == "__proto__" {
+		alias = "_" + alias
+	}
+	return alias
+}
+
 // External creates collision-safe paths for arbitrary external operation names.
 func External(kind Kind, canonicalNamespace, namespaceAlias string, operations []string) (map[string]Path, error) {
-	if kind != MCP {
+	if kind != MCP && kind != ResourceTool {
 		return nil, errors.New("external bindings require MCP kind")
 	}
 	bases := make(map[string][]string, len(operations))
@@ -99,6 +128,18 @@ func (p Path) JSParts() []string {
 		return []string{"topic", p.namespaceAlias, builtinJSName(p.operationAlias)}
 	case MCP:
 		return []string{"mcp", p.namespaceAlias, p.operationAlias}
+	case Host:
+		return []string{"platform", builtinJSName(p.operationAlias)}
+	case AppTool:
+		return []string{"apps", p.namespaceAlias, "tools", p.operationAlias}
+	case AppFile:
+		return []string{"apps", p.namespaceAlias, "files", builtinJSName(strings.TrimPrefix(p.operationAlias, "file_"))}
+	case AppDatabase:
+		return []string{"apps", p.namespaceAlias, "db", "query"}
+	case ResourceTool:
+		return []string{"resources", p.namespaceAlias, p.operationAlias}
+	case ResourceConnection:
+		return []string{"resources", p.namespaceAlias, builtinJSName(p.operationAlias)}
 	default:
 		panic("binding: unknown kind")
 	}
@@ -169,6 +210,9 @@ func normalize(name string) string {
 	if alias[0] >= '0' && alias[0] <= '9' {
 		alias = "tool_" + alias
 	}
+	if alias == "constructor" || alias == "prototype" || alias == "__proto__" {
+		alias = "tool_" + alias
+	}
 	return alias
 }
 
@@ -199,6 +243,18 @@ func kindName(kind Kind) string {
 		return "topic"
 	case MCP:
 		return "mcp"
+	case Host:
+		return "platform"
+	case AppTool:
+		return "app_tool"
+	case AppFile:
+		return "app_file"
+	case AppDatabase:
+		return "app_db"
+	case ResourceTool:
+		return "resource_mcp"
+	case ResourceConnection:
+		return "resource_conn"
 	default:
 		panic("binding: unknown kind")
 	}

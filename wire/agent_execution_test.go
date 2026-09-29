@@ -52,7 +52,7 @@ func TestValidateAgentDefinitions(t *testing.T) {
 		{"child limits without children", func(m *AgentManifest) { m.AgentDefinitions[0].MaxSubagentCalls = 1 }, false},
 		{"unknown MCP", func(m *AgentManifest) { m.AgentDefinitions[0].MCPs = []string{"private"} }, false},
 		{"private MCP", func(m *AgentManifest) {
-			m.MCPServers = []MCPDef{{Slug: "private"}}
+			m.MCPServers = []MCPDef{{Slug: "private", BindingMode: BindingShared}}
 			m.AgentDefinitions[0].MCPs = []string{"private"}
 		}, true},
 		{"missing schema", func(m *AgentManifest) { m.AgentDefinitions[0].OutputSchema = nil }, false},

@@ -27,12 +27,11 @@ disposable local initialization; durable work belongs in a registered job.
 header, including public routes and assets. Airlock supplies credentials and
 caller attribution; app-token possession is not proof of human identity.
 
-At runtime the LLM does **not** see your Go functions directly. It sees one
-tool, `run_js`, a JavaScript VM. Everything you register with `RegisterTool`
-becomes a typed JS global inside that VM; the LLM writes JS that calls your
-tools. Airlock renders your `In`/`Out` Go structs as TypeScript signatures in
-the system prompt and validates arguments before your `Execute` runs. You never
-touch the JS engine — you write plain typed Go.
+Web, bridge, and global MCP conversations expose registered tools in `run_js` as
+`apps.<alias>.tools.<name>(input)` after app discovery, with no bare `tools`
+global. Airlock publishes their schemas during inspection and validates inputs.
+Application-owned task agents are separate model loops with definition-private
+`tools.<name>` bindings inside synchronous `run_js` calls.
 
 Airlock is the runtime around the agent: auth, storage (S3-like), the LLM
 proxy, credential injection for outbound HTTP/MCP, conversation history,
@@ -152,7 +151,7 @@ func newAgent() *agentsdk.Agent {
         Scopes:        []string{"user-read-playback-state", "user-modify-playback-state"},
         AuthInjection: agentsdk.AuthInjection{Type: agentsdk.AuthInjectBearer},
         LLMHint:       "All paths start with /v1/.",
-        Access:        agentsdk.AccessUser,
+        BindingMode:   agentsdk.BindingPerUser,
     })
 
     spotifyService := spotify.NewService(spotifyConn)
@@ -293,7 +292,7 @@ Airlock renders them as TypeScript signatures in the system prompt and
 validates arguments before `Execute` runs.
 
 `RegisterTool(t tool.Tool, access agentsdk.Access, opts ...agentsdk.RegisterOption)`
-takes the access tier as a positional argument (empty defaults to `AccessUser`).
+takes a required access tier as a positional argument.
 The same `tool.Tool` value also works as a sub-call tool in
 `agent.GenerateText`/`agent.StreamText` — define a tool once, use it everywhere
 (but prefer computing in Go and feeding the result into the prompt over giving a
@@ -341,29 +340,18 @@ the LLM tells platform primitives from agent-declared tools.
   accepts RFC3339 for `time.Time` and that surprises the LLM.
 - No recursive types (the schema generator can't detect cycles); use
   `json:"-"` on cycle-closing fields.
-- **Path fields use `agentsdk.FilePath` (or `[]agentsdk.FilePath`), not
-  plain `string`.** FilePath carries a schema marker airlock uses to
-  resolve files across external MCP boundaries. Inputs identify checked storage
-  references; outputs let callers retrieve files without inline binary data.
-  Plain `string` paths lack this metadata and are forwarded verbatim.
-- **Directory fields use `agentsdk.DirPath`.** Auto-copy is intentionally
-  unimplemented for directories (unbounded); for cross-agent directory
-  semantics return `[]FilePath` so the caller picks exact files. Still
-  preferred over `string` for the schema marker.
-- Inside the tool body, convert when calling the trusted file API —
-  `agent.OpenFile(ctx, string(in.Image))`. `FilePath`/`DirPath` are
-  defined string types, not aliases, so the conversion is explicit.
-- Binary data: write to storage with `agent.WriteFile`, return the path
-  as `FilePath` (auto-copies). `FileInfo` is also fine when the LLM needs
-  filename/size/contentType metadata — its `Path` field is already
-  `FilePath`, so returning it (or embedding it in an output struct)
-  carries the same reference metadata. Never base64 strings.
+- **App-local path fields use `agentsdk.FilePath`; local directory fields use
+  `agentsdk.DirPath`.** Convert to string for app-local storage methods and
+  authorize user-supplied paths with `ResolveFilePath`. These are logical object
+  paths, never container paths. For externally materialized inputs, pass the
+  destination returned by `RegisterDirectory` through `WithFileInputs`.
 
 **Error handling:** return `error` from `Execute` — converted to a JS `throw`
 inside `run_js`. Don't panic.
 
-**Access:** required and explicit: `AccessUser`, `AccessAdmin`, or
-`AccessPublic`.
+**Access:** required and explicit: `AccessUser`, `AccessAdmin`, `AccessPublic`,
+or `AccessInternal`. Internal access is selected by application-owned agent
+definitions and is not satisfied by a human administrator.
 
 **Optional:** `InputExamples: []In{...}` renders `@example` JSDoc lines
 alongside the signature.
@@ -479,7 +467,7 @@ spotify := agent.RegisterConnection(&agentsdk.Connection{
     Scopes:        []string{"user-read-playback-state"},
     AuthInjection: agentsdk.AuthInjection{Type: agentsdk.AuthInjectBearer},
     LLMHint:       "All paths start with /v1/.",
-    Access:        agentsdk.AccessUser,
+    BindingMode:   agentsdk.BindingPerUser,
 })
 
 // Simple GET — Method defaults to "GET"
@@ -499,6 +487,9 @@ spotify.Request(ctx, agentsdk.RequestOpts{
 
 **`AuthMode`:** `ConnectionAuthOAuth`, `ConnectionAuthToken`,
 `ConnectionAuthNone`.
+
+**`BindingMode`:** required. `BindingPerUser` keeps an independent credential
+for each user; `BindingShared` uses one app credential.
 
 **`AuthInjection.Type`** — how the proxy injects the credential into each
 request:
@@ -532,8 +523,8 @@ github := agent.RegisterMCP(&agentsdk.MCP{
     Slug:     "github",
     Name:     "GitHub",
     URL:      "https://api.githubcopilot.com/mcp",
-    AuthMode: agentsdk.MCPAuthOAuthDiscovery, // RFC 9728/8414 discovery + RFC 7591 DCR
-    Access:   agentsdk.AccessUser,
+    AuthMode:   agentsdk.MCPAuthOAuthDiscovery, // RFC 9728/8414 discovery + RFC 7591 DCR
+    BindingMode: agentsdk.BindingPerUser,
 })
 
 resp, err := github.CallTool(ctx, "search_repos", map[string]any{"query": "test"})
@@ -549,10 +540,9 @@ if err != nil {
 same as `ConnectionHandle.Request` — detect it with the same two-value
 `agentsdk.IsAuthRequired(err)` pattern.
 
-`MCP.Access` is optional. Empty access excludes the server from ordinary chat;
-native callbacks and task definitions that explicitly bind its `MCPHandle` may
-use it. Set an explicit access level to expose it in chat. Route access remains
-required. See `/libs/agentsdk/reference/agents.md` for task-scoped MCP bindings.
+`MCP.BindingMode` is required and has the same shared/per-user semantics as a
+connection. Application-owned task definitions explicitly select their MCP
+inventory through `MCPHandle` values. See `/libs/agentsdk/reference/agents.md`.
 
 **`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 plus advertised RFC 7591
 DCR), `MCPAuthOAuth` (manual URLs/client), `MCPAuthToken`, `MCPAuthNone`. Run
@@ -571,6 +561,7 @@ agent.RegisterMCP(&agentsdk.MCP{
     Slug:          "exa",
     URL:           "https://mcp.exa.ai",
     AuthMode:      agentsdk.MCPAuthToken,
+    BindingMode:   agentsdk.BindingShared,
     AuthInjection: agentsdk.AuthInjection{Type: agentsdk.AuthInjectQueryParam, Name: "apiKey"},
 })
 ```
@@ -718,11 +709,17 @@ rejected. Register a directory to declare per-capability access (`Read` /
 model-facing `Description` are required:
 
 ```go
-agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
+uploads := agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
     Read: agentsdk.AccessUser, Write: agentsdk.AccessUser, List: agentsdk.AccessUser,
     Description: "User-uploaded source files",
 })
+
+agent.RegisterTool(importTool, agentsdk.AccessUser,
+    agentsdk.WithFileInputs(uploads))
 ```
+
+Airlock materializes all `FilePath` inputs for that tool into the declared
+directory. There is no implicit scratch destination or per-field destination.
 
 The **trusted Go file API** (`agent.ReadFile` / `WriteFile` / `OpenFile` /
 `StatFile` / `ListDir` / `DeleteFile` / `CopyFile`) bypasses access checks — it's
@@ -979,25 +976,30 @@ have to branch on `found.Synthesis` or format `found.Results` by hand.
 
 ## Capability namespaces
 
-Every capability has a permanent namespace. Registered tools can use names such
-as `output` without colliding with framework operations.
+Web, bridge, and global MCP conversations share one platform-owned JavaScript
+surface. Only names present in the generated declarations are callable:
 
 | Namespace | Source |
 |---|---|
-| `air.*` / `air__*` | framework operations |
-| `tools.*` / `tool__*` | `RegisterTool` |
-| `conn.*` / `conn__*` | `RegisterConnection` |
-| `topic.*` / `topic__*` | `RegisterTopic` |
-| `mcp.*` / `mcp__*` | `RegisterMCP` |
-| `run_js` (reserved) | the JS sandbox entry point |
+| `platform.*` | discovery and enabled platform operations |
+| `apps.<alias>.tools.*` | `RegisterTool` operations on an inspected app |
+| `apps.<alias>.files.*` / `apps.<alias>.db.query` | inspected app file and database operations |
+| `resources.<alias>.*` | independently authorized shared resources |
+| `conversation.files.*` | conversation file operations |
+| `tasks.get/wait/cancel` | durable host-owned work |
+| `run_js` | the provider-facing JavaScript entry point |
 
-JavaScript is an async function body. Await capability calls and explicitly
-return their results, for example `return await tools.lookup({id: "123"});`.
-Every capability takes one object argument matching its canonical input schema.
-Scripts are serial; bounded async callbacks may run within a script. Explicit
-`globalThis` properties can retain data only within the uninterrupted run.
-Approval gates the whole `run_js` call before executor allocation. The shared
-[`chatruntime`](chatruntime/README.md) owns prompt and TypeScript rendering.
+There is no conversational `tools.*`, `tool__*`, `conn.*`, `mcp.*`, or `air.*`
+binding. Connections and MCP servers are reached through qualified app operations
+or independently authorized `resources.<alias>.*` operations. JavaScript is an
+async function body; await capability calls and explicitly return their results,
+for example `return await apps.catalog.tools.lookup({id: "123"});`. Every
+capability takes one object argument matching its declared schema.
+
+Application-owned task agents are a separate contract. Their exact definition
+catalog exposes private Go tools as `tools.<name>` and explicitly selected MCP
+servers as `mcp.<slug>.<operation>` inside task-agent `run_js`; agent controls
+remain direct model tools. See [Task Agents](reference/agents.md).
 
 Framework primitives (the runtime prompt describes each in detail).
 **Availability**: *all* = every run; *authed* = non-public runs only; *admin* =

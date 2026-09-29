@@ -336,9 +336,9 @@ func TestDocker(t *testing.T) {
 	})
 	t.Run("todo_session_reuse", func(t *testing.T) {
 		o := Options{Limits: DefaultLimits(), Bindings: []Binding{
-			{Name: "list", Path: []string{"tools", "list"}},
-			{Name: "create", Path: []string{"tools", "create"}},
-			{Name: "toggle", Path: []string{"tools", "toggle"}},
+			{Name: "list", Path: []string{"apps", "todo", "tools", "list"}},
+			{Name: "create", Path: []string{"apps", "todo", "tools", "create"}},
+			{Name: "toggle", Path: []string{"apps", "todo", "tools", "toggle"}},
 		}}
 		s, err := NewDockerSession(ctx, image, o)
 		if err != nil {
@@ -386,12 +386,12 @@ func TestDocker(t *testing.T) {
 			idle             time.Duration
 			calls            int
 		}{
-			{"list_create_two", `const items = await tools.list({}); await tools.create({title:"one"}); const created = await tools.create({title:"two"}); globalThis.todoIDs = created.map(item => item.id); return [items.length, created.map(item => item.title)];`, `[0,["one","two"]]`, 0, 3},
-			{"list", `const items = await tools.list({}); return items.map(item => item.done);`, `[false,false]`, 0, 4},
+			{"list_create_two", `const items = await apps.todo.tools.list({}); await apps.todo.tools.create({title:"one"}); const created = await apps.todo.tools.create({title:"two"}); globalThis.todoIDs = created.map(item => item.id); return [items.length, created.map(item => item.title)];`, `[0,["one","two"]]`, 0, 3},
+			{"list", `const items = await apps.todo.tools.list({}); return items.map(item => item.done);`, `[false,false]`, 0, 4},
 			// Cross Deno's lazy signal initialization threshold between Execute calls.
-			{"toggle", `const items = await tools.toggle({ids: globalThis.todoIDs}); return items.map(item => item.done);`, `[true,true]`, time.Second, 5},
-			{"read", `const items = await tools.list({}); return [items.map(item => item.done), items.every((item, i) => item.id === globalThis.todoIDs[i])];`, `[[true,true],true]`, 0, 6},
-			{"read_again", `const items = await tools.list({}); return items.map(item => item.done);`, `[true,true]`, 0, 7},
+			{"toggle", `const items = await apps.todo.tools.toggle({ids: globalThis.todoIDs}); return items.map(item => item.done);`, `[true,true]`, time.Second, 5},
+			{"read", `const items = await apps.todo.tools.list({}); return [items.map(item => item.done), items.every((item, i) => item.id === globalThis.todoIDs[i])];`, `[[true,true],true]`, 0, 6},
+			{"read_again", `const items = await apps.todo.tools.list({}); return items.map(item => item.done);`, `[true,true]`, 0, 7},
 		} {
 			if !t.Run(tc.name, func(t *testing.T) {
 				time.Sleep(tc.idle)

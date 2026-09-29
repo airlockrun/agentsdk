@@ -31,7 +31,7 @@ func taskModel(a *Agent) {
 func TestRegisterAgentManifest(t *testing.T) {
 	a, mock := testAgent(t)
 	taskModel(a)
-	mcp := a.RegisterMCP(&MCP{Slug: "private", Name: "Private", URL: "https://example.com/mcp", AuthMode: MCPAuthNone})
+	mcp := a.RegisterMCP(&MCP{Slug: "private", Name: "Private", URL: "https://example.com/mcp", AuthMode: MCPAuthNone, BindingMode: BindingShared})
 	d := taskDefinition()
 	d.Budget = &AgentBudget{Timeout: 30 * time.Minute, Tokens: 1000}
 	d.MCPs = []*MCPHandle{mcp}

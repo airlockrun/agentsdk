@@ -28,6 +28,45 @@ type fileEntry struct {
 	size int64
 }
 
+// File describes one regular file included in the canonical source bundle.
+type File struct {
+	Path string
+	Mode fs.FileMode
+	Size int64
+}
+
+// Files returns the regular files included in the canonical source bundle.
+// The result applies the same fixed exclusions and ignore rules as Digest and
+// WriteArchive.
+func Files(root string) ([]File, error) {
+	entries, err := entries(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]File, len(entries))
+	for i, entry := range entries {
+		out[i] = File{Path: entry.path, Mode: entry.mode, Size: entry.size}
+	}
+	return out, nil
+}
+
+// Included reports whether a root-relative path participates in the canonical
+// source bundle. Callers must pass the path's directory status.
+func Included(root, rel string, isDir bool) (bool, error) {
+	rel = filepath.ToSlash(filepath.Clean(rel))
+	if rel == "." || fixedExcluded(rel) {
+		return false, nil
+	}
+	rules, err := loadIgnoreRules(root)
+	if err != nil {
+		return false, err
+	}
+	if filepath.Base(rel) == ".gitignore" {
+		return true, nil
+	}
+	return !ignored(rel, isDir, rules), nil
+}
+
 type ignoreRule struct {
 	base    string
 	negated bool

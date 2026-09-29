@@ -107,8 +107,11 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 			OutputSchema: t.OutputSchema, InputExamples: t.InputExamples})
 	}
 	for _, c := range manifest.Connections {
+		if c.BindingMode != wire.BindingShared && c.BindingMode != wire.BindingPerUser {
+			return nil, fmt.Errorf("connection %q: invalid binding mode %q", c.Slug, c.BindingMode)
+		}
 		for _, op := range []string{"request", "request_json"} {
-			defs = append(defs, Definition{Path: Local(Connection, c.Slug, op), Target: Platform, Access: c.Access, Description: c.Description, LLMHint: c.LLMHint, InputSchema: schema.MustFromType(ConnectionRequestInput{}).MustJSON()})
+			defs = append(defs, Definition{Path: Local(Connection, c.Slug, op), Target: Platform, Access: wire.AccessUser, Description: c.Description, LLMHint: c.LLMHint, InputSchema: schema.MustFromType(ConnectionRequestInput{}).MustJSON()})
 		}
 	}
 	for _, t := range manifest.Topics {
@@ -151,10 +154,10 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 		return nil
 	}
 	for _, m := range manifest.MCPServers {
-		if m.Access == "" {
-			continue
+		if m.BindingMode != wire.BindingShared && m.BindingMode != wire.BindingPerUser {
+			return nil, fmt.Errorf("MCP %q: invalid binding mode %q", m.Slug, m.BindingMode)
 		}
-		if err := addExternal(MCP, m.Slug, m.Slug, m.Access, discovery.MCPSchemas[m.Slug]); err != nil {
+		if err := addExternal(MCP, m.Slug, m.Slug, wire.AccessUser, discovery.MCPSchemas[m.Slug]); err != nil {
 			return nil, err
 		}
 	}
@@ -164,7 +167,7 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 		if d.Access == "" {
 			d.Access = wire.AccessUser
 		}
-		if d.Access != wire.AccessPublic && d.Access != wire.AccessUser && d.Access != wire.AccessAdmin {
+		if d.Access != wire.AccessPublic && d.Access != wire.AccessUser && d.Access != wire.AccessAdmin && d.Access != wire.AccessInternal {
 			return nil, fmt.Errorf("invalid access for %s", d.Path.ID())
 		}
 		if d.Path.CanonicalOperation() == "" || ids[d.Path.ID()] || direct[d.Path.Direct()] || (d.Path.JS() != "" && js[d.Path.JS()]) {
@@ -211,7 +214,6 @@ func DefinitionCatalog(manifest wire.AgentManifest, scope wire.RuntimeAgentDefin
 	manifest.MCPServers = nil
 	for _, m := range servers {
 		if bound[m.Slug] {
-			m.Access = wire.AccessAdmin
 			manifest.MCPServers = append(manifest.MCPServers, m)
 		}
 	}

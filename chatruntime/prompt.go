@@ -11,13 +11,13 @@ import (
 
 const javascriptInstructions = `JavaScript environment:
 run_js executes an async function body in an isolated runtime. Use await for every capability call and an explicit return for the result. Each capability accepts one object matching its declared input schema. Console output is bounded.
-run_js is the only provider tool you may call in this mode. To use a declared capability, call run_js with code such as return await tools.tool_name({...});. tools.*, conn.*, mcp.*, air.*, and other declared names are JavaScript bindings usable only inside run_js code, never provider tool names.
+run_js is the only provider tool you may call in this mode. To use a capability, call its exact fully qualified JavaScript binding from the host instructions and declarations, for example return await namespace.operation({...});. Those instructions and declarations are the complete JavaScript surface: a namespace exists only when described or declared, and capability bindings are usable only inside run_js code, never as provider tool names.
 Scripts execute serially. Within a script, bounded concurrent async callbacks are allowed; await all work before returning. Do not leave background work running.
 Local let/const declarations do not persist between scripts. Explicit properties on globalThis may retain data for this uninterrupted run only. Completion, cancellation, or suspension destroys that state; never depend on it across turns or approvals.
 The realm has no ambient network, filesystem, process, or platform credentials. Use only the declared capabilities.
-user is read-only caller display context (id, email, displayName), or null when the host supplies no human caller. It does not authorize capability calls. air.log is a synchronous alias of console.log with the same bounded output.
+user is read-only caller display context (id, email, displayName), or null when the host supplies no human caller. It does not authorize capability calls. Use console.log for bounded script diagnostics.
 Set request_confirmation only for external side effects the user should review (sending, deleting, spending). Explain the effect in description and comment the code for the user. The whole run_js call is approved before any JavaScript executes. Read-only lookups do not need confirmation.
-Return only the data needed for the next decision. Share files by reference with air.output; prose belongs in the normal assistant reply.`
+Return only the data needed for the next decision. Use declared file and display capabilities for file references; prose belongs in the normal assistant reply.`
 
 // RenderPrompt uses exactly the catalog passed to Run, without discovering or
 // independently filtering capabilities. Instructions are host-composed text.

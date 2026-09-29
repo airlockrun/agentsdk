@@ -59,12 +59,13 @@ func TestChatInvokesAppUnderBorrowedRun(t *testing.T) {
 	var selected []capability.Definition
 	for _, d := range defs {
 		if d.Path.ID() == "tool//lookup" {
+			d.Path = capability.Qualified(capability.AppTool, uuid.NewString(), "test_app", d.Path.CanonicalOperation())
 			selected = append(selected, d)
 		}
 	}
 	for _, direct := range []bool{true, false} {
 		t.Run(map[bool]string{true: "direct", false: "deno"}[direct], func(t *testing.T) {
-			call := testutil.MockToolCallResponse("lookup-call", "tool__lookup", map[string]any{}, testutil.MockUsage(10, 10))
+			call := testutil.MockToolCallResponse("lookup-call", "app_tool__test_app__lookup", map[string]any{}, testutil.MockUsage(10, 10))
 			var factory chatruntime.ExecutorFactory
 			if !direct {
 				image := os.Getenv("TEST_JSEXEC_IMAGE")
@@ -79,7 +80,7 @@ func TestChatInvokesAppUnderBorrowedRun(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				call = testutil.MockToolCallResponse("lookup-call", "run_js", map[string]any{"code": "return await tools.lookup({});", "description": "Read the app database"}, testutil.MockUsage(10, 10))
+				call = testutil.MockToolCallResponse("lookup-call", "run_js", map[string]any{"code": "return await apps.test_app.tools.lookup({});", "description": "Read the app database"}, testutil.MockUsage(10, 10))
 			}
 			model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{call, testutil.MockTextResponse("The answer is 42", testutil.MockUsage(10, 10))}})
 			env.Airlock.Reset()

@@ -23,16 +23,6 @@ import (
 // allows a custom Description.
 const reservedTmpPath = "tmp"
 
-// reservedIncomingPath is the framework-owned ephemeral directory where
-// Airlock writes inline uploads from external MCP clients. Tool bodies don't reference
-// it directly — args are rewritten at the boundary, so the body
-// receives a path inside this prefix and readFiles it like any other
-// path. Sub-paths carry a scope key (`run-{uuid}` or `conv-{uuid}`);
-// ResolveFilePath gates reads on that scope matching the current run's
-// caller context, so callers cannot read other callers' uploads even
-// when both are anonymous. Files are auto-cleaned by retention.
-const reservedIncomingPath = "__incoming"
-
 // ErrNotFound is returned by ResolveFilePath and the storage methods for
 // both "directory not registered" and "caller does not have access" — the
 // two cases are deliberately indistinguishable at the public surface so
@@ -220,14 +210,11 @@ func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperati
 	if d == nil {
 		return "", ErrNotFound
 	}
+	cap, _ := dirCap(d, op)
 	caller := callScopeFromContext(ctx)
-	if caller.Access == AccessAdmin {
+	if caller.Access == AccessAdmin && cap != AccessInternal {
 		return FilePath(canon), nil
 	}
-	if d.incomingProvenance {
-		return resolveIncomingPath(ctx, d, canon, op)
-	}
-	cap, _ := dirCap(d, op)
 	if !accessSatisfies(caller.Access, cap) {
 		return "", ErrNotFound
 	}
@@ -258,31 +245,6 @@ func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperati
 	}
 	if op == FileOperationWrite || op == FileOperationList {
 		return FilePath(d.Path + "/" + expected + "/" + rest), nil
-	}
-	return "", ErrNotFound
-}
-
-func resolveIncomingPath(ctx context.Context, d *directory, canon string, op FileOperation) (FilePath, error) {
-	if op != FileOperationRead || canon == d.Path {
-		return "", ErrNotFound
-	}
-	rest := canon[len(d.Path)+1:]
-	segment, _, _ := strings.Cut(rest, "/")
-	identity := fileIdentityFromContext(ctx)
-	allowed := []string{}
-	if identity.userID != "" {
-		allowed = append(allowed, "user-"+identity.userID)
-	}
-	if identity.conversationID != "" {
-		allowed = append(allowed, "conv-"+identity.conversationID)
-	}
-	if identity.runID != "" {
-		allowed = append(allowed, "run-"+identity.runID)
-	}
-	for _, expected := range allowed {
-		if segment == expected {
-			return FilePath(canon), nil
-		}
 	}
 	return "", ErrNotFound
 }
@@ -435,6 +397,38 @@ func (a *Agent) StatFile(ctx context.Context, path string) (FileInfo, error) {
 		return FileInfo{}, err
 	}
 	return a.statFileRaw(ctx, canon)
+}
+
+// FileRef identifies a stable logical file and its current immutable content.
+// ContentID is the optimistic fence used by content and index mutations.
+type FileRef = wire.StorageFileRef
+
+// StatFileRef returns the stable reference for an app-owned file.
+func (a *Agent) StatFileRef(ctx context.Context, path string) (FileRef, error) {
+	if !a.runtimeAvailable() {
+		return FileRef{}, a.runtimeUnavailable("StatFileRef")
+	}
+	canon, err := normalizePath(path)
+	if err != nil {
+		return FileRef{}, err
+	}
+	var ref FileRef
+	err = a.client.doJSON(ctx, "POST", "/api/agent/storage/ref", wire.StorageFileRefRequest{Path: canon}, &ref)
+	return ref, err
+}
+
+// SetFileIndex replaces a file's manual search index if its content still
+// matches ref.ContentID. A concurrent content change returns an error.
+func (a *Agent) SetFileIndex(ctx context.Context, ref FileRef, text string) (FileRef, error) {
+	if !a.runtimeAvailable() {
+		return FileRef{}, a.runtimeUnavailable("SetFileIndex")
+	}
+	if ref.ID == "" || ref.ContentID == "" {
+		return FileRef{}, errors.New("agentsdk: file ref id and content id are required")
+	}
+	var updated FileRef
+	err := a.client.doJSON(ctx, "POST", "/api/agent/storage/index", wire.StorageSetIndexRequest{File: ref, Text: text}, &updated)
+	return updated, err
 }
 
 // ListOpts controls ListDir.

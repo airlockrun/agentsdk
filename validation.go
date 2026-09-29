@@ -70,7 +70,7 @@ func (a *Agent) freeze() {
 
 func (a *Agent) validateRegistrations() {
 	for _, t := range a.tools {
-		validateRegisteredTool(t)
+		a.validateRegisteredTool(t)
 	}
 	for _, w := range a.webhooks {
 		validateWebhook(w)
@@ -171,7 +171,7 @@ func validateRegisteredJob(job *registeredJob) {
 	validateJSON(name+".OutputSchema", job.outputSchema)
 }
 
-func validateRegisteredTool(t *registeredTool) {
+func (a *Agent) validateRegisteredTool(t *registeredTool) {
 	if t == nil || strings.TrimSpace(t.Name) == "" {
 		panic("agentsdk: RegisterTool: tool Name is required")
 	}
@@ -182,7 +182,13 @@ func validateRegisteredTool(t *registeredTool) {
 	if t.Execute == nil && !t.IsProviderTool() {
 		panic(fmt.Sprintf("agentsdk: RegisterTool(%q): tool Execute is required", t.Name))
 	}
-	validateAccess(fmt.Sprintf("RegisterTool(%q)", t.Name), t.access)
+	validateToolAccess(fmt.Sprintf("RegisterTool(%q)", t.Name), t.access)
+	if t.fileInputsSet {
+		d := t.fileInputDirectory
+		if d == nil || d.agent != a || d.path == "" || a.registeredDirectory(d.path) == nil {
+			panic(fmt.Sprintf("agentsdk: RegisterTool(%q): file input directory must be registered on this app", t.Name))
+		}
+	}
 	validateJSON(fmt.Sprintf("RegisterTool(%q).InputSchema", t.Name), t.InputSchema)
 	validateJSON(fmt.Sprintf("RegisterTool(%q).OutputSchema", t.Name), t.OutputSchema)
 	for i, example := range t.InputExamples {
@@ -340,7 +346,7 @@ func validateConnection(c *Connection) {
 		panic(fmt.Sprintf("agentsdk: RegisterConnection(%q): invalid AuthMode %q", c.Slug, c.AuthMode))
 	}
 	validateAuthInjection(fmt.Sprintf("RegisterConnection(%q)", c.Slug), c.AuthInjection)
-	validateAccess(fmt.Sprintf("RegisterConnection(%q)", c.Slug), c.Access)
+	validateBindingMode(fmt.Sprintf("RegisterConnection(%q)", c.Slug), c.BindingMode)
 	for key := range c.Headers {
 		validateHeaderName(fmt.Sprintf("RegisterConnection(%q).Headers key", c.Slug), key, true)
 	}
@@ -384,9 +390,9 @@ func validateDirectory(d *directory) {
 	if _, err := normalizePath(d.Path); err != nil {
 		panic("agentsdk: RegisterDirectory: " + err.Error())
 	}
-	validateAccess(fmt.Sprintf("RegisterDirectory(%q).Read", d.Path), d.Read)
-	validateAccess(fmt.Sprintf("RegisterDirectory(%q).Write", d.Path), d.Write)
-	validateAccess(fmt.Sprintf("RegisterDirectory(%q).List", d.Path), d.List)
+	validateDirectoryAccess(fmt.Sprintf("RegisterDirectory(%q).Read", d.Path), d.Read)
+	validateDirectoryAccess(fmt.Sprintf("RegisterDirectory(%q).Write", d.Path), d.Write)
+	validateDirectoryAccess(fmt.Sprintf("RegisterDirectory(%q).List", d.Path), d.List)
 	if strings.TrimSpace(d.Description) == "" {
 		panic(fmt.Sprintf("agentsdk: RegisterDirectory(%q): Description is required", d.Path))
 	}
@@ -420,9 +426,7 @@ func validateMCP(m *MCP) {
 		panic(fmt.Sprintf("agentsdk: RegisterMCP(%q): invalid AuthMode %q", m.Slug, m.AuthMode))
 	}
 	validateAuthInjection(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.AuthInjection)
-	if m.Access != "" {
-		validateAccess(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.Access)
-	}
+	validateBindingMode(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.BindingMode)
 }
 
 func validateInstruction(i *Instruction) {
@@ -467,6 +471,40 @@ func validateAccess(context string, access Access) {
 		}
 		panic(fmt.Sprintf("agentsdk: %s: invalid Access %q", context, access))
 	}
+}
+
+func validateToolAccess(context string, access Access) {
+	if access == AccessInternal {
+		return
+	}
+	validateAccess(context, access)
+}
+
+func validateDirectoryAccess(context string, access Access) {
+	if access == AccessInternal {
+		return
+	}
+	validateAccess(context, access)
+}
+
+func validateBindingMode(context string, mode BindingMode) {
+	switch mode {
+	case BindingShared, BindingPerUser:
+		return
+	case "":
+		panic("agentsdk: " + context + ": BindingMode is required")
+	default:
+		panic(fmt.Sprintf("agentsdk: %s: invalid BindingMode %q", context, mode))
+	}
+}
+
+func (a *Agent) registeredDirectory(path string) *directory {
+	for _, d := range a.directories {
+		if d.Path == path {
+			return d
+		}
+	}
+	return nil
 }
 
 func validateLocalSlug(context, slug string) {

@@ -102,3 +102,49 @@ func TestRegisterTool(t *testing.T) {
 		}
 	})
 }
+
+func TestRegisterToolFileInputs(t *testing.T) {
+	a, _ := testAgent(t)
+	uploads := a.RegisterDirectory("uploads", DirectoryOpts{
+		Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads",
+	})
+	a.RegisterTool(addTool("import_file", "Import a file."), AccessUser, WithFileInputs(uploads))
+	if got := a.Manifest().Tools[0].FileInputDirectory; got != "uploads" {
+		t.Fatalf("FileInputDirectory = %q, want uploads", got)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		handle func(*Agent) *DirectoryHandle
+	}{
+		{name: "nil"},
+		{name: "foreign", handle: func(*Agent) *DirectoryHandle {
+			other, _ := testAgent(t)
+			return other.RegisterDirectory("uploads", DirectoryOpts{
+				Read: AccessUser, Write: AccessUser, List: AccessUser, Description: "Uploads",
+			})
+		}},
+		{name: "unregistered", handle: func(a *Agent) *DirectoryHandle {
+			return &DirectoryHandle{agent: a, path: "missing"}
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			a, _ := testAgent(t)
+			var handle *DirectoryHandle
+			if tt.handle != nil {
+				handle = tt.handle(a)
+			}
+			expectPanicContains(t, "file input directory must be registered on this app", func() {
+				a.RegisterTool(addTool("bad_"+tt.name, "Bad file input directory."), AccessUser, WithFileInputs(handle))
+			})
+		})
+	}
+}
+
+func TestRegisterDirectoryReservedTmpReturnsHandle(t *testing.T) {
+	a, _ := testAgent(t)
+	h := a.RegisterDirectory("tmp", DirectoryOpts{Description: "Tool scratch"})
+	if h == nil || h.agent != a || h.path != "tmp" {
+		t.Fatalf("tmp handle = %+v", h)
+	}
+}

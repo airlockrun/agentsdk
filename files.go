@@ -11,9 +11,8 @@ import (
 // writes, returns, or consumes. Inside the same process (run_js, Go code)
 // it behaves as a plain string.
 //
-// At MCP boundaries Airlock materializes inline client uploads into checked
-// paths in the app's own storage. Authors don't need to think
-// about this — declaring `FilePath` is the entire opt-in.
+// At external boundaries Airlock materializes file inputs into the directory
+// selected by WithFileInputs and passes the resulting app-owned path to the tool.
 type FilePath string
 
 // DirPath is a string-typed alias for storage directory paths. Use it

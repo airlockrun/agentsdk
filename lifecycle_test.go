@@ -160,11 +160,11 @@ func TestDefinitionOnlyAgentRejectsRuntimeOperationsBeforeWork(t *testing.T) {
 	a := New(Config{Description: "definition only"})
 	conn := a.RegisterConnection(&Connection{
 		Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com",
-		AuthMode: ConnectionAuthNone, Access: AccessAdmin,
+		AuthMode: ConnectionAuthNone, BindingMode: BindingShared,
 	})
 	mcp := a.RegisterMCP(&MCP{
 		Slug: "tools", Name: "Tools", URL: "https://example.com/mcp",
-		AuthMode: MCPAuthNone, Access: AccessAdmin,
+		AuthMode: MCPAuthNone, BindingMode: BindingShared,
 	})
 	topic := a.RegisterTopic(&Topic{Slug: "alerts", Description: "Alerts", Access: AccessUser, PerUser: true})
 	env := a.RegisterEnvVar(&EnvVar{Slug: "api_key", Description: "API key"})
