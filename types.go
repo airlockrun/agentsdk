@@ -268,15 +268,12 @@ type directory struct {
 	// the URL does.
 	RetentionHours int
 
-	// Scope opts the directory into per-context isolation: WriteFile
-	// transparently inserts a scope segment (user-<id>/conv-<id>/run-<id>)
-	// between the directory prefix and the rest of the path, and reads
-	// only succeed when the scope key in the path matches one the
-	// current run owns. Use it for directories accessible to lower-trust
-	// callers (public-MCP, anon) where you need per-caller isolation
-	// without sacrificing usability — the LLM sees the scoped path,
-	// passes it around, and access just works for the caller who wrote
-	// it. Default ScopeNone preserves today's behaviour.
+	// Scope opts paths checked by ResolveFilePath into per-context isolation.
+	// For writes and lists, resolution inserts a scope segment
+	// (user-<id>/conv-<id>/run-<id>) between the directory prefix and the
+	// rest of the path. Reads require the matching segment. Trusted native
+	// storage methods, including WriteFile, use the exact normalized path
+	// supplied by app code and do not call ResolveFilePath.
 	Scope DirectoryScope
 }
 
@@ -311,7 +308,9 @@ type DirectoryOpts struct {
 //
 // Each value selects exactly one identity: the originating user, current
 // conversation, or current run. ResolveFilePath fails when that identity is
-// absent and never falls back to another scope kind.
+// absent and never falls back to another scope kind. An unbound AccessAdmin
+// caller may address exact paths without identity scoping, except in an
+// AccessInternal directory; runtime-bound callers follow the selected scope.
 type DirectoryScope string
 
 const (
