@@ -308,9 +308,9 @@ type DirectoryOpts struct {
 //
 // Each value selects exactly one identity: the originating user, current
 // conversation, or current run. ResolveFilePath fails when that identity is
-// absent and never falls back to another scope kind. An unbound AccessAdmin
-// caller may address exact paths without identity scoping, except in an
-// AccessInternal directory; runtime-bound callers follow the selected scope.
+// absent and never falls back to another scope kind. An AccessAdmin caller
+// outside a run may address exact paths without identity scoping, except in an
+// AccessInternal directory. Real and lazy runs follow the selected scope.
 type DirectoryScope string
 
 const (

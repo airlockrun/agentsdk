@@ -325,6 +325,44 @@ func TestRuntimeInvokeFileScope(t *testing.T) {
 	}
 }
 
+func TestRuntimeInvokeAdminWritesConversationScopedPath(t *testing.T) {
+	a, mock := testAgent(t)
+	a.RegisterDirectory("state", DirectoryOpts{
+		Read: AccessAdmin, Write: AccessAdmin, List: AccessAdmin,
+		Scope: ScopeConversation, Description: "Conversation state",
+	})
+	a.RegisterTool(tool.New("store").Description("Store state").Execute(func(ctx context.Context, _ json.RawMessage, _ tool.CallOptions) (tool.Result, error) {
+		path, err := a.ResolveFilePath(ctx, "state/task-v2.json", FileOperationWrite)
+		if err != nil {
+			return tool.Result{}, err
+		}
+		if _, err := a.WriteFile(ctx, string(path), strings.NewReader(`{"state":"ready"}`), "application/json"); err != nil {
+			return tool.Result{}, err
+		}
+		return tool.Result{Output: string(path)}, nil
+	}).Build(), AccessAdmin)
+
+	req := runtimeRequest(a, "tool//store")
+	req.Context.Caller = testWireCaller("user", wire.AccessAdmin)
+	req.Context.ConversationID = uuid.NewString()
+	w := invokeRuntime(t, a.Handler(), req, a.token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	want := "state/conv-" + req.Context.ConversationID + "/task-v2.json"
+	var response wire.RuntimeInvokeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error != "" || response.Output != want {
+		t.Fatalf("response = %+v, want path %q", response, want)
+	}
+	requests := mock.Requests()
+	if len(requests) != 1 || requests[0].Method != http.MethodPut || requests[0].Path != "/api/agent/storage/"+want {
+		t.Fatalf("storage requests = %+v", requests)
+	}
+}
+
 func TestRuntimeInventory(t *testing.T) {
 	a, _ := testAgent(t)
 	r := newRun(a, uuid.NewString(), "", "", context.Background())
