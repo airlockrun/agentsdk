@@ -22,9 +22,12 @@ agentsdk.RegisterAsyncTool(agent, &agentsdk.AsyncTool[ReportInput, ReportOutput]
 })
 ```
 
-The immediate result is an `AsyncTask` with a `job:<uuid>` ID. Hosted global chat
-and global MCP expose `tasks.get({id})`, `tasks.wait({id, timeoutMs: 30000})`, and
-`tasks.cancel({id})`. Task handles identify logical work, not execution attempts.
+The immediate result is an `AsyncTask` with exact `id` and `status` fields; the ID
+has the form `job:<uuid>`. Global task controls expose `tasks.get({id})` and
+`tasks.cancel({id})`. Hosted conversations also expose
+`tasks.subscribe({id, notifyAfterMs?})`, which returns promptly and starts a fresh
+turn on terminal completion. Stateless MCP callers observe work with `tasks.get`
+or `tasks.list`. Task handles identify logical work, not execution attempts.
 Job handlers retain their typed contract, progress, cancellation and idempotency
 requirements. Registering the async tool also registers its job contract; do not
 register a second job with the same name/version.

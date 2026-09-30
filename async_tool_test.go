@@ -23,6 +23,10 @@ func TestRegisterAsyncToolEnqueuesBeforeReturningHandle(t *testing.T) {
 	if len(manifest.Tools) != 1 || len(manifest.JobHandlers) != 1 || manifest.JobHandlers[0].Name != definition.Name {
 		t.Fatalf("async declaration: %+v", manifest)
 	}
+	description := manifest.Tools[0].Description
+	if !strings.Contains(description, "exact fields {id, status}") || strings.Contains(description, "tasks.wait") {
+		t.Fatalf("async tool description = %q", description)
+	}
 	result, err := a.tools[definition.Name].Execute(t.Context(), json.RawMessage(`{"source":"uploads/movie.mp4"}`), tool.CallOptions{ToolCallID: "call-1"})
 	if err != nil {
 		t.Fatal(err)

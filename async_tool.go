@@ -18,7 +18,7 @@ type AsyncTool[In, Out any] struct {
 }
 
 // AsyncTask identifies accepted asynchronous work. The ID is an opaque handle
-// for tasks.get/wait/cancel; it is not a credential or an execution-attempt ID.
+// for host-provided task controls; it is not a credential or an execution-attempt ID.
 type AsyncTask struct {
 	ID     string    `json:"id"`
 	Status JobStatus `json:"status"`
@@ -35,7 +35,7 @@ func RegisterAsyncTool[In, Out any](a *Agent, definition *AsyncTool[In, Out]) *J
 	validateToolAccess("RegisterAsyncTool", definition.Access)
 	handle := RegisterJob(a, definition.Job)
 	registered := tool.Typed[In, AsyncTask](definition.Job.Name).
-		Description(definition.Job.Description + " Returns a durable task handle immediately. Use tasks.get, tasks.wait or tasks.cancel with its id; the task's output is available on successful completion.").
+		Description(definition.Job.Description + " Returns a durable task handle immediately with exact fields {id, status}. Host task controls accept the returned id; the task's output is available on successful completion.").
 		Execute(func(ctx context.Context, input In) (AsyncTask, error) {
 			result, err := handle.Enqueue(ctx, uuid.NewString(), input)
 			if err != nil {
