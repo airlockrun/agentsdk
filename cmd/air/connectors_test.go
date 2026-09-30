@@ -14,7 +14,7 @@ import (
 func TestConnectorInspectReportsReadinessAndManagementFailure(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer user-token" {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+testAccessToken {
 			t.Errorf("Authorization = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -33,7 +33,7 @@ func TestConnectorInspectReportsReadinessAndManagementFailure(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	if err := saveLoginCredentials(server.URL, "operator@example.com", "user-token", ""); err != nil {
+	if err := saveLoginCredentials(server.URL, "operator@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 

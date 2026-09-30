@@ -53,3 +53,43 @@ Connection response bodies are written to stdout. `mcp tools` prints Airlock's
 cached input schemas; `mcp call` invokes the live
 server. Both print JSON so their output can become sanitized test fixtures.
 Connection and MCP results are capped at 20 MiB.
+
+## Go connection errors
+
+`ConnectionHandle.Request`, `RequestStream`, and `RequestJSON` preserve non-2xx
+responses as `*agentsdk.ConnectionHTTPError`. Use `errors.As`, not error-string
+parsing:
+
+```go
+var httpErr *agentsdk.ConnectionHTTPError
+if errors.As(err, &httpErr) {
+    if httpErr.Source == agentsdk.ConnectionErrorSourceUpstream && httpErr.StatusCode == 422 {
+        // Inspect httpErr.Body for the API's domain validation response.
+    }
+    return err
+}
+```
+
+`Source` is `host`, `upstream`, or `unknown`. `unknown` means the host did not
+send the trusted response discriminator, including hosts that do not implement
+structured connection errors. `Code` is populated only for host errors such as
+`not_bound`, `forbidden`, `invalid_request`, `gateway`, and `gateway_timeout`.
+An upstream 401, 402, 403, 422, or 5xx remains an upstream
+`ConnectionHTTPError`; only an explicit host `authorization_required` response
+becomes `*agentsdk.AuthRequiredError`.
+
+`Body` preserves up to 4096 bytes for domain details, with `BodyTruncated`
+reporting overflow. `Error()` never includes `Body`, so ordinary logs do not
+expose response data. Successful responses retain their upstream status,
+headers, and body; the internal discriminator header is not exposed.
+
+Status alone does not establish retry or idempotency safety, and the SDK does
+not retry connection requests automatically. A host `gateway_timeout` supports
+`errors.Is(err, context.DeadlineExceeded)`, but does not assert whether the
+upstream observed a mutating request. Local request cancellation and deadlines
+continue to preserve their ordinary `errors.Is` behavior.
+
+JavaScript connection callbacks currently report capability failures through
+the JavaScript tool-error channel rather than this Go error type. MCP tool calls
+are also unchanged: a valid MCP `CallToolResult` retains `IsError`, `Content`,
+and `StructuredContent` as tool-result data rather than becoming an HTTP error.

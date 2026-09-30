@@ -233,12 +233,12 @@ func setupEnvCommand(t *testing.T, envHandler http.HandlerFunc) *httptest.Server
 			_, _ = w.Write([]byte(`{"agent":{"id":"` + envTestAgentID + `","slug":"test-agent"}}`))
 			return
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer user-token" {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+testAccessToken {
 			t.Errorf("Authorization = %q", got)
 		}
 		envHandler(w, r)
 	}))
-	if err := saveLoginCredentials(server.URL, "operator@example.com", "user-token", ""); err != nil {
+	if err := saveLoginCredentials(server.URL, "operator@example.com", testAccessToken, ""); err != nil {
 		server.Close()
 		t.Fatal(err)
 	}

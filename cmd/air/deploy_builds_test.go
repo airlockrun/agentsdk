@@ -93,7 +93,7 @@ func TestDeployBuildCommands(t *testing.T) {
 			prefix := "/api/v1/agents/" + testBuildAgentID
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.URL.RequestURI())
-				if r.Method != "GET" || r.Header.Get("Authorization") != "Bearer token" {
+				if r.Method != "GET" || r.Header.Get("Authorization") != "Bearer "+testAccessToken {
 					t.Errorf("request: %s %s auth=%s", r.Method, r.URL, r.Header.Get("Authorization"))
 				}
 				switch r.URL.Path {
@@ -119,7 +119,7 @@ func TestDeployBuildCommands(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			if err := saveLoginCredentials(srv.URL, "test@example.com", "token", ""); err != nil {
+			if err := saveLoginCredentials(srv.URL, "test@example.com", testAccessToken, ""); err != nil {
 				t.Fatal(err)
 			}
 			dir := t.TempDir()
@@ -203,7 +203,7 @@ func TestDeployBuildWatch(t *testing.T) {
 			defer cancel()
 			lists, details := 0, 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("Authorization") != "Bearer token" || r.Method != "GET" {
+				if r.Header.Get("Authorization") != "Bearer "+testAccessToken || r.Method != "GET" {
 					t.Errorf("bad request %s", r.URL)
 				}
 				switch r.URL.Path {
@@ -232,7 +232,7 @@ func TestDeployBuildWatch(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			if err := saveLoginCredentials(srv.URL, "test@example.com", "token", ""); err != nil {
+			if err := saveLoginCredentials(srv.URL, "test@example.com", testAccessToken, ""); err != nil {
 				t.Fatal(err)
 			}
 			output, err := captureCommandStdoutResult(t, func() error {
@@ -304,7 +304,7 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 					fmt.Fprint(w, `{"accessToken":"refreshed","refreshToken":"rotated"}`)
 					return
 				}
-				wantToken := "token"
+				wantToken := testAccessToken
 				if tt.name == "refresh" {
 					wantToken = "refreshed"
 				}
@@ -345,7 +345,11 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 				if tt.name == "refresh" {
 					refresh = "refresh-token"
 				}
-				if err := saveLoginCredentials(srv.URL, "test@example.com", "token", refresh); err != nil {
+				access := testAccessToken
+				if tt.name == "refresh" {
+					access = "expired"
+				}
+				if err := saveLoginCredentials(srv.URL, "test@example.com", access, refresh); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -442,7 +446,7 @@ func TestDeployBuildWatchCancelsPollWait(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	if err := saveLoginCredentials(srv.URL, "test@example.com", "token", ""); err != nil {
+	if err := saveLoginCredentials(srv.URL, "test@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)

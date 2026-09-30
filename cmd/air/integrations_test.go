@@ -70,14 +70,14 @@ func TestResolveIntegrationTargetSelectsNamedRemote(t *testing.T) {
 		if r.URL.Path != "/api/v1/agents/"+devID {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
-		if got := r.Header.Get("Authorization"); got != "Bearer user-token" {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+testAccessToken {
 			t.Fatalf("Authorization = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"agent":{"id":"` + devID + `","slug":"dev"}}`))
 	}))
 	defer server.Close()
-	if err := saveLoginCredentials(server.URL, "dev@example.com", "user-token", ""); err != nil {
+	if err := saveLoginCredentials(server.URL, "dev@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
@@ -93,7 +93,7 @@ func TestResolveIntegrationTargetSelectsNamedRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveIntegrationTarget: %v", err)
 	}
-	if target.baseURL != server.URL || target.agentID != devID || target.token != "user-token" || target.codegen {
+	if target.baseURL != server.URL || target.agentID != devID || target.token != testAccessToken || target.codegen {
 		t.Fatalf("target = %+v", target)
 	}
 	got, _, err := loadAgentBinding(".")

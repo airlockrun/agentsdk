@@ -301,12 +301,13 @@ func resolveSourceAirlock(dir string, f sourceFlags, requireRemoteMatch bool) (s
 }
 
 func downloadSource(ctx context.Context, baseURL, token, agentID string) (string, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", nil)
-	if err != nil {
-		return "", "", err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := apiClient.Do(req)
+	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", nil)
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		return req, err
+	})
 	if err != nil {
 		return "", "", err
 	}

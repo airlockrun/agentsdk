@@ -766,9 +766,8 @@ resolved, err := agent.ResolveFilePath(ctx, llmPath, agentsdk.FileOperationRead)
 agent.DB() // late-bound *AgentDB handle; operations require a started runtime
 ```
 
-`AuthRequiredError` from `ConnectionHandle.Request` means the user must
-authorize. `agentsdk.IsAuthRequired(err)` returns `(*AuthRequiredError, bool)`
-— call it with two-value assignment, never as a single boolean:
+Authorization returns `*AuthRequiredError`; upstream 402 does not. Check
+with two-value `agentsdk.IsAuthRequired(err)`:
 
 ```go
 resp, err := conn.Request(ctx, agentsdk.RequestOpts{Path: "/v1/me/playlists"})
@@ -779,6 +778,9 @@ if err != nil {
     return err
 }
 ```
+
+Other non-2xx responses return `*ConnectionHTTPError`; see
+`/libs/agentsdk/reference/integrations.md`.
 
 ## Calling LLMs from agent code (agentsdk wrappers)
 

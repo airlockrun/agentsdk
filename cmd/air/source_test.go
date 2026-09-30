@@ -28,7 +28,7 @@ func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 	}
 	srv := sourceServer(t, agentID, "cloned-agent", source, state)
 	defer srv.Close()
-	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "clone")
@@ -63,7 +63,7 @@ func TestCmdCloneReplacesBootstrapModule(t *testing.T) {
 	}
 	srv := sourceServer(t, agentID, "cloned-agent", source, state)
 	defer srv.Close()
-	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 	dst := t.TempDir()
@@ -92,7 +92,7 @@ func TestCmdClonePreservesBootstrapModuleOnDownloadFailure(t *testing.T) {
 	mustWrite(t, filepath.Join(source, "go.mod"), "module cloned\n")
 	srv := sourceServer(t, agentID, "cloned-agent", source, "sha256:wrong")
 	defer srv.Close()
-	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 	dst := t.TempDir()
@@ -148,7 +148,7 @@ func TestCmdCloneRemovesCreatedDestinationOnInvalidState(t *testing.T) {
 	mustWrite(t, filepath.Join(source, "go.mod"), "module cloned\n")
 	srv := sourceServer(t, agentID, "cloned-agent", source, "sha256:wrong")
 	defer srv.Close()
-	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "clone")
@@ -179,7 +179,7 @@ func TestCmdPullRefusesTwoSidedChange(t *testing.T) {
 	}
 	srv := sourceServer(t, agentID, "agent", remoteSource, remoteState)
 	defer srv.Close()
-	if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+	if err := saveLoginCredentials(srv.URL, "dev@example.com", testAccessToken, ""); err != nil {
 		t.Fatal(err)
 	}
 	binding := agentBinding{}

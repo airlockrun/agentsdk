@@ -20,6 +20,10 @@ type ConnectionHandle struct {
 // MaxBufferedResponseBytes is the cap Request enforces for buffered responses.
 const MaxBufferedResponseBytes = 20 << 20 // 20 MiB
 
+// MaxConnectionErrorBodyBytes is the most response body data retained on a
+// ConnectionHTTPError.
+const MaxConnectionErrorBodyBytes = 4096
+
 // Request sends an HTTP request through Airlock's credential-injecting
 // proxy and returns the raw response body. See RequestOpts for the call
 // shape and field semantics.
@@ -62,9 +66,9 @@ func (h *ConnectionHandle) Request(ctx context.Context, opts RequestOpts) ([]byt
 //	defer resp.Body.Close()
 //	info, _ := agent.WriteFile(ctx, "tmp/large.json", resp.Body, "application/json")
 //
-// 402 surfaces as *AuthRequiredError; any other non-2xx becomes an opaque
-// error carrying the upstream status and body preview. The returned Body
-// is the live HTTP response body — close it when done.
+// An explicit host authorization_required response surfaces as
+// *AuthRequiredError. Every other non-2xx surfaces as *ConnectionHTTPError.
+// The returned Body is the live HTTP response body — close it when done.
 func (h *ConnectionHandle) RequestStream(ctx context.Context, opts RequestOpts) (*ConnectionResponse, error) {
 	if !h.agent.runtimeAvailable() {
 		return nil, h.agent.runtimeUnavailable("ConnectionHandle.RequestStream")
@@ -91,26 +95,51 @@ func (h *ConnectionHandle) RequestStream(ctx context.Context, opts RequestOpts) 
 		return nil, err
 	}
 
-	if resp.StatusCode == 402 {
-		defer resp.Body.Close()
-		var ae AuthRequiredError
-		if err := json.NewDecoder(resp.Body).Decode(&ae); err != nil {
-			return nil, fmt.Errorf("agentsdk: 402 but failed to decode: %w", err)
-		}
-		return nil, &ae
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		// 4 KiB preview is enough to debug; we never need the full body
-		// on the error path.
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("proxy %s: status %d: %s", h.slug, resp.StatusCode, string(b))
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, MaxConnectionErrorBodyBytes+1))
+		if readErr != nil {
+			return nil, fmt.Errorf("agentsdk: read connection error response: %w", readErr)
+		}
+		truncated := len(body) > MaxConnectionErrorBodyBytes
+		if truncated {
+			body = body[:MaxConnectionErrorBodyBytes]
+		}
+		source := connectionErrorSource(resp.Header.Get(wire.ConnectionResponseSourceHeader))
+		var hostError wire.ConnectionErrorResponse
+		if source == ConnectionErrorSourceHost {
+			_ = json.Unmarshal(body, &hostError)
+			if hostError.Code == wire.ConnectionErrorCodeAuthorizationRequired {
+				return nil, &AuthRequiredError{Slug: hostError.Slug, ConnName: hostError.ConnName, AuthURL: hostError.AuthURL}
+			}
+		}
+		httpErr := &ConnectionHTTPError{
+			Slug: h.slug, StatusCode: resp.StatusCode, Body: body,
+			BodyTruncated: truncated, Source: source, Code: string(hostError.Code),
+		}
+		if hostError.Code == wire.ConnectionErrorCodeGatewayTimeout {
+			httpErr.cause = context.DeadlineExceeded
+		}
+		return nil, httpErr
 	}
+	headers := resp.Header.Clone()
+	headers.Del(wire.ConnectionResponseSourceHeader)
 	return &ConnectionResponse{
 		StatusCode: resp.StatusCode,
-		Headers:    resp.Header,
+		Headers:    headers,
 		Body:       resp.Body,
 	}, nil
+}
+
+func connectionErrorSource(value string) ConnectionErrorSource {
+	switch value {
+	case string(wire.ConnectionResponseSourceHost):
+		return ConnectionErrorSourceHost
+	case string(wire.ConnectionResponseSourceUpstream):
+		return ConnectionErrorSourceUpstream
+	default:
+		return ConnectionErrorSourceUnknown
+	}
 }
 
 // RequestJSON is the typed twin of ConnectionHandle.Request. It sends
@@ -121,8 +150,8 @@ func (h *ConnectionHandle) RequestStream(ctx context.Context, opts RequestOpts) 
 // binding, where an empty upstream body surfaces as null.
 //
 // Auth and HTTP-error semantics are inherited from Request: returns
-// *AuthRequiredError on 402 (use IsAuthRequired to test), and an opaque
-// error carrying the upstream status + body on any other non-2xx.
+// *AuthRequiredError for an explicit host authorization_required response (use
+// IsAuthRequired to test), and *ConnectionHTTPError on any other non-2xx.
 //
 // Methods can't have type parameters in Go, so this is a free function
 // over a *ConnectionHandle rather than a method on it.
