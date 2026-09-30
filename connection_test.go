@@ -1,10 +1,16 @@
 package agentsdk
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 // 204 No Content (or any zero-length 2xx body) from upstream is the
@@ -57,4 +63,178 @@ func TestRequestJSON_DecodesBody(t *testing.T) {
 	if got.Track != "hello" {
 		t.Errorf("got %+v, want Playback{Track:\"hello\"}", got)
 	}
+}
+
+func TestConnectionHTTPErrorSourceAndAuth(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     int
+		source     string
+		body       string
+		wantSource ConnectionErrorSource
+		wantCode   string
+		wantAuth   bool
+	}{
+		{name: "upstream 402", status: http.StatusPaymentRequired, source: "upstream", body: `{"error":"payment required"}`, wantSource: ConnectionErrorSourceUpstream},
+		{name: "older host 402", status: http.StatusPaymentRequired, body: `{"code":"authorization_required","slug":"test"}`, wantSource: ConnectionErrorSourceUnknown},
+		{name: "host authorization required", status: http.StatusPaymentRequired, source: "host", body: `{"error":"authorize","code":"authorization_required","slug":"test","connName":"Test API","authUrl":"https://airlock.test/auth"}`, wantAuth: true},
+		{name: "host not bound", status: http.StatusNotFound, source: "host", body: `{"error":"connection not bound","code":"not_bound","slug":"test"}`, wantSource: ConnectionErrorSourceHost, wantCode: "not_bound"},
+		{name: "host validation", status: http.StatusBadRequest, source: "host", body: `{"error":"invalid path","code":"invalid_request","slug":"test"}`, wantSource: ConnectionErrorSourceHost, wantCode: "invalid_request"},
+		{name: "host forbidden", status: http.StatusForbidden, source: "host", body: `{"error":"forbidden","code":"forbidden","slug":"test"}`, wantSource: ConnectionErrorSourceHost, wantCode: "forbidden"},
+		{name: "host gateway", status: http.StatusBadGateway, source: "host", body: `{"error":"gateway failed","code":"gateway","slug":"test"}`, wantSource: ConnectionErrorSourceHost, wantCode: "gateway"},
+		{name: "upstream 401", status: http.StatusUnauthorized, source: "upstream", body: `{"error":"upstream auth"}`, wantSource: ConnectionErrorSourceUpstream},
+		{name: "upstream 403", status: http.StatusForbidden, source: "upstream", body: `denied`, wantSource: ConnectionErrorSourceUpstream},
+		{name: "upstream 422", status: http.StatusUnprocessableEntity, source: "upstream", body: `domain policy`, wantSource: ConnectionErrorSourceUpstream},
+		{name: "upstream 500", status: http.StatusInternalServerError, source: "upstream", body: `failed`, wantSource: ConnectionErrorSourceUpstream},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tt.source != "" {
+					w.Header().Set(wire.ConnectionResponseSourceHeader, tt.source)
+				}
+				w.WriteHeader(tt.status)
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer srv.Close()
+			h := testConnectionHandle(srv.Client(), srv.URL)
+
+			_, err := h.RequestStream(context.Background(), RequestOpts{Path: "/resource"})
+			if tt.wantAuth {
+				var authErr *AuthRequiredError
+				if !errors.As(err, &authErr) || authErr.Slug != "test" {
+					t.Fatalf("error = %#v, want AuthRequiredError", err)
+				}
+				return
+			}
+			var httpErr *ConnectionHTTPError
+			if !errors.As(err, &httpErr) {
+				t.Fatalf("error = %#v, want ConnectionHTTPError", err)
+			}
+			if httpErr.StatusCode != tt.status || httpErr.Source != tt.wantSource || httpErr.Code != tt.wantCode || string(httpErr.Body) != tt.body {
+				t.Errorf("error = %#v", httpErr)
+			}
+			if strings.Contains(httpErr.Error(), tt.body) {
+				t.Errorf("Error() exposed response body %q", tt.body)
+			}
+		})
+	}
+}
+
+func TestConnectionHTTPErrorPreservedByBufferedHelpers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(wire.ConnectionResponseSourceHeader, string(wire.ConnectionResponseSourceUpstream))
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"field":"invalid"}`)
+	}))
+	defer srv.Close()
+	h := testConnectionHandle(srv.Client(), srv.URL)
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "Request", call: func() error { _, err := h.Request(context.Background(), RequestOpts{Path: "/resource"}); return err }},
+		{name: "RequestJSON", call: func() error {
+			_, err := RequestJSON[map[string]any](context.Background(), h, RequestOpts{Path: "/resource"})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var httpErr *ConnectionHTTPError
+			if err := tt.call(); !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("error = %#v, want 422 ConnectionHTTPError", err)
+			}
+		})
+	}
+}
+
+func TestConnectionHTTPErrorBodyBoundAndClosed(t *testing.T) {
+	body := &trackingReadCloser{Reader: bytes.NewReader(bytes.Repeat([]byte("s"), MaxConnectionErrorBodyBytes+1))}
+	h := testConnectionHandle(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadGateway,
+			Header:     http.Header{wire.ConnectionResponseSourceHeader: []string{string(wire.ConnectionResponseSourceUpstream)}},
+			Body:       body,
+		}, nil
+	})}, "http://airlock.test")
+
+	_, err := h.RequestStream(context.Background(), RequestOpts{Path: "/resource"})
+	var httpErr *ConnectionHTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("error = %#v, want ConnectionHTTPError", err)
+	}
+	if len(httpErr.Body) != MaxConnectionErrorBodyBytes || !httpErr.BodyTruncated {
+		t.Errorf("body length = %d, truncated = %v", len(httpErr.Body), httpErr.BodyTruncated)
+	}
+	if !body.closed {
+		t.Error("error response body was not closed")
+	}
+}
+
+func TestConnectionGatewayTimeoutSupportsErrorsIs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(wire.ConnectionResponseSourceHeader, string(wire.ConnectionResponseSourceHost))
+		w.WriteHeader(http.StatusGatewayTimeout)
+		_, _ = io.WriteString(w, `{"error":"timed out","code":"gateway_timeout"}`)
+	}))
+	defer srv.Close()
+
+	_, err := testConnectionHandle(srv.Client(), srv.URL).RequestStream(context.Background(), RequestOpts{Path: "/resource"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestConnectionLocalDeadlineSupportsErrorsIs(t *testing.T) {
+	h := testConnectionHandle(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}, "http://airlock.test")
+
+	_, err := h.RequestStream(context.Background(), RequestOpts{Path: "/resource"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestConnectionSuccessHidesProtocolHeader(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(wire.ConnectionResponseSourceHeader, string(wire.ConnectionResponseSourceUpstream))
+		w.Header().Set("X-Upstream", "kept")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	resp, err := testConnectionHandle(srv.Client(), srv.URL).RequestStream(context.Background(), RequestOpts{Path: "/resource"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || resp.Headers.Get("X-Upstream") != "kept" {
+		t.Errorf("response = %#v", resp)
+	}
+	if got := resp.Headers.Get(wire.ConnectionResponseSourceHeader); got != "" {
+		t.Errorf("protocol header exposed as %q", got)
+	}
+}
+
+func testConnectionHandle(client *http.Client, baseURL string) *ConnectionHandle {
+	a := &Agent{httpClient: client, phase: agentRunning}
+	a.client = newAirlockClient(baseURL, "tok", client)
+	return &ConnectionHandle{slug: "test", agent: a}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+type trackingReadCloser struct {
+	io.Reader
+	closed bool
+}
+
+func (r *trackingReadCloser) Close() error {
+	r.closed = true
+	return nil
 }

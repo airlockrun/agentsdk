@@ -143,7 +143,7 @@ func TestCmdDeployExplainsUnavailableBoundAgent(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			if err := saveLoginCredentials(srv.URL, "dev@example.com", "token", ""); err != nil {
+			if err := saveLoginCredentials(srv.URL, "dev@example.com", testAccessToken, ""); err != nil {
 				t.Fatal(err)
 			}
 			dir := t.TempDir()

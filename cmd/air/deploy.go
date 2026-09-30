@@ -583,24 +583,38 @@ func deploySourceStateError(stale *staleSourceError, target agentRemoteBinding, 
 }
 
 func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState, commitMessage string, force bool) (string, error) {
-	pr, pw := io.Pipe()
-	go func() {
-		pw.CloseWithError(writeSourceArchive(pw, dir))
-	}()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", pr)
+	archive, err := os.CreateTemp("", "air-source-upload-*.tar.gz")
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/gzip")
-	if sourceState != "" {
-		req.Header.Set("If-Match", quoteETag(sourceState))
+	archivePath := archive.Name()
+	defer os.Remove(archivePath)
+	defer archive.Close()
+	if err := archive.Chmod(0o600); err != nil {
+		return "", err
 	}
-	req.Header.Set("X-Airlock-Commit-Message", commitMessage)
-	if force {
-		req.Header.Set("X-Airlock-Force", "true")
+	if err := writeSourceArchive(archive, dir); err != nil {
+		return "", err
 	}
-	resp, err := apiClient.Do(req)
+	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
+		if _, err := archive.Seek(0, io.SeekStart); err != nil {
+			return nil, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", io.NopCloser(archive))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set("Content-Type", "application/gzip")
+		if sourceState != "" {
+			req.Header.Set("If-Match", quoteETag(sourceState))
+		}
+		req.Header.Set("X-Airlock-Commit-Message", commitMessage)
+		if force {
+			req.Header.Set("X-Airlock-Force", "true")
+		}
+		return req, nil
+	})
 	if err != nil {
 		return "", err
 	}

@@ -120,6 +120,38 @@ type ConnectionResponse struct {
 	Body       io.ReadCloser
 }
 
+// ConnectionErrorSource identifies who produced a non-2xx connection response.
+// Unknown means the Airlock host did not provide a trusted discriminator.
+type ConnectionErrorSource string
+
+const (
+	ConnectionErrorSourceHost     ConnectionErrorSource = "host"
+	ConnectionErrorSourceUpstream ConnectionErrorSource = "upstream"
+	ConnectionErrorSourceUnknown  ConnectionErrorSource = "unknown"
+)
+
+// ConnectionHTTPError describes a non-2xx response from a connection request.
+// Body is bounded. Error deliberately omits Body because response bodies may
+// contain sensitive data.
+type ConnectionHTTPError struct {
+	Slug          string
+	StatusCode    int
+	Body          []byte
+	BodyTruncated bool
+	Source        ConnectionErrorSource
+	Code          string
+	cause         error
+}
+
+func (e *ConnectionHTTPError) Error() string {
+	if e.Code != "" {
+		return fmt.Sprintf("connection %s: %s HTTP status %d (%s)", e.Slug, e.Source, e.StatusCode, e.Code)
+	}
+	return fmt.Sprintf("connection %s: %s HTTP status %d", e.Slug, e.Source, e.StatusCode)
+}
+
+func (e *ConnectionHTTPError) Unwrap() error { return e.cause }
+
 // RequestOpts is the call shape for ConnectionHandle.Request /
 // RequestStream / RequestJSON. Mirrors the options-dict pattern of
 // axios / fetch / python-requests so call sites read declaratively

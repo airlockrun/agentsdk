@@ -650,6 +650,42 @@ type ProxyRequest struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// ConnectionResponseSourceHeader identifies whether a proxy response was
+// produced by Airlock or received from the configured upstream. Airlock strips
+// this header from upstream responses before setting its own value.
+const ConnectionResponseSourceHeader = "X-Airlock-Connection-Response-Source"
+
+type ConnectionResponseSource string
+
+const (
+	ConnectionResponseSourceHost     ConnectionResponseSource = "host"
+	ConnectionResponseSourceUpstream ConnectionResponseSource = "upstream"
+)
+
+type ConnectionErrorCode string
+
+const (
+	ConnectionErrorCodeAuthorizationRequired ConnectionErrorCode = "authorization_required"
+	ConnectionErrorCodeInvalidRequest        ConnectionErrorCode = "invalid_request"
+	ConnectionErrorCodeUnauthorized          ConnectionErrorCode = "unauthorized"
+	ConnectionErrorCodeForbidden             ConnectionErrorCode = "forbidden"
+	ConnectionErrorCodeNotBound              ConnectionErrorCode = "not_bound"
+	ConnectionErrorCodeConflict              ConnectionErrorCode = "conflict"
+	ConnectionErrorCodeGateway               ConnectionErrorCode = "gateway"
+	ConnectionErrorCodeGatewayTimeout        ConnectionErrorCode = "gateway_timeout"
+	ConnectionErrorCodeInternal              ConnectionErrorCode = "internal"
+)
+
+// ConnectionErrorResponse is the host-produced non-2xx response body for the
+// connection proxy. Upstream response bodies retain their original format.
+type ConnectionErrorResponse struct {
+	Error    string              `json:"error"`
+	Code     ConnectionErrorCode `json:"code"`
+	Slug     string              `json:"slug,omitempty"`
+	ConnName string              `json:"connName,omitempty"`
+	AuthURL  string              `json:"authUrl,omitempty"`
+}
+
 type ShareFileRequest struct {
 	Path           string `json:"path"`
 	ExpiresSeconds int64  `json:"expiresSeconds,omitempty"`
