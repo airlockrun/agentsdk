@@ -22,6 +22,7 @@ type agentRemoteBinding struct {
 	AirlockURL  string
 	AgentID     string
 	Slug        string
+	SourceETag  string
 	SourceState string
 }
 
@@ -99,6 +100,8 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 			remote.Slug = unquoted
 		case "source_state":
 			remote.SourceState = unquoted
+		case "source_etag":
+			remote.SourceETag = unquoted
 		default:
 			return agentBinding{}, false, fmt.Errorf("%s: unknown key %q", path, key)
 		}
@@ -157,6 +160,9 @@ func writeAgentBinding(dir string, b agentBinding) error {
 		}
 		if remote.SourceState != "" {
 			fmt.Fprintf(&content, "source_state = %s\n", strconv.Quote(remote.SourceState))
+		}
+		if remote.SourceETag != "" {
+			fmt.Fprintf(&content, "source_etag = %s\n", strconv.Quote(remote.SourceETag))
 		}
 	}
 

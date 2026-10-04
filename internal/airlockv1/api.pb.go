@@ -4939,11 +4939,13 @@ func (x *UpdateAgentResponse) GetAgent() *AgentInfo {
 // the caller. Only the code + authored config is copied — no data, secrets, or
 // resource bindings. name/slug are required and must be unique.
 type CloneAgentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Slug          string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Slug  string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	// Optional exact retained source revision. Empty selects deployed source.
+	SourceRevisionId string `protobuf:"bytes,3,opt,name=source_revision_id,json=sourceRevisionId,proto3" json:"source_revision_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CloneAgentRequest) Reset() {
@@ -4986,6 +4988,13 @@ func (x *CloneAgentRequest) GetName() string {
 func (x *CloneAgentRequest) GetSlug() string {
 	if x != nil {
 		return x.Slug
+	}
+	return ""
+}
+
+func (x *CloneAgentRequest) GetSourceRevisionId() string {
+	if x != nil {
+		return x.SourceRevisionId
 	}
 	return ""
 }
@@ -14607,10 +14616,11 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x05_slugJ\x04\b\x03\x10\x04J\x04\b\x04\x10\x05R\vbuild_modelR\n" +
 	"exec_model\"B\n" +
 	"\x13UpdateAgentResponse\x12+\n" +
-	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\";\n" +
+	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"i\n" +
 	"\x11CloneAgentRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
-	"\x04slug\x18\x02 \x01(\tR\x04slug\"A\n" +
+	"\x04slug\x18\x02 \x01(\tR\x04slug\x12,\n" +
+	"\x12source_revision_id\x18\x03 \x01(\tR\x10sourceRevisionId\"A\n" +
 	"\x12CloneAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\"A\n" +
 	"\x1dTransferAgentOwnershipRequest\x12 \n" +

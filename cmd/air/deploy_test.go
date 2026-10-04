@@ -270,7 +270,7 @@ func TestUploadSourcePreservesDeployStatus(t *testing.T) {
 				_, _ = w.Write([]byte(`{"error":"deployment refused"}`))
 			}))
 			defer srv.Close()
-			_, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, "", "Deploy", false)
+			_, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, "", "Deploy")
 			if !hasHTTPStatus(err, code) {
 				t.Fatalf("uploadSource error = %v, want HTTP %d", err, code)
 			}
@@ -287,7 +287,7 @@ func TestUploadSourceDistinguishesPreconditionStatus(t *testing.T) {
 				w.WriteHeader(code)
 			}))
 			defer srv.Close()
-			_, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, "", "Deploy", false)
+			_, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, "", "Deploy")
 			stale, ok := err.(*staleSourceError)
 			if !ok {
 				t.Fatalf("uploadSource error = %T %v", err, err)

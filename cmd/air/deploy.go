@@ -16,6 +16,7 @@ import (
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/agentsdk/sourcebundle"
+	"github.com/airlockrun/agentsdk/wire"
 	"golang.org/x/mod/semver"
 )
 
@@ -139,7 +140,16 @@ func cmdDeploy(args []string) error {
 		return fmt.Errorf("hash source: %w", err)
 	}
 	previousState := target.SourceState
-	newState, err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir, previousState, f.message, f.force)
+	expectedETag := target.SourceETag
+	if f.force {
+		expectedETag, err = observeSourceETag(ctx, baseURL, token, target.AgentID)
+		if err != nil && !hasHTTPStatus(err, http.StatusNotFound) {
+			return fmt.Errorf("observe current source before force deploy: %w", err)
+		}
+	} else if previousState != "" && expectedETag == "" {
+		return errors.New("this workspace binding predates revision-aware source synchronization; run go tool air pull before deploying")
+	}
+	accepted, err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir, expectedETag, f.message)
 	if err != nil {
 		var stale *staleSourceError
 		if errors.As(err, &stale) {
@@ -160,19 +170,13 @@ func cmdDeploy(args []string) error {
 		}
 		return err
 	}
-	if newState != localState {
-		return fmt.Errorf("Airlock returned source state %s, want uploaded state %s", newState, localState)
+	if accepted.State != localState {
+		return fmt.Errorf("Airlock returned candidate source state %s, want uploaded state %s", accepted.State, localState)
 	}
-	target.SourceState = newState
-	target.AirlockURL = baseURL
-	binding.putRemote(remoteName, target)
-	if err := writeAgentBinding(f.dir, binding); err != nil {
-		return err
-	}
-	if previousState == newState && !f.force {
+	if previousState == accepted.State && !f.force {
 		fmt.Println("Source is unchanged; no build started")
 	} else {
-		fmt.Println("Source uploaded; build started")
+		fmt.Printf("Source candidate %s accepted; task %s started\n", accepted.Revision, accepted.TaskID)
 	}
 	return nil
 }
@@ -582,19 +586,26 @@ func deploySourceStateError(stale *staleSourceError, target agentRemoteBinding, 
 	return fmt.Errorf("Airlock source changed since this workspace last synced.\n\nClone the current source into another directory:\n  airlock clone %s ../%s-airlock --remote %s --url %s\n\nMerge your changes into that directory, then deploy from there:\n  cd ../%s-airlock\n  go tool air deploy -m \"Describe this deployment\"\n\nUse --force only to replace Airlock's current source", target.AgentID, target.Slug, remoteName, baseURL, target.Slug)
 }
 
-func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState, commitMessage string, force bool) (string, error) {
+type acceptedSource struct {
+	State      string
+	Revision   string
+	Generation string
+	TaskID     string
+}
+
+func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceETag, commitMessage string) (acceptedSource, error) {
 	archive, err := os.CreateTemp("", "air-source-upload-*.tar.gz")
 	if err != nil {
-		return "", err
+		return acceptedSource{}, err
 	}
 	archivePath := archive.Name()
 	defer os.Remove(archivePath)
 	defer archive.Close()
 	if err := archive.Chmod(0o600); err != nil {
-		return "", err
+		return acceptedSource{}, err
 	}
 	if err := writeSourceArchive(archive, dir); err != nil {
-		return "", err
+		return acceptedSource{}, err
 	}
 	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
 		if _, err := archive.Seek(0, io.SeekStart); err != nil {
@@ -606,22 +617,19 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		req.Header.Set("Content-Type", "application/gzip")
-		if sourceState != "" {
-			req.Header.Set("If-Match", quoteETag(sourceState))
+		if sourceETag != "" {
+			req.Header.Set("If-Match", quoteETag(sourceETag))
 		}
 		req.Header.Set("X-Airlock-Commit-Message", commitMessage)
-		if force {
-			req.Header.Set("X-Airlock-Force", "true")
-		}
 		return req, nil
 	})
 	if err != nil {
-		return "", err
+		return acceptedSource{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusPreconditionFailed || resp.StatusCode == http.StatusPreconditionRequired {
 		_, _ = io.Copy(io.Discard, resp.Body)
-		return "", &staleSourceError{
+		return acceptedSource{}, &staleSourceError{
 			statusCode: resp.StatusCode,
 			gitRemote:  strings.TrimSpace(resp.Header.Get("X-Airlock-Git-Remote")),
 			gitBranch:  strings.TrimSpace(resp.Header.Get("X-Airlock-Git-Branch")),
@@ -629,13 +637,39 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceState
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("upload source: %w", newHTTPStatusError(resp.StatusCode, resp.Status, b))
+		return acceptedSource{}, fmt.Errorf("upload source: %w", newHTTPStatusError(resp.StatusCode, resp.Status, b))
 	}
-	state := unquoteETag(resp.Header.Get("ETag"))
-	if state == "" {
-		return "", errors.New("upload source: Airlock response did not include ETag")
+	accepted := acceptedSource{
+		State: strings.TrimSpace(resp.Header.Get(wire.SourceStateHeader)), Revision: strings.TrimSpace(resp.Header.Get(wire.SourceRevisionHeader)),
+		Generation: strings.TrimSpace(resp.Header.Get(wire.SourceGenerationHeader)), TaskID: strings.TrimSpace(resp.Header.Get(wire.SourceTaskHeader)),
 	}
-	return state, nil
+	if accepted.State == "" || accepted.Revision == "" || accepted.Generation == "" || resp.StatusCode == http.StatusAccepted && accepted.TaskID == "" {
+		return acceptedSource{}, errors.New("upload source: Airlock response omitted candidate metadata")
+	}
+	return accepted, nil
+}
+
+func observeSourceETag(ctx context.Context, baseURL, token, agentID string) (string, error) {
+	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", nil)
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		return req, err
+	})
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", newHTTPStatusError(resp.StatusCode, resp.Status, body)
+	}
+	etag := unquoteETag(resp.Header.Get("ETag"))
+	if _, err := wire.ParseSourceETag(etag); err != nil {
+		return "", err
+	}
+	return etag, nil
 }
 
 func writeSourceArchive(w io.Writer, dir string) error {
