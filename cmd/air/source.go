@@ -15,7 +15,15 @@ import (
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"github.com/airlockrun/agentsdk/internal/bootstrap"
 	"github.com/airlockrun/agentsdk/sourcebundle"
+	"github.com/airlockrun/agentsdk/wire"
 )
+
+type sourceMetadata struct {
+	ETag       string
+	State      string
+	Revision   string
+	Generation string
+}
 
 type sourceFlags struct {
 	url    string
@@ -81,7 +89,7 @@ func cmdClone(args []string) (retErr error) {
 			retErr = errors.Join(retErr, fmt.Errorf("restore clone destination: %w", cleanupErr))
 		}
 	}()
-	tmp, state, err := downloadSource(ctx, baseURL, token, target.AgentID)
+	tmp, metadata, err := downloadSource(ctx, baseURL, token, target.AgentID)
 	if err != nil {
 		return err
 	}
@@ -90,7 +98,8 @@ func cmdClone(args []string) (retErr error) {
 		return fmt.Errorf("write cloned source: %w", err)
 	}
 	target.AirlockURL = baseURL
-	target.SourceState = state
+	target.SourceETag = metadata.ETag
+	target.SourceState = metadata.State
 	binding := agentBinding{}
 	binding.putRemote(remoteName, target)
 	if err := writeAgentBinding(dst, binding); err != nil {
@@ -164,17 +173,19 @@ func cmdPull(args []string) error {
 	if err != nil {
 		return err
 	}
-	tmp, remoteState, err := downloadSource(ctx, baseURL, token, target.AgentID)
+	tmp, metadata, err := downloadSource(ctx, baseURL, token, target.AgentID)
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmp)
+	remoteState := metadata.State
 	localState, err := sourcebundle.Digest(dir)
 	if err != nil {
 		return fmt.Errorf("hash local source: %w", err)
 	}
 	if localState == remoteState {
 		target.SourceState = remoteState
+		target.SourceETag = metadata.ETag
 		target.AirlockURL = baseURL
 		binding.putRemote(remoteName, target)
 		if err := writeAgentBinding(dir, binding); err != nil {
@@ -202,6 +213,7 @@ func cmdPull(args []string) error {
 		return fmt.Errorf("pulled source state %s, want %s", state, remoteState)
 	}
 	target.SourceState = remoteState
+	target.SourceETag = metadata.ETag
 	target.AirlockURL = baseURL
 	binding.putRemote(remoteName, target)
 	if err := writeAgentBinding(dir, binding); err != nil {
@@ -300,7 +312,7 @@ func resolveSourceAirlock(dir string, f sourceFlags, requireRemoteMatch bool) (s
 	return baseURL, remoteName, nil
 }
 
-func downloadSource(ctx context.Context, baseURL, token, agentID string) (string, string, error) {
+func downloadSource(ctx context.Context, baseURL, token, agentID string) (string, sourceMetadata, error) {
 	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", nil)
 		if err == nil {
@@ -309,35 +321,47 @@ func downloadSource(ctx context.Context, baseURL, token, agentID string) (string
 		return req, err
 	})
 	if err != nil {
-		return "", "", err
+		return "", sourceMetadata{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		var er airlockv1.ErrorResponse
 		if err := protoUnmarshal.Unmarshal(body, &er); err == nil && er.Error != "" {
-			return "", "", fmt.Errorf("download source: %s: %s", resp.Status, er.Error)
+			return "", sourceMetadata{}, fmt.Errorf("download source: %s: %s", resp.Status, er.Error)
 		}
-		return "", "", fmt.Errorf("download source: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return "", sourceMetadata{}, fmt.Errorf("download source: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	state := unquoteETag(resp.Header.Get("ETag"))
-	if state == "" {
-		return "", "", errors.New("download source: Airlock response did not include ETag")
+	metadata := sourceMetadata{
+		ETag:       unquoteETag(resp.Header.Get("ETag")),
+		State:      strings.TrimSpace(resp.Header.Get(wire.SourceStateHeader)),
+		Revision:   strings.TrimSpace(resp.Header.Get(wire.SourceRevisionHeader)),
+		Generation: strings.TrimSpace(resp.Header.Get(wire.SourceGenerationHeader)),
+	}
+	version, err := wire.ParseSourceETag(metadata.ETag)
+	if err != nil {
+		return "", sourceMetadata{}, fmt.Errorf("download source: %w", err)
+	}
+	if metadata.State == "" || metadata.Revision == "" || metadata.Generation == "" {
+		return "", sourceMetadata{}, errors.New("download source: Airlock response omitted source revision metadata")
+	}
+	if metadata.Revision != version.Revision || metadata.Generation != strconv.FormatInt(version.Generation, 10) {
+		return "", sourceMetadata{}, errors.New("download source: Airlock response contained inconsistent source revision metadata")
 	}
 	tmp, err := os.MkdirTemp("", "air-source-*")
 	if err != nil {
-		return "", "", err
+		return "", sourceMetadata{}, err
 	}
 	got, err := sourcebundle.ExtractArchiveState(resp.Body, tmp)
 	if err != nil {
 		os.RemoveAll(tmp)
-		return "", "", err
+		return "", sourceMetadata{}, err
 	}
-	if got != state {
+	if got != metadata.State {
 		os.RemoveAll(tmp)
-		return "", "", fmt.Errorf("downloaded source state %s, response declared %s", got, state)
+		return "", sourceMetadata{}, fmt.Errorf("downloaded source state %s, response declared %s", got, metadata.State)
 	}
-	return tmp, state, nil
+	return tmp, metadata, nil
 }
 
 func sourceConflictError(target agentRemoteBinding, baseURL, remoteName string) error {

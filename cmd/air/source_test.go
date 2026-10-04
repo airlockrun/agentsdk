@@ -10,7 +10,10 @@ import (
 	"testing"
 
 	"github.com/airlockrun/agentsdk/sourcebundle"
+	"github.com/airlockrun/agentsdk/wire"
 )
+
+const testSourceRevision = "33333333-3333-3333-3333-333333333333"
 
 func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -43,7 +46,7 @@ func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 		t.Fatalf("binding = %#v, ok=%v, err=%v", binding, ok, err)
 	}
 	remote, ok := binding.remote(defaultRemoteName)
-	if !ok || remote.AgentID != agentID || remote.SourceState != state || remote.AirlockURL != srv.URL {
+	if !ok || remote.AgentID != agentID || remote.SourceState != state || remote.SourceETag == "" || remote.AirlockURL != srv.URL {
 		t.Fatalf("remote = %#v, ok=%v", remote, ok)
 	}
 	if _, err := os.Stat(filepath.Join(dst, ".airlock", "local", "agent.toml")); err != nil {
@@ -222,21 +225,24 @@ func TestUploadSourceSendsPrecondition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var gotMatch, gotForce, gotMessage string
+	version := wire.SourceVersion{Revision: testSourceRevision, Generation: 4}
+	var gotMatch, gotMessage string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMatch = r.Header.Get("If-Match")
-		gotForce = r.Header.Get("X-Airlock-Force")
 		gotMessage = r.Header.Get("X-Airlock-Commit-Message")
-		w.Header().Set("ETag", quoteETag(state))
+		w.Header().Set(wire.SourceStateHeader, state)
+		w.Header().Set(wire.SourceRevisionHeader, testSourceRevision)
+		w.Header().Set(wire.SourceGenerationHeader, "4")
+		w.Header().Set(wire.SourceTaskHeader, "44444444-4444-4444-4444-444444444444")
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
-	got, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, state, "Add reminders", true)
+	got, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, version.ETag(), "Add reminders")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != state || unquoteETag(gotMatch) != state || gotForce != "true" || gotMessage != "Add reminders" {
-		t.Fatalf("state=%q If-Match=%q force=%q message=%q", got, gotMatch, gotForce, gotMessage)
+	if got.State != state || unquoteETag(gotMatch) != version.ETag() || gotMessage != "Add reminders" {
+		t.Fatalf("accepted=%#v If-Match=%q message=%q", got, gotMatch, gotMessage)
 	}
 }
 
@@ -249,7 +255,10 @@ func sourceServer(t *testing.T, agentID, slug, source, state string) *httptest.S
 			_, _ = w.Write([]byte(`{"agent":{"id":"` + agentID + `","slug":"` + slug + `"}}`))
 		case "/api/v1/agents/" + agentID + "/source":
 			w.Header().Set("Content-Type", "application/gzip")
-			w.Header().Set("ETag", quoteETag(state))
+			w.Header().Set("ETag", quoteETag((wire.SourceVersion{Revision: testSourceRevision, Generation: 1}).ETag()))
+			w.Header().Set(wire.SourceStateHeader, state)
+			w.Header().Set(wire.SourceRevisionHeader, testSourceRevision)
+			w.Header().Set(wire.SourceGenerationHeader, "1")
 			if _, err := sourcebundle.WriteArchive(w, source); err != nil {
 				t.Errorf("WriteArchive: %v", err)
 			}

@@ -234,7 +234,7 @@ func TestCmdInitReplacesBootstrapModule(t *testing.T) {
 func TestAgentBindingRemoteSections(t *testing.T) {
 	dir := t.TempDir()
 	b := agentBinding{}
-	b.putRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com/", AgentID: "agent-1", Slug: "todo", SourceState: "sha256:prod"})
+	b.putRemote("prod", agentRemoteBinding{AirlockURL: "https://airlock.example.com/", AgentID: "agent-1", Slug: "todo", SourceETag: "airlock-source-v1:revision:4", SourceState: "sha256:prod"})
 	b.putRemote("staging", agentRemoteBinding{AirlockURL: "https://staging.example.com", AgentID: "agent-2", Slug: "todo-staging"})
 	if err := writeAgentBinding(dir, b); err != nil {
 		t.Fatalf("writeAgentBinding: %v", err)
@@ -247,7 +247,7 @@ func TestAgentBindingRemoteSections(t *testing.T) {
 		t.Fatalf("binding = %#v, ok=%v", got, ok)
 	}
 	prod, ok := got.remote("prod")
-	if !ok || prod.AirlockURL != "https://airlock.example.com" || prod.AgentID != "agent-1" || prod.Slug != "todo" || prod.SourceState != "sha256:prod" {
+	if !ok || prod.AirlockURL != "https://airlock.example.com" || prod.AgentID != "agent-1" || prod.Slug != "todo" || prod.SourceETag != "airlock-source-v1:revision:4" || prod.SourceState != "sha256:prod" {
 		t.Fatalf("prod remote = %#v, ok=%v", prod, ok)
 	}
 	defaultRemote, ok := got.remote("")
