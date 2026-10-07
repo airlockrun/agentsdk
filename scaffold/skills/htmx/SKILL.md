@@ -2,8 +2,8 @@
 name: htmx
 description: htmx — HTML-over-the-wire interactivity via hx-* attributes, the interactivity layer for this agent's templ web UI. TRIGGER when adding or debugging any hx-* attribute (hx-get/post/swap/target/trigger), polling, partial page updates, or when a swap duplicates, nests, or fails to update the DOM.
 metadata:
-  version: v2.0.10
-  source: https://htmx.org/docs/
+  version: v4.0.0
+  source: https://github.com/bigskysoftware/htmx/tree/4195bc0dc26b612ea5bea46f5914c6386eadeba3/dist/skills
 ---
 
 # htmx
@@ -24,12 +24,21 @@ same-origin by the framework (`agentsdk.Assets.HTMX`) — no CDN, no npm.
   own contents (`hx-target="this" hx-swap="innerHTML"`) **or** the response
   fragment is the new element — never both. Double-wrapping (a fragment that
   re-emits its own container into a container) is the usual cause of duplicated or
-  nested cards. See [./reference/docs.md](./reference/docs.md) (swapping & targets).
+  nested cards. See [the upstream guidance](./reference/htmx-guidance.md)
+  (swapping and targets).
 - **For polling, return `204 No Content` when nothing changed.** htmx treats 204 as
   "do nothing", so an idle page stays put. Make each poll carry what it last saw
-  (a query param/header) and return `200` + fresh HTML only on a real change. Use
-  **204, not 304** — htmx swaps 3xx/2xx bodies, and a 304 with a stale body can
-  blank or reset the view.
+  (a query param/header) and return `200` + fresh HTML only on a real change.
+  Both 204 and 304 skip swaps; use 204 for application-level no-change responses
+  and reserve 304 for standard HTTP conditional-request semantics.
+- **Inheritance is explicit.** Put `:inherited` on an attribute only when
+  descendant request elements rely on the parent value, such as
+  `hx-target:inherited="#results"`.
+- **HTTP errors swap by default.** Use `hx-status`, `hx-swap="none"`, or
+  `htmx.config.noSwap` when an error body must not replace the target. Events
+  use colon-separated names and request state lives under `event.detail.ctx`.
+- **`hx-disable` disables controls during requests.** `hx-ignore` prevents htmx
+  processing for a subtree.
 - **`hx-swap` controls placement** (`innerHTML` default, `outerHTML`, `beforeend`,
   …) and out-of-band updates use `hx-swap-oob`. Pick the mode deliberately; the
   default `innerHTML` replaces children, `outerHTML` replaces the element itself.
@@ -41,10 +50,12 @@ same-origin by the framework (`agentsdk.Assets.HTMX`) — no CDN, no npm.
 
 | Task | Guide |
 |------|-------|
-| Core concepts, requests, swapping, targets, polling, OOB | [./reference/docs.md](./reference/docs.md) |
-| Every attribute / header / event (lookup table) | [./reference/reference.md](./reference/reference.md) |
+| Core attributes, events, swaps, inheritance, and patterns | [./reference/htmx-guidance.md](./reference/htmx-guidance.md) |
+| Migrating htmx 2 source to htmx 4 | [./reference/htmx-upgrade-from-htmx2.md](./reference/htmx-upgrade-from-htmx2.md) |
+| Diagnosing requests and swaps | [./reference/htmx-debugging.md](./reference/htmx-debugging.md) |
+| Authoring htmx 4 extensions | [./reference/htmx-extension-authoring.md](./reference/htmx-extension-authoring.md) |
 
-`docs.md` is the full narrative guide; `reference.md` is the exhaustive
-attribute/header/event index. Read the relevant section before wiring an
-interaction, and pair this with the `templ` skill (htmx attributes live in
-`.templ` markup, and partial responses are templ fragments).
+These are the upstream htmx 4 skill documents pinned to the immutable revision
+recorded in the bundle manifest. Read the relevant guide before wiring an
+interaction, and pair it with the `templ` skill (htmx attributes live in `.templ`
+markup, and partial responses are templ fragments).

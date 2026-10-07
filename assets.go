@@ -32,11 +32,11 @@ const htmxAssetName = "htmx-" + HTMXVersion + ".min.js"
 var bundledAssets embed.FS
 
 // HTMXVersion is the version of htmx the asset route serves.
-const HTMXVersion = "2.0.10"
+const HTMXVersion = "4.0.0"
 
 // Assets is the catalog of framework JS bundled with agentsdk and
 // served same-origin under /__air/assets/. The path carries the
-// embedded version segment ("htmx-2.0.10.min.js"), so bumping agentsdk
+// embedded version segment ("htmx-4.0.0.min.js"), so bumping agentsdk
 // yields a fresh URL that's never been browser-cached — the immutable
 // Cache-Control on prior versions can stay in place. Use it in templ
 // layouts:
@@ -47,7 +47,7 @@ const HTMXVersion = "2.0.10"
 // bundled icon catalog. Register other embedded images, page-specific CSS, and
 // fonts with RegisterStaticAsset.
 var Assets = struct {
-	HTMX string // versioned path to the bundled htmx (e.g. /__air/assets/htmx-2.0.10.min.js)
+	HTMX string // versioned path to the bundled htmx (e.g. /__air/assets/htmx-4.0.0.min.js)
 }{
 	HTMX: assetsPathPrefix + htmxAssetName,
 }

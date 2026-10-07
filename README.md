@@ -76,6 +76,9 @@ For package-level SDK details and runtime contracts, read the
 [object storage](reference/files.md), [interactive authentication](reference/auth-web.md), and
 [Postgres-backed agents](reference/database.md). The [connector reference](reference/connectors.md)
 covers hosted pure-Go connectors, typed contracts, local settings, and child transport.
+Source migrations required by SDK releases are recorded in [UPGRADING.md](UPGRADING.md).
+`agentsdk.UpgradeInstructions(fromVersion, toVersion)` returns the applicable
+entries as Markdown in ascending version order.
 
 ## Hello-world agent
 

@@ -44,7 +44,7 @@ occupy one fixed-size grid cell:
 	class="btn btn-primary"
 	hx-post="/publish"
 	hx-target="#publish-result"
-	hx-disabled-elt="this"
+	hx-disable="this"
 >
 	@ActionIcon("send")
 	<span>Publish</span>

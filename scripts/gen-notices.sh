@@ -86,12 +86,18 @@ done <"$modules"
 TAILWIND_VERSION=$(grep -oE 'TailwindVersion = "[^"]+"' "$ROOT/scaffold/versions.go" | grep -oE '"[^"]+"' | tr -d '"')
 DAISYUI_VERSION=$(grep -oE 'DaisyUIVersion = "[^"]+"' "$ROOT/scaffold/versions.go" | grep -oE '"[^"]+"' | tr -d '"')
 LUCIDE_VERSION=$(grep -m1 -oE 'Version = "[^"]+"' "$ROOT/lucide/lucide.go" | grep -oE '"[^"]+"' | tr -d '"')
+HTMX_VERSION=$(grep -m1 -oE 'HTMXVersion = "[^"]+"' "$ROOT/assets.go" | grep -oE '"[^"]+"' | tr -d '"')
 {
 	echo "The agent's stylesheet is compiled with the following tools; their"
 	echo "authored CSS is embedded in the compiled output the agent serves."
 	echo
 	mit_block "Tailwind CSS" "$TAILWIND_VERSION" "Tailwind Labs, Inc."
 	mit_block "DaisyUI" "$DAISYUI_VERSION" "Pouya Saadeghi"
+	echo "================================================================================"
+	echo "htmx $HTMX_VERSION"
+	echo "================================================================================"
+	cat "$ROOT/scaffold/skills/htmx/UPSTREAM_LICENSE"
+	echo
 	echo "================================================================================"
 	echo "Lucide Icons $LUCIDE_VERSION"
 	echo "================================================================================"

@@ -10,11 +10,12 @@ templ Layout(title string) {
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 			<title>{ title }</title>
 			<link rel="stylesheet" href={ AppCSSPath }/>
+			<meta name="htmx-config" content='{"noSwap":[204,304,401]}'/>
 			<script src={ agentsdk.Assets.HTMX }></script>
-			<!-- Airlock auth: reload page on 401 to trigger the auth relay flow -->
+			<!-- A full-page reload omits HX-Request and enters the auth relay flow. -->
 			<script>
-				document.addEventListener("htmx:responseError", function(e) {
-					if (e.detail.xhr.status === 401) window.location.reload();
+				document.addEventListener("htmx:response:error", function(e) {
+					if (e.detail.ctx.response.status === 401) window.location.reload();
 				});
 			</script>
 		</head>

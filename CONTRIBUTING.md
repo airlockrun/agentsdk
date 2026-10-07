@@ -77,6 +77,12 @@ them explicitly (this downloads pinned upstream documentation):
 The pre-commit hook verifies the bundle offline with the command's `--check`
 mode and never rewrites it.
 
+When an SDK change requires application source edits, add one `## vX.Y.Z` or
+`## vX.Y.Z-prerelease` entry to `UPGRADING.md` at the first release containing
+the change. The body is ordinary Markdown through the next level-two heading;
+level-two headings are reserved for version entries. Do not add entries for
+compatible releases that require no source migration.
+
 After dependency or bundled-asset changes, regenerate and verify the notices:
 
     ./scripts/gen-notices.sh

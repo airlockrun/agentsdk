@@ -498,7 +498,7 @@ Design principles:
   buttons need an `sr-only` label on the button.
 - **A loading slot is never empty at rest.** For htmx action buttons, render
   `@ActionIcon("domain-appropriate-name")` before the label and add
-  `hx-disabled-elt="this"`. The component overlays the Lucide idle icon and
+  `hx-disable="this"`. The component overlays the Lucide idle icon and
   DaisyUI spinner at identical dimensions. Leave the request indicator on the
   requesting element so its `htmx-request` class switches the two; do not point
   `hx-indicator` at a remote element. If `views/icons.templ` is absent, create
@@ -525,6 +525,16 @@ Design principles:
   card and the partial swaps inner content, or the partial owns the
   card and the page renders only an empty target. Picking both
   produces two stacked headers and a card-in-a-card border.
+- **Inheritance is explicit.** An htmx attribute on a parent applies to
+  descendant request elements only when its name carries `:inherited`, such as
+  `hx-target:inherited="#results"`. Add it only where descendants rely on the
+  parent value.
+- **HTTP errors swap by default.** Use `hx-status` for status-specific targets
+  or swaps. Use `hx-swap="none"`, a no-swap status, or `htmx.config.noSwap`
+  when the response body must not replace the target. htmx events use
+  colon-separated names and expose request state under `event.detail.ctx`.
+- **`hx-disable` disables controls during a request.** Use `hx-ignore` only to
+  prevent htmx from processing an element and its descendants.
 - **Static JS handlers are quoted literals, not `{ }` expressions.**
   Write `onclick="my_modal.showModal()"` — templ emits it verbatim. The
   `onclick={ "…" }` brace form types the value as `templ.ComponentScript`,
@@ -577,10 +587,10 @@ back to the top every few seconds" bug.
 Make the poll conditional: give the data an updated-at (or version), have the
 polling request carry what it last saw (a query param or header you set — htmx
 does not send `If-Modified-Since` for you), and in the handler **return `204 No
-Content` when nothing changed.** htmx treats 204 as "do nothing", so an idle page
-never re-swaps and scroll/focus is left alone; return `200` with the fragment
-only on a real change. Use **204, not 304** — htmx swaps 3xx responses, so a 304
-would blank the target; 204 is its built-in no-swap code.
+Content` when nothing changed.** htmx treats both 204 and 304 as no-swap
+statuses. Use 204 for an application-level "nothing changed" response; reserve
+304 for standard HTTP conditional-request semantics. Return `200` with the
+fragment only on a real change.
 
 ```
 <div id="np" hx-get="/now-playing?since=0" hx-trigger="every 5s" hx-swap="outerHTML">…</div>
