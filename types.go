@@ -304,8 +304,8 @@ type directory struct {
 	// For writes and lists, resolution inserts a scope segment
 	// (user-<id>/conv-<id>/run-<id>) between the directory prefix and the
 	// rest of the path. Reads require the matching segment. Trusted native
-	// storage methods, including WriteFile, use the exact normalized path
-	// supplied by app code and do not call ResolveFilePath.
+	// storage methods require a registered directory and use the exact normalized
+	// path supplied by app code without applying caller policy or scope insertion.
 	Scope DirectoryScope
 }
 

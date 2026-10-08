@@ -93,23 +93,23 @@ func TestFileOpsMultibyte(t *testing.T) {
 	_, mock, r := storageAgent(t)
 	// Lines splitting on '\n' (0x0A) can never cut a UTF-8 rune (continuation
 	// bytes are >= 0x80), so the line ops must be byte-transparent.
-	mock.put("m", []byte("café\n世界\n🎉 party\nдобро\n"))
+	mock.put("data/m", []byte("café\n世界\n🎉 party\nдобро\n"))
 
-	if got, _ := r.grepFile(context.Background(), "m", "世", grepOpts{}); got != "世界\n" {
+	if got, _ := r.grepFile(context.Background(), "data/m", "世", grepOpts{}); got != "世界\n" {
 		t.Fatalf("grep CJK got %q", got)
 	}
-	if got, _ := r.headLines(context.Background(), "m", 1); got != "café\n" {
+	if got, _ := r.headLines(context.Background(), "data/m", 1); got != "café\n" {
 		t.Fatalf("head got %q", got)
 	}
-	if got, _ := r.tailLines(context.Background(), "m", 1); got != "добро\n" {
+	if got, _ := r.tailLines(context.Background(), "data/m", 1); got != "добро\n" {
 		t.Fatalf("tail got %q", got)
 	}
-	if got, _ := r.readLineWindow(context.Background(), "m", 2, 2); got != "世界\n🎉 party\n" {
+	if got, _ := r.readLineWindow(context.Background(), "data/m", 2, 2); got != "世界\n🎉 party\n" {
 		t.Fatalf("readLines got %q", got)
 	}
 	// Exact byte window over the emoji (🎉 = F0 9F 8E 89, the line-3 prefix).
 	emojiStart := int64(len("café\n世界\n")) // byte offset where line 3 begins
-	got, err := r.readRange(context.Background(), "m", emojiStart, 4)
+	got, err := r.readRange(context.Background(), "data/m", emojiStart, 4)
 	if err != nil {
 		t.Fatalf("readRange: %v", err)
 	}
@@ -120,15 +120,15 @@ func TestFileOpsMultibyte(t *testing.T) {
 
 func TestHeadTailReadLines(t *testing.T) {
 	_, mock, r := storageAgent(t)
-	mock.put("f", []byte("l1\nl2\nl3\nl4\nl5\n"))
+	mock.put("data/f", []byte("l1\nl2\nl3\nl4\nl5\n"))
 
-	if got, _ := r.headLines(context.Background(), "f", 2); got != "l1\nl2\n" {
+	if got, _ := r.headLines(context.Background(), "data/f", 2); got != "l1\nl2\n" {
 		t.Fatalf("head got %q", got)
 	}
-	if got, _ := r.tailLines(context.Background(), "f", 2); got != "l4\nl5\n" {
+	if got, _ := r.tailLines(context.Background(), "data/f", 2); got != "l4\nl5\n" {
 		t.Fatalf("tail got %q", got)
 	}
-	if got, _ := r.readLineWindow(context.Background(), "f", 2, 2); got != "l2\nl3\n" {
+	if got, _ := r.readLineWindow(context.Background(), "data/f", 2, 2); got != "l2\nl3\n" {
 		t.Fatalf("readLines got %q", got)
 	}
 }

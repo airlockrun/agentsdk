@@ -14,11 +14,13 @@ func TestUpgradeInstructions(t *testing.T) {
 	}{
 		{name: "cross prerelease boundary", from: "0.8.1-alpha.6", to: "0.8.1", wantContains: "## v0.8.1-alpha.7"},
 		{name: "leading v and build metadata", from: "v0.8.1-alpha.6+internal", to: "v0.8.1+build.4", wantContains: "hx-disabled-elt"},
-		{name: "already at entry", from: "0.8.1-alpha.7", to: "0.8.1", wantEmpty: true},
+		{name: "storage declaration migration", from: "0.8.1-alpha.7", to: "0.8.1-alpha.8", wantContains: "Declare every app-storage prefix"},
+		{name: "already at latest entry", from: "0.8.1-alpha.8", to: "0.8.1", wantEmpty: true},
 		{name: "same version", from: "0.8.1", to: "v0.8.1", wantEmpty: true},
 		{name: "same-base content addressed prerelease", from: "0.8.1-devabc123", to: "0.8.1", wantEmpty: true},
 		{name: "invalid source", from: "", to: "0.8.1", wantErr: "invalid source SDK version"},
 		{name: "invalid target", from: "0.8.0", to: "latest", wantErr: "invalid target SDK version"},
+		{name: "stable to prerelease downgrade", from: "0.8.1", to: "0.8.1-alpha.8", wantErr: "cannot select upgrade instructions for downgrade"},
 		{name: "downgrade", from: "0.9.0", to: "0.8.1", wantErr: "cannot select upgrade instructions for downgrade"},
 	}
 	for _, tt := range tests {

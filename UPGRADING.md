@@ -4,6 +4,19 @@ This file contains source migrations that Airlock can apply while rebuilding an
 application. Each entry starts at the first SDK release that requires the
 change. Compatible releases without source changes do not need an entry.
 
+## v0.8.1-alpha.8
+
+Declare every app-storage prefix used by native Go code with
+`RegisterDirectory`. Use `AccessInternal` for private native-only paths, and
+preserve the appropriate human access policies and `Scope` for paths exposed to
+users or untrusted callers. Native methods such as `WriteFile`, `OpenFile`,
+`ListDir`, `CopyFile`, `ShareFileURL`, `SyncUp`, and `SyncDown` reject paths that
+do not belong to a registered directory.
+
+Do not register a broad synthetic prefix to cover unrelated paths. Declare the
+actual storage roots so the catalog, Files visibility, and longest-prefix nested
+directory policy remain consistent.
+
 ## v0.8.1-alpha.7
 
 Update applications that use htmx from htmx 2 to the bundled htmx 4 core asset.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/airlockrun/agentsdk/wire"
 )
@@ -125,6 +126,11 @@ func (c *airlockClient) doJSONWithHeaders(ctx context.Context, method, path stri
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		if strings.HasPrefix(path, "/api/agent/storage") {
+			if err := storageDirectoryResponseError(b); err != nil {
+				return err
+			}
+		}
 		if resp.StatusCode == http.StatusConflict && method == http.MethodPost && path == "/api/agent/jobs" {
 			var wireErr wire.EnqueueJobErrorResponse
 			if err := json.Unmarshal(b, &wireErr); err == nil && wireErr.Code == wire.EnqueueJobErrorCodeUnavailable {

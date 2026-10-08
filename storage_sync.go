@@ -27,7 +27,8 @@ import (
 // data caches — both fine with the executable bit set. Set the mode
 // explicitly after the call if you need finer control.
 //
-// Trusted: no access check (builder code that constructs paths itself).
+// Trusted: no caller access check. Prefix must belong to a registered directory;
+// an empty prefix traverses only registered directory roots.
 //
 // Use case: pair with SyncUp in a recurring job handler to persist self-updating
 // binaries (e.g. `bun upgrade`, `freshclam`) across container restarts —
@@ -39,7 +40,9 @@ func (a *Agent) SyncDown(ctx context.Context, prefix, localDir string) error {
 	}
 	prefix = strings.TrimRight(prefix, "/")
 	if prefix != "" {
-		if _, err := normalizePath(prefix); err != nil {
+		var err error
+		prefix, err = a.requireRegisteredStoragePath(prefix, true)
+		if err != nil {
 			return fmt.Errorf("agentsdk: SyncDown: prefix: %w", err)
 		}
 	}
@@ -137,14 +140,17 @@ func (a *Agent) SyncDown(ctx context.Context, prefix, localDir string) error {
 // writers, use the agent's Postgres schema instead — files are for
 // blobs, rows are for shared state.
 //
-// Trusted: no access check (builder code that constructs paths itself).
+// Trusted: no caller access check. Prefix must belong to a registered directory;
+// an empty prefix writes only paths covered by registered directories.
 func (a *Agent) SyncUp(ctx context.Context, localDir, prefix string) error {
 	if !a.runtimeAvailable() {
 		return a.runtimeUnavailable("SyncUp")
 	}
 	prefix = strings.TrimRight(prefix, "/")
 	if prefix != "" {
-		if _, err := normalizePath(prefix); err != nil {
+		var err error
+		prefix, err = a.requireRegisteredStoragePath(prefix, true)
+		if err != nil {
 			return fmt.Errorf("agentsdk: SyncUp: prefix: %w", err)
 		}
 	}

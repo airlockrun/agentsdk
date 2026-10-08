@@ -153,6 +153,11 @@ func storageAgent(t *testing.T) (*Agent, *storageMock, *run) {
 	a.directories = append(a.directories, &directory{
 		Path: reservedTmpPath, Read: AccessUser, Write: AccessUser, List: AccessUser,
 	})
+	for _, path := range []string{"data", "log"} {
+		a.directories = append(a.directories, &directory{
+			Path: path, Read: AccessInternal, Write: AccessInternal, List: AccessInternal,
+		})
+	}
 	a.client = newAirlockClient(mock.server.URL, "test-token", a.httpClient)
 	r := newRun(a, "run-cache-test", "", "", context.Background())
 	t.Cleanup(r.cleanupScratch)

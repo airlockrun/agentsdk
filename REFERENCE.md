@@ -702,12 +702,9 @@ See **`/libs/agentsdk/reference/notifications.md`** for pagination and notificat
 
 ## RegisterDirectory — file storage
 
-The agent has its own **S3-like object storage** — there is no container
-filesystem you expose to tools or the LLM. Every path is a slashless S3 key
-(`uploads/x.csv`, `reports/q1.pdf`, `tmp/foo.png`); leading slashes are
-rejected. Register a directory to declare per-capability access (`Read` /
-`Write` / `List`) and an optional `LLMHint`. All three access values and the
-model-facing `Description` are required:
+App storage uses slashless paths (`uploads/x.csv`, never `/uploads/x.csv`).
+Register each directory with required `Read`, `Write`, `List`, and `Description`
+values; `LLMHint` is optional:
 
 ```go
 uploads := agent.RegisterDirectory("uploads", agentsdk.DirectoryOpts{
@@ -719,13 +716,9 @@ agent.RegisterTool(importTool, agentsdk.AccessUser,
     agentsdk.WithFileInputs(uploads))
 ```
 
-Airlock materializes all `FilePath` inputs for that tool into the declared
-directory. There is no implicit scratch destination or per-field destination.
-
-The **trusted Go file API** (`agent.ReadFile` / `WriteFile` / `OpenFile` /
-`StatFile` / `ListDir` / `DeleteFile` / `CopyFile`) bypasses access checks — it's
-your code. A path that arrives **from the LLM or any untrusted source** must be
-resolved first with `agent.ResolveFilePath(ctx, llmPath, agentsdk.FileOperationRead)`.
+`WithFileInputs` materializes all `FilePath` inputs into that directory. Trusted
+Go methods require registered paths but bypass caller policy. Resolve untrusted
+paths with `ResolveFilePath`; use `AccessInternal` for native-only storage.
 
 → Full directory ACL model, the complete file API, untrusted-path gating,
 shelling out to a CLI over storage, and presigned URLs:
@@ -761,7 +754,8 @@ log := agent.Logger(ctx)
 log.Info("imported rows", zap.Int("count", 42))
 // Levels: Debug, Info, Warn, Error. import "go.uber.org/zap"
 
-// Storage — trusted; no ResolveFilePath. See /libs/agentsdk/reference/files.md.
+// Storage — registered paths, trusted caller policy; no ResolveFilePath.
+// See /libs/agentsdk/reference/files.md.
 agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir / DeleteFile / CopyFile
 resolved, err := agent.ResolveFilePath(ctx, llmPath, agentsdk.FileOperationRead)
 agent.DB() // late-bound *AgentDB handle; operations require a started runtime
@@ -1037,8 +1031,8 @@ input, sanitize the prompt, and decide what reaches the user; the LLM only sees
 the verb you expose. E.g. for a public "AI image" feature, don't register a
 public `generated/` dir and hope the LLM stitches `generateImage` + `fileWrite`
 + `fileShareURL` — register one `generate_public_image({prompt})` tool
-(`Access: AccessPublic`) that generates internally, writes to an admin-only dir
-(trusted Go bypasses `ResolveFilePath`), and returns only a presigned
+(`Access: AccessPublic`) that generates internally, writes to a registered
+admin-only directory (trusted Go bypasses caller policy in `ResolveFilePath`), and returns only a presigned
 `ShareFileURL`. Shrink the verbs, control the side effects, surface the URL.
 
 ---
@@ -1089,6 +1083,11 @@ updates to the agent's S3-backed storage and pull them back at boot. The
 container's local copy is the working copy; S3 is the durable record.
 
 ```go
+agent.RegisterDirectory("state", agentsdk.DirectoryOpts{
+    Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal,
+    Description: "Native runtime state",
+})
+
 // SyncDown(ctx, "state/bin/", "/var/agent/bin/")
 //   for each remote file newer than local: download, atomic-rename,
 //   chmod 0755, set local mtime to remote.
@@ -1122,9 +1121,9 @@ converge on the same new binary). For shared mutable state with concurrent
 writers, use the agent's Postgres schema instead — files are for blobs, rows are
 for shared state.
 
-Keep the persisted binaries in an **admin-only directory** with an `LLMHint`
-that steers the model away (`"framework-managed binary cache; do not read,
-write, or list"`); the trusted Go file API still reaches it freely. Use
+Keep the persisted binaries in an **internal directory**. `AccessInternal` keeps
+it out of human-facing Files and chat capabilities while trusted native Go code
+can use its registered paths without caller access checks. Use
 `state/bin/` for executables, `state/data/` for everything else (GeoIP, ClamAV
 sigs, ML weights, browser binaries) — it's just a convention so the LLM-facing
 directory inventory reads cleanly.
