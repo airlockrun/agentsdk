@@ -43,7 +43,12 @@ default. An existing remote cannot be rebound to another URL or agent; use a
 different remote name so source synchronization state stays attached to one
 deployment target.
 
-Airlock injects connection and MCP credentials.
+Airlock injects credentials for authenticated connection and MCP declarations.
+No-auth declarations use their fixed manifest endpoint directly and require no
+resource setup or binding. Their `BindingMode` is optional and ignored; known
+values remain accepted for source compatibility. Independently created no-auth
+resources remain available through the direct resource namespace and retain
+their resource grants.
 Local calls require agent-admin access. Hosted codegen receives a short-lived
 integration token that cannot deploy, update source, configure credentials, or
 call unrelated agent APIs. Hosted codegen is fixed to its build-bound target and
@@ -53,6 +58,28 @@ Connection response bodies are written to stdout. `mcp tools` prints Airlock's
 cached input schemas; `mcp call` invokes the live
 server. Both print JSON so their output can become sanitized test fixtures.
 Connection and MCP results are capped at 20 MiB.
+
+## Go connection response bodies
+
+Use `ConnectionHandle.Request` and `RequestJSON` for small JSON-like API
+responses. Both buffer the complete body in agent memory and enforce a 20 MiB
+total-byte limit. `RequestJSON` does not stream JSON items.
+
+Choose `RequestStream` before issuing a request when the response is a download,
+will be processed as a file, may exceed 20 MiB, or has an unknown length. Do not
+try `Request` first and fall back to a second streaming request: repeating a
+request can duplicate a mutation or return different data. Close the returned
+body, then use a streaming parser or `io.Copy` to a local `os.CreateTemp` file.
+Seek the file back to the start before reading it in-process. Close it before an
+external program opens its path, and arrange immediate deferred cleanup while
+handling cleanup failures that matter to the operation. A local temporary file
+is a processing cache, not durable Airlock file storage.
+
+Successful native connection responses stream through Airlock without a fixed
+response-size limit. The host's 30-second outbound network deadline still
+applies. Request bodies remain bounded, and non-2xx responses retain only the
+bounded SDK error preview described below. JavaScript and MCP calls keep their
+separate buffered limits.
 
 ## Go connection errors
 

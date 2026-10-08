@@ -36,6 +36,16 @@ type integrationTargetFlags struct {
 func resolveIntegrationTarget(ctx context.Context, flags integrationTargetFlags) (integrationTarget, error) {
 	baseURL := os.Getenv("AIRLOCK_API_URL")
 	agentID := os.Getenv("AIRLOCK_AGENT_ID")
+	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
+		token := os.Getenv("AIRLOCK_TOKEN")
+		if baseURL == "" || agentID == "" || token == "" {
+			return integrationTarget{}, errors.New("developer session requires AIRLOCK_API_URL, AIRLOCK_AGENT_ID, and AIRLOCK_TOKEN")
+		}
+		if flags != (integrationTargetFlags{}) {
+			return integrationTarget{}, errors.New("--url, --remote, and --agent are unavailable in a hosted developer session")
+		}
+		return integrationTarget{baseURL: normalizeBaseURL(baseURL), agentID: agentID, token: token}, nil
+	}
 	token := os.Getenv("AIRLOCK_INTEGRATION_TOKEN")
 	if baseURL != "" || agentID != "" || token != "" {
 		if baseURL == "" || agentID == "" || token == "" {

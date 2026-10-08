@@ -24,7 +24,6 @@ a.RegisterModel(&agentsdk.ModelSlot{
 source := a.RegisterMCP(&agentsdk.MCP{
     Slug: "source", Name: "Research source", URL: "https://example.com/mcp",
     AuthMode: agentsdk.MCPAuthNone,
-    BindingMode: agentsdk.BindingShared,
 })
 research := agentsdk.RegisterAgent(a, &agentsdk.AgentDefinition[ResearchInput, ResearchOutput]{
     Slug: "researcher",
@@ -50,6 +49,15 @@ arrays. Numeric schemas carry the declared Go width's bounds, preserving exact
 constraints participate in the contract hash; changing an array length or numeric
 width changes the contract. Floating-point values retain Go's rounding semantics.
 The SDK checks array lengths and numeric ranges before decoding a typed reply.
+
+No-auth connections and MCP servers use their fixed declared endpoint directly
+through Airlock's outbound transport and do not create or bind a user resource.
+Their `BindingMode` is optional and ignored; `shared` and `per_user` remain
+accepted so existing declarations compile unchanged. Connection static headers
+belong to the trusted app declaration and are shared by every invocation of
+that app endpoint, so they must not contain per-user credentials or imply
+account isolation. Authenticated declarations require an explicit `BindingMode`
+and use the corresponding shared or per-user resource binding.
 
 `Tools []tool.Tool` accepts native goai tools, normally built with
 `tool.Typed[In, Out](name).Description(...).Execute(fn).Build()`. They require

@@ -43,6 +43,7 @@ go tool air build
 go tool air deploy -m "Describe this deployment"
 go tool air deploy list --limit 10
 go tool air deploy status --watch --logs
+go tool air status --watch --logs
 ```
 
 `deploy list [dir]` shows the newest builds with full build IDs, type, status,
@@ -50,8 +51,11 @@ start time, and message. `--limit` defaults to 10 and accepts 1-50.
 `deploy status [dir]` inspects the latest build, or a specific `--build <UUID>`.
 Both accept `--remote`, `--url`, and `--agent <slug-or-id>` with the same binding
 conflict checks as source deployment, and use the saved login for that URL.
-They do not upload source, start builds, check SDK compatibility, or write the
-workspace. Login refresh can update credentials outside the repository.
+They do not upload source, start builds, or check SDK compatibility. When a
+deployment accepted by this workspace finishes, status refreshes the canonical
+source ETag in `.airlock/local/agent.toml` without changing source files. Login
+refresh can update credentials outside the repository. `go tool air status` is
+the direct alias for deployment status.
 
 Status shows build lifecycle, deployment phase, timestamps, source ref, errors,
 and job blockers. `--logs` adds persisted Docker and Sol logs. `--watch` polls
@@ -67,6 +71,31 @@ nonzero with an error on stderr, including in JSON mode. A building snapshot
 without `--watch` succeeds immediately. An empty build history is an explicit
 error. A valid `deploy list -m "message"` uploads a directory named `list`;
 use `./list` or `./status` to make these directory names unambiguous.
+
+Developer resource setup uses the same CLI locally and in hosted development:
+
+```bash
+go tool air resources request weather --name "Weather API" \
+  --base-url https://api.weather.example --auth-mode api_key --header X-API-Key
+go tool air resources status <request-id>
+go tool air resources list
+go tool air resources bind <request-id>
+```
+
+`request` never accepts a secret argument. It creates a user-owned connection
+with its non-secret URL and authentication shape, then, when authentication is
+required, prints a settings URL where the user enters the credential. Local use
+lazily creates a private developer session and records its ID in
+`.airlock/local/agent.toml`;
+`--session <UUID>` attaches an existing owned session. Hosted development uses
+`AIRLOCK_DEVELOPMENT_SESSION`, `AIRLOCK_API_URL`, `AIRLOCK_AGENT_ID`, and
+`AIRLOCK_TOKEN`. A configured resource becomes `ready` and contributes one
+durable follow-up message to that developer session. `bind` succeeds only after
+a deployed manifest declares a compatible need.
+
+Hosted `deploy` requires `AIRLOCK_DEPLOY_APPROVED=1`. The developer bash wrapper
+sets it only for the exact command approved through `request_permission=true`.
+Ordinary local deployment does not require this environment variable.
 
 Running `airlock` inside an agent repository delegates non-bootstrap commands
 to `go tool air`; the repository's `go.mod` remains the version source of truth.

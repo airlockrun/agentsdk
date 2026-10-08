@@ -35,6 +35,11 @@ func TestTopicEnrollment(t *testing.T) {
 	}
 }
 
+func TestNoAuthBindingModeIsOptional(t *testing.T) {
+	validateConnection(&Connection{Slug: "public_api", Name: "Public API", Description: "Public API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone})
+	validateMCP(&MCP{Slug: "public_mcp", Name: "Public MCP", URL: "https://example.com/mcp", AuthMode: MCPAuthNone})
+}
+
 func TestRegistrationValidation(t *testing.T) {
 	noopWebhook := func(context.Context, []byte, *EventWriter) error { return nil }
 	noopRoute := func(http.ResponseWriter, *http.Request) error { return nil }
@@ -168,10 +173,10 @@ func TestRegistrationValidation(t *testing.T) {
 			},
 		},
 		{
-			name: "connection binding mode required",
+			name: "authenticated connection binding mode required",
 			want: "BindingMode is required",
 			call: func(a *Agent) {
-				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthNone})
+				a.RegisterConnection(&Connection{Slug: "api", Name: "API", Description: "API", BaseURL: "https://example.com", AuthMode: ConnectionAuthToken})
 			},
 		},
 		{
@@ -196,10 +201,17 @@ func TestRegistrationValidation(t *testing.T) {
 			},
 		},
 		{
-			name: "mcp binding mode required",
+			name: "authenticated mcp binding mode required",
 			want: "BindingMode is required",
 			call: func(a *Agent) {
-				a.RegisterMCP(&MCP{Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthNone})
+				a.RegisterMCP(&MCP{Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthToken})
+			},
+		},
+		{
+			name: "no-auth mcp unknown binding mode",
+			want: "invalid BindingMode",
+			call: func(a *Agent) {
+				a.RegisterMCP(&MCP{Slug: "docs", Name: "Docs", URL: "https://example.com/mcp", AuthMode: MCPAuthNone, BindingMode: BindingMode("tenant")})
 			},
 		},
 		{

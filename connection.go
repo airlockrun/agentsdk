@@ -30,8 +30,10 @@ const MaxConnectionErrorBodyBytes = 4096
 //
 // Returns *AuthRequiredError if the connection needs authorization. The
 // response body is buffered into memory and capped at
-// MaxBufferedResponseBytes (20 MiB); overflow returns ErrOutputTooLarge.
-// For larger responses, use RequestStream and pipe straight into storage.
+// MaxBufferedResponseBytes (20 MiB total); overflow returns ErrOutputTooLarge.
+// Use Request and RequestJSON only for small structured API responses. Choose
+// RequestStream up front for downloads, file processing, or responses that may
+// exceed the cap; do not issue a buffered request and retry it as a stream.
 //
 // The response body may be empty (e.g. HTTP 204 No Content, which some
 // upstreams use for "nothing to report"). Callers passing the result to
@@ -56,15 +58,15 @@ func (h *ConnectionHandle) Request(ctx context.Context, opts RequestOpts) ([]byt
 	return data, nil
 }
 
-// RequestStream is the streaming primitive returned to Go-only callers
-// that want to process or persist a response without holding the full
-// body in agent RAM. Use it for downloads, large API responses, anything
-// you'd otherwise pipe through io.Copy:
+// RequestStream returns a live response body without the buffered response
+// limit. Use it for downloads, file processing, large API responses, and
+// streaming decoders. The caller must close Body.
 //
 //	resp, err := h.RequestStream(ctx, agentsdk.RequestOpts{Path: "/large.json"})
 //	if err != nil { return err }
 //	defer resp.Body.Close()
-//	info, _ := agent.WriteFile(ctx, "tmp/large.json", resp.Body, "application/json")
+//	dec := json.NewDecoder(resp.Body)
+//	// Decode incrementally rather than reading the complete body into memory.
 //
 // An explicit host authorization_required response surfaces as
 // *AuthRequiredError. Every other non-2xx surfaces as *ConnectionHTTPError.
@@ -143,7 +145,9 @@ func connectionErrorSource(value string) ConnectionErrorSource {
 }
 
 // RequestJSON is the typed twin of ConnectionHandle.Request. It sends
-// the request, decodes the response body into T, and returns it.
+// the request, buffers at most MaxBufferedResponseBytes (20 MiB total), decodes
+// the response body into T, and returns it. It is intended for small JSON API
+// responses, not downloads or arbitrarily large JSON documents.
 // Empty body (204 No Content, zero-length 200) decodes to a zero T
 // rather than the standard library's "unexpected end of JSON input"
 // — matches the behaviour of the JS-side conn_<slug>.requestJSON

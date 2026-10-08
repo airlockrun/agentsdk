@@ -488,8 +488,8 @@ spotify.Request(ctx, agentsdk.RequestOpts{
 **`AuthMode`:** `ConnectionAuthOAuth`, `ConnectionAuthToken`,
 `ConnectionAuthNone`.
 
-**`BindingMode`:** required. `BindingPerUser` keeps an independent credential
-for each user; `BindingShared` uses one app credential.
+**`BindingMode`:** required with auth; ignored for `ConnectionAuthNone`. See
+**`/libs/agentsdk/reference/integrations.md`**.
 
 **`AuthInjection.Type`** — how the proxy injects the credential into each
 request:
@@ -540,9 +540,10 @@ if err != nil {
 same as `ConnectionHandle.Request` — detect it with the same two-value
 `agentsdk.IsAuthRequired(err)` pattern.
 
-`MCP.BindingMode` is required and has the same shared/per-user semantics as a
-connection. Application-owned task definitions explicitly select their MCP
-inventory through `MCPHandle` values. See `/libs/agentsdk/reference/agents.md`.
+`MCP.BindingMode` is required with auth and ignored for `MCPAuthNone`.
+Application-owned task definitions explicitly select
+their MCP inventory through `MCPHandle` values. See
+`/libs/agentsdk/reference/agents.md`.
 
 **`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 plus advertised RFC 7591
 DCR), `MCPAuthOAuth` (manual URLs/client), `MCPAuthToken`, `MCPAuthNone`. Run

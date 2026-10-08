@@ -99,6 +99,10 @@ func run(args []string) error {
 		return cmdLogout(args[1:])
 	case "deploy":
 		return cmdDeploy(args[1:])
+	case "status":
+		return cmdDeployBuilds("status", args[1:])
+	case "resources":
+		return cmdResources(args[1:])
 	case "pull":
 		return cmdPull(args[1:])
 	case "clone":
@@ -134,6 +138,9 @@ Usage:
   air deploy [dir] -m <text>      upload source and start a build
   air deploy list [dir] [flags]  list recent builds (newest first)
   air deploy status [dir] [flags] inspect or watch one build
+  air status [dir] [flags]        inspect the accepted deployment task/build
+  air resources request ...       create or select a resource for development
+  air resources list|status|bind|call  inspect, bind, or call development resources
   air pull [dir] [flags]          fast-forward a local workspace from Airlock
   air clone <agent> <dir> [flags] clone Airlock source without Git
   air remote default <name>       select the default deployment target
@@ -215,6 +222,17 @@ Integration target flags:
   --agent <slug-or-id>       agent for a new or matching remote
   --url <url>                Airlock URL for a new or matching remote
   --remote <name>            named deployment target (default: configured default_remote)
+
+Resources:
+  request <need> --name <name> --base-url <url> [--auth-mode none|bearer|api_key]
+                         [--header <name>] [--type connection]
+  request <need> --type connection|mcp_server --resource <UUID>
+  list [--json] [--session <UUID>]
+  status <request-UUID> [--json] [--session <UUID>]
+  bind <request-UUID> [--json] [--session <UUID>]
+
+  Resource commands also accept the integration target flags above. The CLI
+  never accepts resource secrets; request prints the authenticated setup URL.
 
 A remote binds one Airlock URL and one stable agent ID. Selecting a remote
 does not change default_remote. Use air remote default <name> to change it.
@@ -361,6 +379,10 @@ func cmdRemote(args []string) error {
 		remote.AgentID = ""
 		remote.Slug = ""
 		remote.SourceState = ""
+		remote.SourceETag = ""
+		remote.DeveloperSession = ""
+		remote.PendingTask = ""
+		remote.PendingSourceState = ""
 		binding.Remotes[name] = remote
 		if err := writeAgentBinding(".", binding); err != nil {
 			return err

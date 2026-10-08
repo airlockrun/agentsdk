@@ -75,6 +75,16 @@ chat, is usually half of what the user pictured. When the request is vague,
 pick a concrete domain, build the full web-app-plus-tools shape, and record the
 assumption in `NOTES.md`.
 
+For HTTP connections, use `ConnectionHandle.Request` or `RequestJSON` only for
+small JSON-like API responses; both buffer at most 20 MiB total. Choose
+`RequestStream` up front for downloads, file processing, large responses, or
+unknown response sizes regardless of `Content-Length`. Never retry a buffered
+request as a stream because a second request can duplicate a mutation or observe
+different data. Close the streaming body and process it incrementally, or copy
+it to a local `os.CreateTemp` file with deferred cleanup. Seek before reading the
+temporary file in-process, and close it before an external program opens its
+path. Read `reference/integrations.md` for the complete pattern and limits.
+
 ## Workspace structure
 
 ```

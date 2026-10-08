@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -533,6 +534,26 @@ func TestAccessTokenClearsExpiredLogin(t *testing.T) {
 	}
 	if _, ok := creds.Sessions[normalizeBaseURL(srv.URL)]; ok {
 		t.Fatalf("expired session was not cleared: %#v", creds.Sessions)
+	}
+}
+
+func TestAccessTokenForURLUsesDeveloperSessionEnvironment(t *testing.T) {
+	t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", "session-id")
+	t.Setenv("AIRLOCK_API_URL", "https://airlock.example")
+	t.Setenv("AIRLOCK_TOKEN", "developer-token")
+
+	token, err := accessTokenForURL(context.Background(), "https://airlock.example/")
+	if err != nil {
+		t.Fatalf("accessTokenForURL: %v", err)
+	}
+	if token != "developer-token" {
+		t.Fatalf("token = %q", token)
+	}
+	if _, err := accessTokenForURL(context.Background(), "https://other.example"); err == nil {
+		t.Fatal("accessTokenForURL accepted the developer token for another origin")
+	}
+	if _, err := accessTokenForURLAfterRejection(context.Background(), "https://airlock.example", "developer-token"); !errors.Is(err, errTokenNotManaged) {
+		t.Fatalf("rejected developer token error = %v", err)
 	}
 }
 

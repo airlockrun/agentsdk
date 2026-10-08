@@ -92,6 +92,28 @@ func TestCatalogRejectsConflictsBeforeSelection(t *testing.T) {
 	}
 }
 
+func TestCatalogBindingModeContract(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		manifest wire.AgentManifest
+		wantErr  bool
+	}{
+		{name: "no-auth connection omitted", manifest: wire.AgentManifest{Connections: []wire.ConnectionDef{{Slug: "public", AuthMode: wire.ConnectionAuthNone}}}},
+		{name: "no-auth MCP omitted", manifest: wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "public", AuthMode: wire.MCPAuthNone}}}},
+		{name: "authenticated connection omitted", manifest: wire.AgentManifest{Connections: []wire.ConnectionDef{{Slug: "private", AuthMode: wire.ConnectionAuthToken}}}, wantErr: true},
+		{name: "authenticated MCP omitted", manifest: wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "private", AuthMode: wire.MCPAuthToken}}}, wantErr: true},
+		{name: "no-auth connection unknown", manifest: wire.AgentManifest{Connections: []wire.ConnectionDef{{Slug: "public", AuthMode: wire.ConnectionAuthNone, BindingMode: "tenant"}}}, wantErr: true},
+		{name: "no-auth MCP unknown", manifest: wire.AgentManifest{MCPServers: []wire.MCPDef{{Slug: "public", AuthMode: wire.MCPAuthNone, BindingMode: "tenant"}}}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Catalog(tc.manifest, Discovery{})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Catalog() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestIdentityDoesNotUsePresentationAliases(t *testing.T) {
 	first, err := External(MCP, "canonical", "alias_one", []string{"search/issues"})
 	if err != nil {

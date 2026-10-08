@@ -19,11 +19,14 @@ type agentBinding struct {
 }
 
 type agentRemoteBinding struct {
-	AirlockURL  string
-	AgentID     string
-	Slug        string
-	SourceETag  string
-	SourceState string
+	AirlockURL         string
+	AgentID            string
+	Slug               string
+	SourceETag         string
+	SourceState        string
+	DeveloperSession   string
+	PendingTask        string
+	PendingSourceState string
 }
 
 func loadAgentBinding(dir string) (agentBinding, bool, error) {
@@ -102,6 +105,12 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 			remote.SourceState = unquoted
 		case "source_etag":
 			remote.SourceETag = unquoted
+		case "developer_session":
+			remote.DeveloperSession = unquoted
+		case "pending_task":
+			remote.PendingTask = unquoted
+		case "pending_source_state":
+			remote.PendingSourceState = unquoted
 		default:
 			return agentBinding{}, false, fmt.Errorf("%s: unknown key %q", path, key)
 		}
@@ -163,6 +172,15 @@ func writeAgentBinding(dir string, b agentBinding) error {
 		}
 		if remote.SourceETag != "" {
 			fmt.Fprintf(&content, "source_etag = %s\n", strconv.Quote(remote.SourceETag))
+		}
+		if remote.DeveloperSession != "" {
+			fmt.Fprintf(&content, "developer_session = %s\n", strconv.Quote(remote.DeveloperSession))
+		}
+		if remote.PendingTask != "" {
+			fmt.Fprintf(&content, "pending_task = %s\n", strconv.Quote(remote.PendingTask))
+		}
+		if remote.PendingSourceState != "" {
+			fmt.Fprintf(&content, "pending_source_state = %s\n", strconv.Quote(remote.PendingSourceState))
 		}
 	}
 

@@ -102,7 +102,7 @@ type Connection struct {
 	AuthInjection     AuthInjection
 	SetupInstructions string
 	LLMHint           string      // appended to the connection block in the system prompt
-	BindingMode       BindingMode // required: shared app credential or per-user credential
+	BindingMode       BindingMode // required for authenticated connections; unused for AuthMode none
 }
 
 // ConnectionResponse is the streaming primitive returned by
@@ -221,10 +221,10 @@ const (
 	AuthInjectQueryParam AuthInjectionType = "query_param"
 )
 
-// ErrOutputTooLarge is returned by Run / Request when the response exceeds
-// the 20 MiB buffered cap. The error message points the caller at the
-// streaming variant as the resolution.
-var ErrOutputTooLarge = errors.New("agentsdk: response exceeded 20 MiB buffer cap; Run/Request are for structured small responses (JSON, HTML, CLI summaries) — use RunStream/RequestStream for any data download")
+// ErrOutputTooLarge is returned by ConnectionHandle.Request and RequestJSON
+// when the response exceeds the 20 MiB total buffered cap. Use errors.Is to
+// test it and choose RequestStream before issuing downloads or large requests.
+var ErrOutputTooLarge = errors.New("agentsdk: Request/RequestJSON response exceeded the 20 MiB total buffered cap; use RequestStream with a streaming decoder or io.Copy to a local temporary file")
 
 // --- Files ---
 
@@ -558,8 +558,9 @@ const (
 	AccessInternal Access = "internal"
 )
 
-// BindingMode controls whether a connection or MCP credential is shared by the
-// app or independently authorized for each user.
+// BindingMode controls whether an authenticated connection or MCP credential is
+// shared by the app or independently authorized for each user. No-auth
+// declarations may omit it because they have no resource or credential binding.
 type BindingMode string
 
 const (
@@ -610,7 +611,7 @@ type MCP struct {
 	// HTTP call: bearer header (default), custom header, query parameter,
 	// or path prefix. Mirrors Connection.AuthInjection.
 	AuthInjection AuthInjection
-	BindingMode   BindingMode // required: shared app credential or per-user credential
+	BindingMode   BindingMode // required for authenticated MCP; unused for AuthMode none
 }
 
 // MCPToolCallResponse is returned from MCP tool call proxy.
