@@ -23,15 +23,21 @@ import (
 // allows a custom Description.
 const reservedTmpPath = "tmp"
 
-// ErrNotFound is returned by ResolveFilePath and the storage methods for
-// both "directory not registered" and "caller does not have access" — the
-// two cases are deliberately indistinguishable at the public surface so
-// path-guessing leaks no information about what exists.
+// ErrNotFound is returned by ResolveFilePath for both an undeclared directory
+// and denied caller access, and by storage methods when a file is absent. The
+// untrusted resolution cases are deliberately indistinguishable so path
+// guessing leaks no declaration information.
 var ErrNotFound = errors.New("agentsdk: file not found")
 
 // ErrInvalidPath is returned for paths that fail normalization (missing
 // leading '/', empty segments, '..' segments, etc.).
 var ErrInvalidPath = errors.New("agentsdk: invalid path")
+
+// ErrDirectoryNotRegistered is returned by trusted storage methods when a path
+// does not belong to a directory declared with RegisterDirectory.
+var ErrDirectoryNotRegistered = errors.New("agentsdk: storage directory not registered")
+
+const directoryNotRegisteredMessage = "does not belong to a registered directory"
 
 // --- Caller plumbing ---
 
@@ -40,7 +46,8 @@ var ErrInvalidPath = errors.New("agentsdk: invalid path")
 // webhook, route, subdomain proxy) inject one onto ctx via withCallScope.
 // Builder Go code that constructs paths itself does NOT need to set a
 // caller — it calls the trusted file API directly (OpenFile/ReadFile/
-// WriteFile/StatFile/ListDir/DeleteFile) which bypasses ResolveFilePath.
+// WriteFile/StatFile/ListDir/DeleteFile) which bypasses caller policy in
+// ResolveFilePath but still requires a registered directory.
 type callScope struct {
 	Access Access
 	UserID string // optional, for audit
@@ -164,6 +171,21 @@ func (a *Agent) lookupDirectory(p string) *directory {
 	return best
 }
 
+func (a *Agent) requireRegisteredStoragePath(path string, directoryAllowed bool) (string, error) {
+	canon, err := normalizePath(path)
+	if err != nil {
+		return "", err
+	}
+	d := a.lookupDirectory(canon)
+	if d == nil {
+		return "", fmt.Errorf("%w: storage path %q %s", ErrDirectoryNotRegistered, canon, directoryNotRegisteredMessage)
+	}
+	if !directoryAllowed && canon == d.Path {
+		return "", fmt.Errorf("%w: storage path %q must include a filename", ErrInvalidPath, canon)
+	}
+	return canon, nil
+}
+
 func dirCap(d *directory, op FileOperation) (Access, bool) {
 	switch op {
 	case FileOperationRead:
@@ -194,7 +216,8 @@ func (a *Agent) hasPublicDirCap(op FileOperation) bool {
 // --- Public access gate ---
 
 // ResolveFilePath authorizes an untrusted path and returns the exact physical
-// path that storage operations must use. Trusted Go storage methods bypass it.
+// path that storage operations must use. Trusted Go storage methods bypass the
+// caller policy but still require a matching registered directory.
 func (a *Agent) ResolveFilePath(ctx context.Context, path string, op FileOperation) (FilePath, error) {
 	if !a.runtimeAvailable() {
 		return "", a.runtimeUnavailable("ResolveFilePath")
@@ -307,13 +330,13 @@ func isScopeSegment(segment string) bool {
 // --- Trusted Go file API ---
 
 // OpenFile streams a file. The returned ReadCloser must be closed by the
-// caller. Trusted: no access check. Used by builder Go code that
-// constructs paths itself.
+// caller. Trusted: no caller access check. The path must belong to a registered
+// directory. Used by builder Go code that constructs paths itself.
 func (a *Agent) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("OpenFile")
 	}
-	canon, err := normalizePath(path)
+	canon, err := a.requireRegisteredStoragePath(path, false)
 	if err != nil {
 		return nil, err
 	}
@@ -322,12 +345,12 @@ func (a *Agent) OpenFile(ctx context.Context, path string) (io.ReadCloser, error
 
 // OpenFileRange streams the inclusive byte range [start, end] of a file
 // (HTTP Range semantics). The returned ReadCloser must be closed by the
-// caller. Trusted: no access check.
+// caller. Trusted: no caller access check; registration is required.
 func (a *Agent) OpenFileRange(ctx context.Context, path string, start, end int64) (io.ReadCloser, error) {
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("OpenFileRange")
 	}
-	canon, err := normalizePath(path)
+	canon, err := a.requireRegisteredStoragePath(path, false)
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +358,7 @@ func (a *Agent) OpenFileRange(ctx context.Context, path string, start, end int64
 }
 
 // ReadRange reads the inclusive byte range [start, end] of a file fully into
-// memory. Trusted: no access check.
+// memory. Trusted: no caller access check; registration is required.
 func (a *Agent) ReadRange(ctx context.Context, path string, start, end int64) ([]byte, error) {
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("ReadRange")
@@ -349,7 +372,7 @@ func (a *Agent) ReadRange(ctx context.Context, path string, start, end int64) ([
 }
 
 // ReadFile reads a file fully into memory. For very large files prefer
-// OpenFile + io.Copy. Trusted: no access check.
+// OpenFile + io.Copy. Trusted: no caller access check; registration is required.
 func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("ReadFile")
@@ -364,12 +387,12 @@ func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
 
 // WriteFile writes data with the given content type. Returns the resulting
 // FileInfo (path/filename/contentType/size/lastModified). Trusted: no
-// access check.
+// caller access check. The path must belong to a registered directory.
 func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, contentType string) (FileInfo, error) {
 	if !a.runtimeAvailable() {
 		return FileInfo{}, a.runtimeUnavailable("WriteFile")
 	}
-	canon, err := normalizePath(path)
+	canon, err := a.requireRegisteredStoragePath(path, false)
 	if err != nil {
 		return FileInfo{}, err
 	}
@@ -391,12 +414,13 @@ func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, cont
 	}, nil
 }
 
-// StatFile returns metadata for a file. Trusted: no access check.
+// StatFile returns metadata for a file. Trusted: no caller access check;
+// registration is required.
 func (a *Agent) StatFile(ctx context.Context, path string) (FileInfo, error) {
 	if !a.runtimeAvailable() {
 		return FileInfo{}, a.runtimeUnavailable("StatFile")
 	}
-	canon, err := normalizePath(path)
+	canon, err := a.requireRegisteredStoragePath(path, false)
 	if err != nil {
 		return FileInfo{}, err
 	}
@@ -412,7 +436,7 @@ func (a *Agent) StatFileRef(ctx context.Context, path string) (FileRef, error) {
 	if !a.runtimeAvailable() {
 		return FileRef{}, a.runtimeUnavailable("StatFileRef")
 	}
-	canon, err := normalizePath(path)
+	canon, err := a.requireRegisteredStoragePath(path, false)
 	if err != nil {
 		return FileRef{}, err
 	}
@@ -444,48 +468,76 @@ type ListOpts struct {
 	Recursive bool
 }
 
-// ListDir enumerates files under `path`. Trusted: no access check. The
-// empty string lists the agent root.
+// ListDir enumerates files under `path`. Trusted: no caller access check. A
+// non-empty path must belong to a registered directory. An empty path lists
+// across the outermost registered directories without exposing undeclared
+// storage prefixes.
 func (a *Agent) ListDir(ctx context.Context, path string, opts ListOpts) ([]FileInfo, error) {
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("ListDir")
 	}
-	// path is a directory prefix; trailing slash is allowed (and expected
-	// for clarity), normalizePath rejects it for files.
+	// path is a directory prefix; trailing slash is allowed for clarity.
 	prefix := strings.TrimRight(path, "/")
-	if prefix != "" {
-		if _, err := normalizePath(prefix); err != nil {
-			return nil, err
+	if prefix == "" {
+		var files []FileInfo
+		for _, d := range a.outermostDirectories() {
+			listed, err := a.listDirRaw(ctx, d.Path, opts.Recursive)
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, listed...)
 		}
+		return files, nil
+	}
+	var err error
+	prefix, err = a.requireRegisteredStoragePath(prefix, true)
+	if err != nil {
+		return nil, err
 	}
 	return a.listDirRaw(ctx, prefix, opts.Recursive)
 }
 
+func (a *Agent) outermostDirectories() []*directory {
+	var roots []*directory
+	for _, candidate := range a.directories {
+		outermost := true
+		for _, other := range a.directories {
+			if candidate != other && pathHasPrefix(candidate.Path, other.Path) {
+				outermost = false
+				break
+			}
+		}
+		if outermost {
+			roots = append(roots, candidate)
+		}
+	}
+	return roots
+}
+
 // DeleteFile removes a file. Idempotent — missing files do not error.
-// Trusted: no access check.
+// Trusted: no caller access check; registration is required.
 func (a *Agent) DeleteFile(ctx context.Context, path string) error {
 	if !a.runtimeAvailable() {
 		return a.runtimeUnavailable("DeleteFile")
 	}
-	canon, err := normalizePath(path)
+	canon, err := a.requireRegisteredStoragePath(path, false)
 	if err != nil {
 		return err
 	}
 	return a.deleteFileRaw(ctx, canon)
 }
 
-// CopyFile server-side-copies a file from src to dst. Both paths are
-// absolute and may live under different directories. Trusted: no access
-// check.
+// CopyFile server-side-copies a file from src to dst. The paths may live under
+// different registered directories. Trusted: no caller access check.
 func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
 	if !a.runtimeAvailable() {
 		return a.runtimeUnavailable("CopyFile")
 	}
-	srcCanon, err := normalizePath(src)
+	dstCanon, err := a.requireRegisteredStoragePath(dst, false)
 	if err != nil {
 		return err
 	}
-	dstCanon, err := normalizePath(dst)
+	srcCanon, err := a.requireRegisteredStoragePath(src, false)
 	if err != nil {
 		return err
 	}
@@ -496,18 +548,20 @@ func (a *Agent) CopyFile(ctx context.Context, src, dst string) error {
 // pointing at the given storage path. ttl <= 0 picks the server default
 // (1h); the server caps anything over 24h. The URL is signed for the
 // public S3 endpoint when configured, so it works from outside the docker
-// network (browsers, LLM providers, external tools). Trusted: no access
-// check — the JS binding resolves LLM-supplied paths via ResolveFilePath.
+// network (browsers, LLM providers, external tools). Trusted: no caller access
+// check; registration is required. The JS binding resolves LLM-supplied paths
+// via ResolveFilePath.
 //
 // Use cases: embedding in markdown ([file](url)), sharing externally,
 // cases where the agent's authenticated /__air/storage subdomain route
-// isn't reachable for the recipient. For showing files in chat, prefer
+// isn't reachable for the recipient. The path must belong to a registered
+// directory. For showing files in chat, prefer
 // output({type:"file", source:path}).
 func (a *Agent) ShareFileURL(ctx context.Context, path string, ttl time.Duration) (*ShareFileResponse, error) {
 	if !a.runtimeAvailable() {
 		return nil, a.runtimeUnavailable("ShareFileURL")
 	}
-	canon, err := normalizePath(path)
+	canon, err := a.requireRegisteredStoragePath(path, false)
 	if err != nil {
 		return nil, err
 	}
@@ -557,6 +611,9 @@ func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, c
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		if err := storageDirectoryResponseError(b); err != nil {
+			return err
+		}
 		return fmt.Errorf("agentsdk: fileWrite %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return nil
@@ -572,8 +629,12 @@ func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, er
 		return nil, ErrNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("agentsdk: openFile %s: status %d", path, resp.StatusCode)
+		if err := storageDirectoryResponseError(b); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("agentsdk: openFile %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return resp.Body, nil
 }
@@ -590,8 +651,12 @@ func (a *Agent) openFileRangeRaw(ctx context.Context, path string, start, end in
 		return nil, ErrNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("agentsdk: openFileRange %s: status %d", path, resp.StatusCode)
+		if err := storageDirectoryResponseError(b); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("agentsdk: openFileRange %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return resp.Body, nil
 }
@@ -604,6 +669,9 @@ func (a *Agent) deleteFileRaw(ctx context.Context, path string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
+		if err := storageDirectoryResponseError(b); err != nil {
+			return err
+		}
 		return fmt.Errorf("agentsdk: fileDelete %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
 	return nil
@@ -627,6 +695,9 @@ func (a *Agent) statFileRaw(ctx context.Context, path string) (FileInfo, error) 
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		responseBody, _ := io.ReadAll(resp.Body)
+		if err := storageDirectoryResponseError(responseBody); err != nil {
+			return FileInfo{}, err
+		}
 		return FileInfo{}, fmt.Errorf("agentsdk: statFile %s: status %d: %s", path, resp.StatusCode, string(responseBody))
 	}
 	var info wire.FileInfo
@@ -670,4 +741,14 @@ func escapeStoragePath(path string) string {
 		segments[i] = url.PathEscape(segment)
 	}
 	return strings.Join(segments, "/")
+}
+
+func storageDirectoryResponseError(body []byte) error {
+	var response struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &response) == nil && strings.HasPrefix(response.Error, "storage path ") && strings.HasSuffix(response.Error, directoryNotRegisteredMessage) {
+		return fmt.Errorf("%w: %s", ErrDirectoryNotRegistered, response.Error)
+	}
+	return nil
 }

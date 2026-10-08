@@ -181,13 +181,11 @@ func (a *Agent) RegisterEnvVar(e *EnvVar) *EnvVarHandle {
 // one canonical form. Files under the directory are addressed as
 // "uploads/doc.pdf", never "/uploads/doc.pdf".
 //
-// Builder Go code reads and writes the directory through the trusted
+// Builder Go code reads and writes registered directories through the trusted
 // file API (agent.OpenFile / ReadFile / WriteFile / StatFile / ListDir /
-// DeleteFile) — these methods do NOT call ResolveFilePath, on the
-// principle that builder code that constructs paths itself is trusted.
-// When a builder tool accepts a path from the LLM (typed as `string` on
-// an Input struct), the builder must call agent.ResolveFilePath
-// explicitly before passing the path anywhere.
+// DeleteFile). These methods require a registered directory but do not enforce
+// its caller-facing Read / Write / List policies. Builder code that accepts a
+// path from the LLM must still call ResolveFilePath before using it.
 //
 // The framework reserves "tmp" for its own scratch (truncated tool
 // output, generated media) at Read=Write=List=AccessUser. Builders may
