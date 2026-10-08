@@ -3,10 +3,12 @@ package agentsdk
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -219,6 +221,102 @@ func TestConnectionSuccessHidesProtocolHeader(t *testing.T) {
 	}
 }
 
+func TestConnectionRequestStreamReadsLargeResponse(t *testing.T) {
+	const responseSize = MaxBufferedResponseBytes + 4<<20
+	wantHash := patternHash(t, responseSize)
+	tests := []struct {
+		name          string
+		contentLength bool
+	}{
+		{name: "known length", contentLength: true},
+		{name: "chunked"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Disposition", `attachment; filename="export.bin"`)
+				if tt.contentLength {
+					w.Header().Set("Content-Length", strconv.Itoa(responseSize))
+				}
+				if _, err := io.CopyN(w, newPatternReader(), responseSize); err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer srv.Close()
+
+			resp, err := testConnectionHandle(srv.Client(), srv.URL).RequestStream(t.Context(), RequestOpts{Path: "/export"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if got := resp.Headers.Get("Content-Disposition"); got != `attachment; filename="export.bin"` {
+				t.Errorf("Content-Disposition = %q", got)
+			}
+			hash := sha256.New()
+			written, err := io.Copy(hash, resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if written != responseSize || !bytes.Equal(hash.Sum(nil), wantHash) {
+				t.Fatalf("response = %d bytes, hash %x; want %d bytes, hash %x", written, hash.Sum(nil), responseSize, wantHash)
+			}
+		})
+	}
+}
+
+func TestConnectionBufferedMethodsRejectLargeJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":"`)
+		_, _ = io.CopyN(w, repeatedByteReader('a'), MaxBufferedResponseBytes)
+		_, _ = io.WriteString(w, `"}`)
+	}))
+	defer srv.Close()
+	h := testConnectionHandle(srv.Client(), srv.URL)
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "Request", call: func() error {
+			_, err := h.Request(t.Context(), RequestOpts{Path: "/large.json"})
+			return err
+		}},
+		{name: "RequestJSON", call: func() error {
+			_, err := RequestJSON[map[string]any](t.Context(), h, RequestOpts{Path: "/large.json"})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.call(); !errors.Is(err, ErrOutputTooLarge) {
+				t.Fatalf("error = %v, want ErrOutputTooLarge", err)
+			}
+		})
+	}
+}
+
+func TestConnectionRequestStreamReportsPrematureResponseClose(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1024")
+		_, _ = io.WriteString(w, "partial")
+	}))
+	defer srv.Close()
+
+	resp, err := testConnectionHandle(srv.Client(), srv.URL).RequestStream(t.Context(), RequestOpts{Path: "/export"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("read error = %v, want io.ErrUnexpectedEOF", err)
+	}
+	if string(body) != "partial" {
+		t.Fatalf("body = %q, want partial", body)
+	}
+}
+
 func testConnectionHandle(client *http.Client, baseURL string) *ConnectionHandle {
 	a := &Agent{httpClient: client, phase: agentRunning}
 	a.client = newAirlockClient(baseURL, "tok", client)
@@ -232,6 +330,41 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { re
 type trackingReadCloser struct {
 	io.Reader
 	closed bool
+}
+
+type patternReader struct {
+	pattern [sha256.Size]byte
+	offset  int
+}
+
+type repeatedByteReader byte
+
+func (r repeatedByteReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(r)
+	}
+	return len(p), nil
+}
+
+func newPatternReader() *patternReader {
+	return &patternReader{pattern: sha256.Sum256([]byte("airlock connection streaming test pattern"))}
+}
+
+func (r *patternReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.pattern[r.offset]
+		r.offset = (r.offset + 1) % len(r.pattern)
+	}
+	return len(p), nil
+}
+
+func patternHash(t *testing.T, size int64) []byte {
+	t.Helper()
+	hash := sha256.New()
+	if _, err := io.CopyN(hash, newPatternReader(), size); err != nil {
+		t.Fatal(err)
+	}
+	return hash.Sum(nil)
 }
 
 func (r *trackingReadCloser) Close() error {

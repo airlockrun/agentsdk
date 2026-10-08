@@ -7,9 +7,27 @@
 agentsdk bundles htmx and exposes:
 
 - `agentsdk.Assets.HTMX` — versioned URL such as
-  `/__air/assets/htmx-2.0.10.min.js`. Use it in the layout head:
+  `/__air/assets/htmx-4.0.0.min.js`. Use it in the layout head:
   `<script src={ agentsdk.Assets.HTMX }></script>`.
 - `agentsdk.HTMXVersion` — the bundled version string.
+
+The bundled asset is htmx 4 core, not the `htmax` extension bundle. htmx 4
+uses explicit attribute inheritance (`hx-target:inherited`, for example),
+colon-separated event names, and `event.detail.ctx` for request and response
+state. It disables elements during a request with `hx-disable`; `hx-ignore`
+disables htmx processing for a subtree. HTTP errors swap by default, while 204
+and 304 are no-swap statuses. Use `hx-status` or `htmx.config.noSwap` when an
+error response must not replace its target.
+
+The generated layout adds 401 to `noSwap` and handles
+`htmx:response:error` through `event.detail.ctx.response.status`. It reloads the
+page so Airlock can enter the authentication relay. That navigation does not
+carry `HX-Request`, so the htmx listener cannot recursively reload itself.
+
+The optional upstream `hx-csp` extension enforces nonce-based policy for htmx
+inline-script and expression paths. It is not part of the bundled core asset;
+an application that chooses it must serve and configure the extension together
+with its own Content Security Policy.
 
 `/__air/assets/*` is framework-reserved. Register agent-owned embedded files
 with `RegisterStaticAsset`; the SDK serves them publicly from `/static/{name}`

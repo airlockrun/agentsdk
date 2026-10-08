@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/airlockrun/agentsdk"
@@ -51,6 +52,10 @@ func cmdDeploy(args []string) error {
 	if err != nil {
 		return err
 	}
+	hostedDevelopment := os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != ""
+	if hostedDevelopment && os.Getenv("AIRLOCK_DEPLOY_APPROVED") != "1" {
+		return errors.New("hosted developer deployment requires approval; rerun this exact command through bash with request_permission=true")
+	}
 	if _, err := os.Stat(filepath.Join(f.dir, "go.mod")); err != nil {
 		return fmt.Errorf("deploy requires an agent repo with go.mod in %s: %w", f.dir, err)
 	}
@@ -70,6 +75,21 @@ func cmdDeploy(args []string) error {
 	}
 	boundRemote, _ := binding.remote(remoteName)
 	baseURL := normalizeBaseURL(f.url)
+	if hostedDevelopment {
+		injectedURL := normalizeBaseURL(os.Getenv("AIRLOCK_API_URL"))
+		injectedAgent := strings.TrimSpace(os.Getenv("AIRLOCK_AGENT_ID"))
+		if injectedURL == "" || injectedAgent == "" {
+			return errors.New("developer session requires AIRLOCK_API_URL and AIRLOCK_AGENT_ID")
+		}
+		if baseURL != "" && baseURL != injectedURL {
+			return fmt.Errorf("developer session is restricted to %s", injectedURL)
+		}
+		baseURL = injectedURL
+		if boundRemote.AgentID != "" && boundRemote.AgentID != injectedAgent {
+			return errors.New("workspace binding does not match AIRLOCK_AGENT_ID")
+		}
+		boundRemote.AirlockURL, boundRemote.AgentID = injectedURL, injectedAgent
+	}
 	if baseURL != "" && boundRemote.AirlockURL != "" && baseURL != normalizeBaseURL(boundRemote.AirlockURL) {
 		return fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remoteName, boundRemote.AirlockURL, baseURL)
 	}
@@ -94,6 +114,14 @@ func cmdDeploy(args []string) error {
 	}
 	var target agentRemoteBinding
 	if !f.create {
+		if hostedDevelopment {
+			if err := hydrateDeveloperSource(ctx, baseURL, token, &boundRemote); err != nil {
+				return err
+			}
+		}
+		if err := reconcilePendingDeployment(ctx, f.dir, remoteName, &binding, &boundRemote, baseURL, token); err != nil {
+			return err
+		}
 		target, err = resolveAgentTarget(ctx, baseURL, token, f.agent, remoteName, boundRemote)
 		if err != nil {
 			return explainDeployTargetError(ctx, baseURL, token, remoteName, f.dir, f.agent, boundRemote, err)
@@ -173,9 +201,31 @@ func cmdDeploy(args []string) error {
 	if accepted.State != localState {
 		return fmt.Errorf("Airlock returned candidate source state %s, want uploaded state %s", accepted.State, localState)
 	}
-	if previousState == accepted.State && !f.force {
+	if accepted.TaskID == "" {
+		generation, parseErr := strconv.ParseInt(accepted.Generation, 10, 64)
+		if parseErr != nil || generation < 0 {
+			return fmt.Errorf("Airlock returned invalid source generation %q", accepted.Generation)
+		}
+		target.AirlockURL = baseURL
+		target.SourceState = accepted.State
+		target.SourceETag = (wire.SourceVersion{Revision: accepted.Revision, Generation: generation}).ETag()
+		target.DeveloperSession = boundRemote.DeveloperSession
+		binding.putRemote(remoteName, target)
+		if err := writeAgentBinding(f.dir, binding); err != nil {
+			return fmt.Errorf("save synchronized source state: %w", err)
+		}
 		fmt.Println("Source is unchanged; no build started")
 	} else {
+		target.AirlockURL = baseURL
+		target.SourceETag = boundRemote.SourceETag
+		target.SourceState = boundRemote.SourceState
+		target.DeveloperSession = boundRemote.DeveloperSession
+		target.PendingTask = accepted.TaskID
+		target.PendingSourceState = accepted.State
+		binding.putRemote(remoteName, target)
+		if err := writeAgentBinding(f.dir, binding); err != nil {
+			return fmt.Errorf("save accepted deployment task: %w", err)
+		}
 		fmt.Printf("Source candidate %s accepted; task %s started\n", accepted.Revision, accepted.TaskID)
 	}
 	return nil
@@ -454,6 +504,10 @@ func resolveAgentTarget(ctx context.Context, baseURL, token, flagAgent, remoteNa
 	}
 	if normalizeBaseURL(binding.AirlockURL) == normalizeBaseURL(baseURL) && binding.AgentID == resolved.AgentID {
 		resolved.SourceState = binding.SourceState
+		resolved.SourceETag = binding.SourceETag
+		resolved.DeveloperSession = binding.DeveloperSession
+		resolved.PendingTask = binding.PendingTask
+		resolved.PendingSourceState = binding.PendingSourceState
 	}
 	return resolved, nil
 }
@@ -621,6 +675,9 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceETag,
 			req.Header.Set("If-Match", quoteETag(sourceETag))
 		}
 		req.Header.Set("X-Airlock-Commit-Message", commitMessage)
+		if err := setDeveloperDeploymentHeaders(req); err != nil {
+			return nil, err
+		}
 		return req, nil
 	})
 	if err != nil {
@@ -649,27 +706,23 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceETag,
 	return accepted, nil
 }
 
+func setDeveloperDeploymentHeaders(req *http.Request) error {
+	sessionID := strings.TrimSpace(os.Getenv("AIRLOCK_DEVELOPMENT_SESSION"))
+	runID := strings.TrimSpace(os.Getenv("AIRLOCK_DEVELOPER_RUN_ID"))
+	if sessionID == "" && runID == "" {
+		return nil
+	}
+	if !deployUUIDRe.MatchString(sessionID) || !deployUUIDRe.MatchString(runID) {
+		return errors.New("hosted developer deployment requires valid session and run IDs")
+	}
+	req.Header.Set("X-Airlock-Developer-Session", sessionID)
+	req.Header.Set("X-Airlock-Developer-Run", runID)
+	return nil
+}
+
 func observeSourceETag(ctx context.Context, baseURL, token, agentID string) (string, error) {
-	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodHead, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", nil)
-		if err == nil {
-			req.Header.Set("Authorization", "Bearer "+token)
-		}
-		return req, err
-	})
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", newHTTPStatusError(resp.StatusCode, resp.Status, body)
-	}
-	etag := unquoteETag(resp.Header.Get("ETag"))
-	if _, err := wire.ParseSourceETag(etag); err != nil {
-		return "", err
-	}
-	return etag, nil
+	metadata, err := observeSourceMetadata(ctx, baseURL, token, agentID)
+	return metadata.ETag, err
 }
 
 func writeSourceArchive(w io.Writer, dir string) error {

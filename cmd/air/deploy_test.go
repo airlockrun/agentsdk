@@ -12,6 +12,7 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/scaffold"
+	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestDeployUpdateAgentBaseImage(t *testing.T) {
@@ -72,6 +73,116 @@ func TestDeployValidatesRuntimeFilesBeforeUpload(t *testing.T) {
 	err := cmdDeploy([]string{dir, "-m", "test invalid manifest"})
 	if err == nil || !strings.Contains(err.Error(), "runtime files") || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("cmdDeploy() error = %v", err)
+	}
+}
+
+func TestHostedDeployRequiresExactApprovalEnvironment(t *testing.T) {
+	t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", "11111111-1111-1111-1111-111111111111")
+	t.Setenv("AIRLOCK_DEPLOY_APPROVED", "")
+	err := cmdDeploy([]string{"-m", "Deploy"})
+	if err == nil || !strings.Contains(err.Error(), "request_permission=true") {
+		t.Fatalf("cmdDeploy() error = %v", err)
+	}
+
+	t.Setenv("AIRLOCK_DEPLOY_APPROVED", "1")
+	err = cmdDeploy([]string{"-m", "Deploy"})
+	if err == nil || strings.Contains(err.Error(), "request_permission=true") {
+		t.Fatalf("approved cmdDeploy() error = %v", err)
+	}
+}
+
+func TestHydrateDeveloperSource(t *testing.T) {
+	version := wire.SourceVersion{Revision: "11111111-1111-1111-1111-111111111111", Generation: 3}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodHead || r.URL.Path != "/api/v1/agents/22222222-2222-2222-2222-222222222222/source" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("ETag", quoteETag(version.ETag()))
+		w.Header().Set(wire.SourceStateHeader, "sha256:source")
+	}))
+	defer server.Close()
+	remote := agentRemoteBinding{
+		AgentID:     "22222222-2222-2222-2222-222222222222",
+		SourceState: "sha256:source-from-agent",
+	}
+
+	if err := hydrateDeveloperSource(t.Context(), server.URL, "token", &remote); err != nil {
+		t.Fatal(err)
+	}
+	if remote.SourceState != "sha256:source" || remote.SourceETag != version.ETag() {
+		t.Fatalf("remote = %+v", remote)
+	}
+}
+
+func TestHydrateDeveloperSourceAllowsDraft(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	remote := agentRemoteBinding{AgentID: "22222222-2222-2222-2222-222222222222"}
+
+	if err := hydrateDeveloperSource(t.Context(), server.URL, "token", &remote); err != nil {
+		t.Fatal(err)
+	}
+	if remote.SourceState != "" || remote.SourceETag != "" {
+		t.Fatalf("remote = %+v", remote)
+	}
+}
+
+func TestSetDeveloperDeploymentHeadersRequiresExactRun(t *testing.T) {
+	const (
+		sessionID = "11111111-1111-1111-1111-111111111111"
+		runID     = "22222222-2222-2222-2222-222222222222"
+	)
+	t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", sessionID)
+	t.Setenv("AIRLOCK_DEVELOPER_RUN_ID", runID)
+	req := httptest.NewRequest(http.MethodPut, "/", nil)
+	if err := setDeveloperDeploymentHeaders(req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Header.Get("X-Airlock-Developer-Session") != sessionID || req.Header.Get("X-Airlock-Developer-Run") != runID {
+		t.Fatalf("headers = %v", req.Header)
+	}
+	t.Setenv("AIRLOCK_DEVELOPER_RUN_ID", "")
+	if err := setDeveloperDeploymentHeaders(httptest.NewRequest(http.MethodPut, "/", nil)); err == nil {
+		t.Fatal("missing developer run ID was accepted")
+	}
+}
+
+func TestReconcilePendingDeploymentRefreshesCanonicalBinding(t *testing.T) {
+	const (
+		agentID = "11111111-1111-1111-1111-111111111111"
+		taskID  = "22222222-2222-2222-2222-222222222222"
+		state   = "sha256:candidate"
+		etag    = "airlock-source-v1:33333333-3333-3333-3333-333333333333:7"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/tasks/" + taskID:
+			fmt.Fprintf(w, `{"id":"task:%s","kind":"upgrade","status":"succeeded"}`, taskID)
+		case "/api/v1/agents/" + agentID + "/source":
+			w.Header().Set("ETag", `"`+etag+`"`)
+			w.Header().Set("X-Airlock-Source-State", state)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	binding := agentBinding{}
+	remote := agentRemoteBinding{AirlockURL: srv.URL, AgentID: agentID, SourceETag: "old", SourceState: "sha256:old", PendingTask: taskID, PendingSourceState: state}
+	binding.putRemote("prod", remote)
+	if err := writeAgentBinding(dir, binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcilePendingDeployment(t.Context(), dir, "prod", &binding, &remote, srv.URL, "token"); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := loadAgentBinding(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := got.remote("prod")
+	if updated.SourceState != state || updated.SourceETag != etag || updated.PendingTask != "" || updated.PendingSourceState != "" {
+		t.Fatalf("binding = %+v", updated)
 	}
 }
 

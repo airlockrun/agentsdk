@@ -483,6 +483,24 @@ func accessTokenForURLAfterRejection(ctx context.Context, baseURL, rejectedAcces
 	if err != nil {
 		return "", err
 	}
+	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
+		injectedURL := os.Getenv("AIRLOCK_API_URL")
+		injectedToken := os.Getenv("AIRLOCK_TOKEN")
+		if injectedURL == "" || injectedToken == "" {
+			return "", errors.New("developer session requires AIRLOCK_API_URL and AIRLOCK_TOKEN")
+		}
+		injectedOrigin, err := canonicalAuthOrigin(injectedURL)
+		if err != nil {
+			return "", fmt.Errorf("invalid AIRLOCK_API_URL: %w", err)
+		}
+		if baseURL != injectedOrigin {
+			return "", fmt.Errorf("developer session token is restricted to %s", injectedOrigin)
+		}
+		if rejectedAccessToken != "" {
+			return "", errTokenNotManaged
+		}
+		return injectedToken, nil
+	}
 	opCtx, cancel := context.WithTimeout(ctx, authMutationTimeout)
 	defer cancel()
 	err = withCredentialsLock(opCtx, func(path string) error {

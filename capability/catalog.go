@@ -107,7 +107,7 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 			OutputSchema: t.OutputSchema, InputExamples: t.InputExamples})
 	}
 	for _, c := range manifest.Connections {
-		if c.BindingMode != wire.BindingShared && c.BindingMode != wire.BindingPerUser {
+		if c.BindingMode != wire.BindingShared && c.BindingMode != wire.BindingPerUser && !(c.AuthMode == wire.ConnectionAuthNone && c.BindingMode == "") {
 			return nil, fmt.Errorf("connection %q: invalid binding mode %q", c.Slug, c.BindingMode)
 		}
 		for _, op := range []string{"request", "request_json"} {
@@ -154,7 +154,7 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 		return nil
 	}
 	for _, m := range manifest.MCPServers {
-		if m.BindingMode != wire.BindingShared && m.BindingMode != wire.BindingPerUser {
+		if m.BindingMode != wire.BindingShared && m.BindingMode != wire.BindingPerUser && !(m.AuthMode == wire.MCPAuthNone && m.BindingMode == "") {
 			return nil, fmt.Errorf("MCP %q: invalid binding mode %q", m.Slug, m.BindingMode)
 		}
 		if err := addExternal(MCP, m.Slug, m.Slug, wire.AccessUser, discovery.MCPSchemas[m.Slug]); err != nil {

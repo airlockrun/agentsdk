@@ -129,6 +129,21 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 	}
 	bound, _ := binding.remote(remote)
 	baseURL := normalizeBaseURL(f.url)
+	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
+		injectedURL := normalizeBaseURL(os.Getenv("AIRLOCK_API_URL"))
+		injectedAgent := strings.TrimSpace(os.Getenv("AIRLOCK_AGENT_ID"))
+		if injectedURL == "" || injectedAgent == "" {
+			return errors.New("developer session requires AIRLOCK_API_URL and AIRLOCK_AGENT_ID")
+		}
+		if baseURL != "" && baseURL != injectedURL {
+			return fmt.Errorf("developer session is restricted to %s", injectedURL)
+		}
+		baseURL = injectedURL
+		if bound.AgentID != "" && bound.AgentID != injectedAgent {
+			return errors.New("workspace binding does not match AIRLOCK_AGENT_ID")
+		}
+		bound.AirlockURL, bound.AgentID = injectedURL, injectedAgent
+	}
 	if baseURL != "" && bound.AirlockURL != "" && baseURL != normalizeBaseURL(bound.AirlockURL) {
 		return fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remote, bound.AirlockURL, baseURL)
 	}
@@ -147,6 +162,60 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 		return err
 	}
 	path := "/api/v1/agents/" + url.PathEscape(target.AgentID) + "/builds"
+	if command == "status" && f.build == "" && bound.PendingTask != "" {
+		for {
+			task, taskErr := getDeploymentTask(ctx, baseURL, token, bound.PendingTask)
+			if taskErr != nil {
+				return fmt.Errorf("get deployment task: %w", taskErr)
+			}
+			if f.json && task.Info.Status != "succeeded" {
+				if err := writeProtoJSON(task.Info); err != nil {
+					return err
+				}
+			} else if !f.json {
+				fmt.Printf("Task: %s\nTask kind: %s\nTask status: %s\n", strings.TrimPrefix(task.Info.Id, "task:"), safeTableCell(task.Info.Kind), safeTableCell(task.Info.Status))
+				if task.Error != "" {
+					fmt.Printf("Error: %s\n", safeTableCell(task.Error))
+				}
+			}
+			switch task.Info.Status {
+			case "queued", "running":
+				if !f.watch {
+					return nil
+				}
+				timer := time.NewTimer(pollInterval)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+				continue
+			case "failed", "cancelled":
+				taskID := bound.PendingTask
+				bound.PendingTask, bound.PendingSourceState = "", ""
+				binding.putRemote(remote, bound)
+				if err := writeAgentBinding(f.dir, binding); err != nil {
+					return err
+				}
+				if task.Error == "" {
+					task.Error = task.Info.Status
+				}
+				return fmt.Errorf("deployment task %s %s: %s", taskID, task.Info.Status, task.Error)
+			case "succeeded":
+				if err := reconcilePendingDeployment(ctx, f.dir, remote, &binding, &bound, baseURL, token); err != nil {
+					return err
+				}
+				if !deployUUIDRe.MatchString(task.BuildID) {
+					return errors.New("completed deployment task omitted its build ID")
+				}
+				f.build = task.BuildID
+			default:
+				return fmt.Errorf("deployment task has unknown status %q", task.Info.Status)
+			}
+			break
+		}
+	}
 	if command == "list" || f.build == "" {
 		var resp airlockv1.ListAgentBuildsResponse
 		if err := doProto(ctx, baseURL, http.MethodGet, path, token, nil, &resp); err != nil {

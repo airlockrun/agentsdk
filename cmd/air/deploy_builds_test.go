@@ -194,6 +194,52 @@ func TestDeployBuildCommands(t *testing.T) {
 	}
 }
 
+func TestDeployStatusClearsFailedPendingTask(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
+	const taskID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer "+testAccessToken {
+			t.Errorf("request: %s %s auth=%s", r.Method, r.URL, r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/api/v1/agents/" + testBuildAgentID:
+			fmt.Fprintf(w, `{"agent":{"id":%q,"slug":"todo"}}`, testBuildAgentID)
+		case "/api/v1/tasks/" + taskID:
+			w.Header().Set("X-Airlock-Task-Error", "compile failed")
+			fmt.Fprintf(w, `{"id":%q,"kind":"agent_deploy","status":"failed"}`, taskID)
+		default:
+			t.Errorf("unexpected path %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	if err := saveLoginCredentials(srv.URL, "test@example.com", testAccessToken, ""); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	binding := agentBinding{}
+	binding.putRemote("prod", agentRemoteBinding{
+		AirlockURL: srv.URL, AgentID: testBuildAgentID, Slug: "todo",
+		SourceState: "sha256:old", SourceETag: "old", PendingTask: taskID, PendingSourceState: "sha256:new",
+	})
+	if err := writeAgentBinding(dir, binding); err != nil {
+		t.Fatal(err)
+	}
+	_, err := captureCommandStdoutResult(t, func() error { return cmdDeploy([]string{"status", dir, "--remote", "prod"}) })
+	if err == nil || !strings.Contains(err.Error(), taskID+" failed: compile failed") {
+		t.Fatalf("error = %v", err)
+	}
+	updated, ok, err := loadAgentBinding(dir)
+	if err != nil || !ok {
+		t.Fatalf("load binding: ok=%v err=%v", ok, err)
+	}
+	remote, _ := updated.remote("prod")
+	if remote.PendingTask != "" || remote.PendingSourceState != "" || remote.SourceState != "sha256:old" || remote.SourceETag != "old" {
+		t.Fatalf("unexpected binding after failed task: %+v", remote)
+	}
+}
+
 func TestDeployBuildWatch(t *testing.T) {
 	for _, terminal := range []string{"complete", "failed", "cancel"} {
 		t.Run(terminal, func(t *testing.T) {

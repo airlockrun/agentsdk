@@ -49,7 +49,7 @@ func TestMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", NoticesFilename, err)
 	}
-	for _, want := range []string{"Lucide Icons 1.34.0", "Lucide Icons and Contributors", "Cole Bemis"} {
+	for _, want := range []string{"htmx 4.0.0", "Zero-Clause BSD", "Lucide Icons 1.34.0", "Lucide Icons and Contributors", "Cole Bemis"} {
 		if !strings.Contains(string(notices), want) {
 			t.Errorf("%s missing %q", NoticesFilename, want)
 		}
@@ -106,6 +106,20 @@ func TestMaterialize(t *testing.T) {
 		t.Error("main.go missing SDK static asset registration")
 	}
 
+	layout, err := os.ReadFile(filepath.Join(dir, "views", "layout.templ"))
+	if err != nil {
+		t.Fatalf("read views/layout.templ: %v", err)
+	}
+	for _, want := range []string{
+		`content='{"noSwap":[204,304,401]}'`,
+		`document.addEventListener("htmx:response:error"`,
+		`e.detail.ctx.response.status === 401`,
+	} {
+		if !strings.Contains(string(layout), want) {
+			t.Errorf("views/layout.templ missing HTMX 4 auth handling %q", want)
+		}
+	}
+
 	mainTest, err := os.ReadFile(filepath.Join(dir, "main_test.go"))
 	if err != nil {
 		t.Fatalf("read main_test.go: %v", err)
@@ -150,7 +164,9 @@ func TestMaterialize(t *testing.T) {
 	for _, want := range []string{
 		"Give action buttons an idle icon",
 		`@ActionIcon("domain-appropriate-name")`,
-		`hx-disabled-elt="this"`,
+		`hx-disable="this"`,
+		`hx-target:inherited`,
+		`event.detail.ctx`,
 		"github.com/airlockrun/agentsdk/lucide",
 	} {
 		if !strings.Contains(string(agentsMD), want) {
@@ -415,7 +431,7 @@ func TestInstallSkills(t *testing.T) {
 	for _, path := range []string{
 		"manifest.json",
 		"daisyui/SKILL.md",
-		"htmx/reference/docs.md",
+		"htmx/reference/htmx-guidance.md",
 		"lucide/SKILL.md",
 		"templ/reference/03-syntax-and-usage/06-if-else.md",
 	} {

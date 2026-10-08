@@ -27,10 +27,13 @@ import (
 
 const manifestName = "manifest.json"
 
+const htmxRevision = "4195bc0dc26b612ea5bea46f5914c6386eadeba3"
+
 type manifest struct {
 	TemplVersion  string            `json:"templ_version"`
 	DaisyVersion  string            `json:"daisyui_version"`
 	HTMXVersion   string            `json:"htmx_version"`
+	HTMXRevision  string            `json:"htmx_revision"`
 	LucideVersion string            `json:"lucide_version"`
 	Sources       map[string]string `json:"sources"`
 	Files         map[string]string `json:"files"`
@@ -140,9 +143,13 @@ func syncBundle(root, dst string) error {
 		}
 	}
 
-	htmxTag := "v" + strings.TrimPrefix(agentsdk.HTMXVersion, "v")
-	for _, name := range []string{"docs.md", "reference.md"} {
-		url := fmt.Sprintf("https://raw.githubusercontent.com/bigskysoftware/htmx/%s/www/content/%s", htmxTag, name)
+	for _, name := range []string{
+		"htmx-debugging.md",
+		"htmx-extension-authoring.md",
+		"htmx-guidance.md",
+		"htmx-upgrade-from-htmx2.md",
+	} {
+		url := fmt.Sprintf("https://raw.githubusercontent.com/bigskysoftware/htmx/%s/dist/skills/%s", htmxRevision, name)
 		data, err := download(url)
 		if err != nil {
 			return fmt.Errorf("sync htmx %s: %w", name, err)
@@ -158,7 +165,7 @@ func syncBundle(root, dst string) error {
 	}{
 		{"daisyui", fmt.Sprintf("https://raw.githubusercontent.com/saadeghi/daisyui/%s/LICENSE", scaffold.DaisyUIVersion)},
 		{"templ", fmt.Sprintf("https://raw.githubusercontent.com/a-h/templ/%s/LICENSE", scaffold.TemplVersion)},
-		{"htmx", fmt.Sprintf("https://raw.githubusercontent.com/bigskysoftware/htmx/%s/LICENSE", htmxTag)},
+		{"htmx", fmt.Sprintf("https://raw.githubusercontent.com/bigskysoftware/htmx/%s/LICENSE", htmxRevision)},
 		{"lucide", fmt.Sprintf("https://unpkg.com/lucide-static@%s/LICENSE", lucide.Version)},
 	}
 	for _, license := range licenses {
@@ -178,11 +185,12 @@ func syncBundle(root, dst string) error {
 		TemplVersion:  scaffold.TemplVersion,
 		DaisyVersion:  scaffold.DaisyUIVersion,
 		HTMXVersion:   agentsdk.HTMXVersion,
+		HTMXRevision:  htmxRevision,
 		LucideVersion: lucide.Version,
 		Sources: map[string]string{
 			"daisyui": daisyArchive + " (skills/daisyui, install subskill removed)",
 			"templ":   templArchive + " (docs/docs/03-syntax-and-usage and 04-core-concepts)",
-			"htmx":    fmt.Sprintf("https://github.com/bigskysoftware/htmx/tree/%s/www/content", htmxTag),
+			"htmx":    fmt.Sprintf("https://github.com/bigskysoftware/htmx/tree/%s/dist/skills", htmxRevision),
 			"lucide":  fmt.Sprintf("https://unpkg.com/lucide-static@%s/sprite.svg", lucide.Version),
 		},
 	}
@@ -228,7 +236,7 @@ func checkBundle(dir string) error {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return fmt.Errorf("parse manifest: %w", err)
 	}
-	if m.TemplVersion != scaffold.TemplVersion || m.DaisyVersion != scaffold.DaisyUIVersion || m.HTMXVersion != agentsdk.HTMXVersion || m.LucideVersion != lucide.Version {
+	if m.TemplVersion != scaffold.TemplVersion || m.DaisyVersion != scaffold.DaisyUIVersion || m.HTMXVersion != agentsdk.HTMXVersion || m.HTMXRevision != htmxRevision || m.LucideVersion != lucide.Version {
 		return fmt.Errorf("manifest versions are stale; run go run ./internal/cmd/syncskills")
 	}
 	if err := validateRequiredFiles(dir); err != nil {
@@ -268,8 +276,10 @@ func validateRequiredFiles(dir string) error {
 		"templ/reference/03-syntax-and-usage/06-if-else.md",
 		"templ/reference/04-core-concepts/01-components.md",
 		"htmx/SKILL.md",
-		"htmx/reference/docs.md",
-		"htmx/reference/reference.md",
+		"htmx/reference/htmx-debugging.md",
+		"htmx/reference/htmx-extension-authoring.md",
+		"htmx/reference/htmx-guidance.md",
+		"htmx/reference/htmx-upgrade-from-htmx2.md",
 		"lucide/SKILL.md",
 		"lucide/UPSTREAM_LICENSE",
 		"lucide/reference/icons.md",

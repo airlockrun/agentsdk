@@ -346,7 +346,7 @@ func validateConnection(c *Connection) {
 		panic(fmt.Sprintf("agentsdk: RegisterConnection(%q): invalid AuthMode %q", c.Slug, c.AuthMode))
 	}
 	validateAuthInjection(fmt.Sprintf("RegisterConnection(%q)", c.Slug), c.AuthInjection)
-	validateBindingMode(fmt.Sprintf("RegisterConnection(%q)", c.Slug), c.BindingMode)
+	validateBindingMode(fmt.Sprintf("RegisterConnection(%q)", c.Slug), c.BindingMode, c.AuthMode == ConnectionAuthNone)
 	for key := range c.Headers {
 		validateHeaderName(fmt.Sprintf("RegisterConnection(%q).Headers key", c.Slug), key, true)
 	}
@@ -426,7 +426,7 @@ func validateMCP(m *MCP) {
 		panic(fmt.Sprintf("agentsdk: RegisterMCP(%q): invalid AuthMode %q", m.Slug, m.AuthMode))
 	}
 	validateAuthInjection(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.AuthInjection)
-	validateBindingMode(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.BindingMode)
+	validateBindingMode(fmt.Sprintf("RegisterMCP(%q)", m.Slug), m.BindingMode, m.AuthMode == MCPAuthNone)
 }
 
 func validateInstruction(i *Instruction) {
@@ -487,11 +487,14 @@ func validateDirectoryAccess(context string, access Access) {
 	validateAccess(context, access)
 }
 
-func validateBindingMode(context string, mode BindingMode) {
+func validateBindingMode(context string, mode BindingMode, optional bool) {
 	switch mode {
 	case BindingShared, BindingPerUser:
 		return
 	case "":
+		if optional {
+			return
+		}
 		panic("agentsdk: " + context + ": BindingMode is required")
 	default:
 		panic(fmt.Sprintf("agentsdk: %s: invalid BindingMode %q", context, mode))

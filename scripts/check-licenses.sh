@@ -20,6 +20,7 @@ classify() {
 	grep -qiE "Commons Clause" "$file" && { echo "DENY Commons-Clause"; return; }
 	grep -qiE "Elastic License" "$file" && { echo "DENY Elastic"; return; }
 	grep -qiE "Apache License" "$file" && grep -qiE "Version 2\.0" "$file" && { echo "ALLOW Apache-2.0"; return; }
+	grep -qiE "Zero-Clause BSD" "$file" && { echo "ALLOW 0BSD"; return; }
 	grep -qiE "Permission to use, copy, modify, and(/or)? distribute" "$file" && { echo "ALLOW ISC"; return; }
 	grep -qiE "Permission is hereby granted, free of charge" "$file" && { echo "ALLOW MIT"; return; }
 	grep -qiE "Redistribution and use in source and binary forms" "$file" && { echo "ALLOW BSD"; return; }
@@ -57,6 +58,11 @@ done <"$modules"
 lucide_result=$(classify "$ROOT/lucide/UPSTREAM_LICENSE")
 if [ "$lucide_result" != "ALLOW ISC" ]; then
 	echo "  Lucide Icons bundled asset - $lucide_result, want ALLOW ISC" >>"$violations"
+fi
+
+htmx_result=$(classify "$ROOT/scaffold/skills/htmx/UPSTREAM_LICENSE")
+if [ "$htmx_result" != "ALLOW 0BSD" ]; then
+	echo "  htmx bundled asset - $htmx_result, want ALLOW 0BSD" >>"$violations"
 fi
 
 if [ -s "$violations" ]; then
