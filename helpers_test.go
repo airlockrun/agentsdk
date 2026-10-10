@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/airlockrun/agentsdk/internal/mockairlock"
+	"github.com/airlockrun/goai/stream"
+	"github.com/airlockrun/goai/testutil"
 )
 
 func init() {
@@ -31,6 +33,26 @@ func testAgent(t *testing.T) (*Agent, *mockairlock.Mock) {
 	mock, url := mockairlock.New()
 	t.Cleanup(mock.Close)
 
+	return newTestAgent(t, url), mock
+}
+
+func testAgentWithModels(t *testing.T, slots []string) (*Agent, *mockairlock.Mock) {
+	t.Helper()
+	models := make(map[string]stream.Model, len(slots))
+	for _, slot := range slots {
+		model, err := testutil.NewMockModel(testutil.MockConfig{ID: "test/" + slot, Default: &testutil.MockResponse{Text: "Hello", Usage: stream.UsageFrom(10, 5)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		models[slot] = model
+	}
+	mock, url := mockairlock.NewWithModels(models)
+	t.Cleanup(mock.Close)
+	return newTestAgent(t, url), mock
+}
+
+func newTestAgent(t *testing.T, url string) *Agent {
+	t.Helper()
 	a := newAgentRegistrationState(Config{Description: "test agent"})
 	a.agentID = "test-agent"
 	a.apiURL = url
@@ -45,5 +67,5 @@ func testAgent(t *testing.T) (*Agent, *mockairlock.Mock) {
 	a.client = newAirlockClient(url, "test-token", a.httpClient)
 	a.AddSensitive("test-token")
 	a.phase = agentRunning
-	return a, mock
+	return a
 }

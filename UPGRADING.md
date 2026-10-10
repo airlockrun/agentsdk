@@ -4,6 +4,37 @@ This file contains source migrations that Airlock can apply while rebuilding an
 application. Each entry starts at the first SDK release that requires the
 change. Compatible releases without source changes do not need an entry.
 
+## v0.8.1-alpha.9
+
+Select local live models using full `slug/provider/model` references in
+`agenttest.Options.Models`, `-agenttest.model=slot=slug/provider/model`, and the
+local runtime JSON `models` string map. Remove `Options.Auth` and
+`-agenttest.auth`. Put credentials only in the private OS user `sol/config.json`,
+using named provider entries prepared through Sol's account-scoped auth commands.
+For example, use `"models":{"@default":"work/openai/gpt-5.4"}` and
+`sol auth login work/openai --method codex`. See
+`/libs/agentsdk/reference/local-development.md` for startup and dependency requirements.
+
+Use `goai/testutil.NewMockModel(testutil.MockConfig{ID: ..., ...})` for streaming
+model tests. Configure Text, ToolCalls and Usage in MockResponse, or set Events
+for a precise event sequence. Responses supplies a sequence, Default answers
+unmatched requests, and Rules selects responses by LastUserText or Match.
+Handle the constructor error. Read captured call options through Requests();
+Configure changes response behavior while retaining the model's ID.
+MockConfig.Stream supplies custom request-boundary streaming behavior.
+
+Test registered application tasks with `agenttest.RunAgent`, the declared model
+slot's `env.MockModel(slot)` and an explicit executor factory. The mock host
+rejects hosted task lifecycle operations. Test production AgentHandle transport
+contracts with an isolated test-owned HTTP responder. Configure app streaming
+calls through canonical per-slot MockConfig/MockResponse values.
+
+For explicit live selection, call `agenttest.RegisterFlags(flag.CommandLine)`
+once in test-package setup and pass its options to NewWithOptions. Unselected
+text/vision slots use mocks; missing live configuration fails. App code only
+declares ModelSlot and does not bind test models. See
+`/libs/agentsdk/reference/testing.md` for the runnable registered-task example.
+
 ## v0.8.1-alpha.8
 
 Declare every app-storage prefix used by native Go code with

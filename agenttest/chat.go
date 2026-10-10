@@ -1,17 +1,16 @@
 package agenttest
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 
 	"github.com/airlockrun/agentsdk/capability"
 	"github.com/airlockrun/agentsdk/chatruntime"
+	"github.com/airlockrun/agentsdk/localruntime"
 	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/tool"
@@ -33,10 +32,14 @@ type ChatResult struct {
 // Input.Capabilities is an explicit subset of the manifest-based catalog; app
 // declarations are checked again by the SDK endpoint on every call.
 func (e *Env) Chat(ctx context.Context, scope wire.RuntimeContext, in chatruntime.Input) (*ChatResult, error) {
-	if e == nil || e.Agent == nil || in.Backend == nil {
+	if e == nil || e.Agent == nil || (in.Backend == nil && e.Storage == nil) {
 		return nil, errors.New("agenttest: agent and platform backend are required")
 	}
 	backend := &chatBackend{handler: e.Agent.Handler(), scope: scope, platform: in.Backend, catalog: in.Capabilities}
+	if e.Storage != nil {
+		backend.platform = &storageBackend{app: backend, fallback: in.Backend}
+		in.Model = &storageModel{Model: in.Model, storage: e.Storage, manifest: e.Agent.Manifest()}
+	}
 	in.Backend = backend
 	result, err := chatruntime.Run(ctx, in)
 	return &ChatResult{Run: result, AppCalls: backend.responses}, err
@@ -62,45 +65,28 @@ func (b *chatBackend) Invoke(ctx context.Context, invocation chatruntime.Invocat
 	if selected == nil {
 		return tool.Result{}, errors.New("unknown test capability")
 	}
-	if selected.Target == capability.Platform {
-		return b.platform.Invoke(ctx, invocation)
+	backend := &localruntime.AppBackend{URL: "http://fixture.app", Token: "test-token", Client: &http.Client{Transport: appHandlerTransport{backend: b}}, Scope: b.scope, Catalog: b.catalog, Platform: b.platform}
+	return backend.Invoke(ctx, invocation)
+}
+
+type appHandlerTransport struct{ backend *chatBackend }
+
+func (t appHandlerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.backend.handler == nil {
+		return nil, errors.New("agenttest: app HTTP handler is required")
 	}
-	if selected.Target != capability.App {
-		return tool.Result{}, errors.New("executor intrinsic cannot be dispatched")
-	}
-	capabilityID := invocation.CapabilityID
-	if selected.Path.Kind() == capability.AppTool {
-		capabilityID = capability.Local(capability.Tool, "", selected.Path.CanonicalOperation()).ID()
-	}
-	body, err := json.Marshal(wire.RuntimeInvokeRequest{RuntimeProtocol: wire.AppRuntimeProtocol, Context: b.scope, CapabilityID: capabilityID, ToolCallID: invocation.ToolCallID, Input: invocation.Input})
-	if err != nil {
-		return tool.Result{}, err
-	}
-	req := httptest.NewRequest(http.MethodPost, wire.RuntimeInvokePath, bytes.NewReader(body)).WithContext(ctx)
-	req.Header.Set("Authorization", "Bearer test-token")
 	w := httptest.NewRecorder()
-	b.handler.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		return tool.Result{}, fmt.Errorf("app invocation: HTTP %d: %s", w.Code, w.Body.String())
+	t.backend.handler.ServeHTTP(w, req)
+	if w.Code == http.StatusOK {
+		var response wire.RuntimeInvokeResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			return nil, err
+		}
+		t.backend.mu.Lock()
+		t.backend.responses = append(t.backend.responses, response)
+		t.backend.mu.Unlock()
 	}
-	var response wire.RuntimeInvokeResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
-		return tool.Result{}, err
-	}
-	if err := wire.CheckAppRuntimeProtocol(response.RuntimeProtocol); err != nil {
-		return tool.Result{}, err
-	}
-	b.mu.Lock()
-	b.responses = append(b.responses, response)
-	b.mu.Unlock()
-	result := tool.Result{Output: response.Output, Title: response.Title, Metadata: response.Metadata}
-	for _, ref := range response.Attachments {
-		result.Attachments = append(result.Attachments, tool.Attachment{Data: "s3ref:" + ref.Path, MimeType: ref.MimeType, Filename: ref.Filename})
-	}
-	if response.Error != "" {
-		return result, errors.New(response.Error)
-	}
-	return result, nil
+	return w.Result(), nil
 }
 
 // MemoryStore is a test-only conversation store. Production hosts use shared

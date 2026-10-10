@@ -82,7 +82,7 @@ func BuildImage(ctx context.Context, tag string) error {
 	if err := tw.Close(); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "docker", "build", "--network", "none", "-t", tag, "-")
+	cmd := exec.CommandContext(ctx, "docker", "build", "--network", "none", "--label", "run.airlock.executor.runtime-source="+RuntimeFingerprint(), "--label", "run.airlock.executor.deno-image="+DenoImage, "-t", tag, "-")
 	cmd.Stdin = &archive
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("jsexec: build image: %w: %s", err, out)

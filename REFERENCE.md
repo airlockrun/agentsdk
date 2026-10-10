@@ -1,10 +1,8 @@
 # agentsdk — API reference
 
-The canonical SDK reference covers registration, models, storage, credentials,
-JavaScript bindings, and runtime contracts. The Airlock builder reads it before
-generating or upgrading app code. For editor integration use
-`.airlock/toolchain/skills/agentsdk/SKILL.md`. For app layout, MVC, build-chain,
-NOTES.md, and UI conventions, read the scaffolded **`AGENTS.md` at the app root**.
+SDK APIs and runtime contracts for app authors and the Airlock builder.
+Editor skill: `.airlock/toolchain/skills/agentsdk/SKILL.md`. App layout, MVC,
+build-chain, NOTES.md and UI conventions: scaffolded app-root **`AGENTS.md`**.
 
 ## Mental model
 
@@ -40,6 +38,8 @@ triggers (webhooks/crons/bridges), and the per-agent Postgres schema.
 ## Deep-dive references
 
 Read the relevant companion at its build-container path:
+
+- **[Local execution](reference/local-development.md)** (`/libs/agentsdk/reference/local-development.md`) — local runner and shared test runtime.
 
 - **[Runtime ingress](reference/ingress.md)** (`/libs/agentsdk/reference/ingress.md`) - host delivery authentication, attribution, health/manifest exceptions, and HTTP tests.
 - **[Caller identity](reference/caller.md)** (`/libs/agentsdk/reference/caller.md`) - snapshots, origin, and test callers.
@@ -78,6 +78,9 @@ cleared, then provisions its mock and database, starts, migrates, syncs, and
 runs `OnStart` hooks. It returns an agent ready for `DB` and `Handler`;
 `Env.Airlock` records platform calls. Tests needing only the HTTP mock can use
 `agenttest.NewMockAirlock`; wire payloads remain an SDK runtime detail.
+
+For per-slot mocks, `agenttest.NewWithOptions`, runnable tasks, and opt-in live tests,
+read [local model testing](reference/testing.md) (`/libs/agentsdk/reference/testing.md`).
 
 Tests that execute JavaScript through the shared chat runtime must select an
 executor explicitly. Airlock codegen provisions a build-scoped endpoint and

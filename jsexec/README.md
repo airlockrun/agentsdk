@@ -7,6 +7,18 @@ There are no Airlock imports or third-party Go dependencies in this package.
 
 ## Integration
 
+Local app execution keeps Deno in Docker. `PrepareDockerImage` inspects/pulls an
+explicit image and validates its runtime identity before use. A public Airlock
+release image uses an Airlock version tag, not an SDK version tag. The immutable
+v0.7.0 Linux-amd64 artifact at
+`ghcr.io/airlockrun/airlock-js-executor@sha256:460592372756ec350e30c3c7701481733b31368d42565eecc709bb9619090cd6`
+is reviewed against the current embedded protocol/supervisor/controller/worker,
+with exact Deno/protocol metadata, script hashes and a framed execution smoke.
+SDK-version labels alone do not decide compatibility. Development images built
+by `BuildImage` carry the full embedded runtime fingerprint. Unknown or changed
+runtime identities fail and require a compatible artifact or an explicit build.
+Executors publish no TCP ports; callbacks use the framed Docker attach stream.
+
 ```go
 type Session interface {
     Execute(ctx context.Context, code string, callback Invoker) (Result, error)

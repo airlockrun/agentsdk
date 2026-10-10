@@ -39,7 +39,7 @@ func TestExecutorInjectedTransportIsLazy(t *testing.T) {
 		{"approval", testutil.MockToolCallResponse("gate", "run_js", map[string]any{"code": "return 42", "description": "Calculate answer", "request_confirmation": true}, testutil.MockUsage(10, 10)), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			in := chatruntime.Input{Message: "hello", Model: testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponse: tc.response}), ModelLimits: session.ModelLimits{Input: 80000}, MaxSteps: 5, SessionStore: &agenttest.MemoryStore{}, Sink: &agenttest.Events{}, ExecutorFactory: factory,
+			in := chatruntime.Input{Message: "hello", Model: scriptedModel(t, [][]stream.Event{tc.response}), ModelLimits: session.ModelLimits{Input: 80000}, MaxSteps: 5, SessionStore: &agenttest.MemoryStore{}, Sink: &agenttest.Events{}, ExecutorFactory: factory,
 				Backend: platformFunc(func(context.Context, chatruntime.Invocation) (tool.Result, error) {
 					return tool.Result{}, errors.New("unexpected backend call")
 				})}
@@ -91,18 +91,18 @@ func TestExecutorDenoSharedChat(t *testing.T) {
 	js := func(id, code string) []stream.Event {
 		return testutil.MockToolCallResponse(id, "run_js", map[string]any{"code": code, "description": "Calculate doubled values"}, testutil.MockUsage(10, 10))
 	}
-	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{
+	model := scriptedModel(t, [][]stream.Event{
 		js("first", `const values = await Promise.all([apps.calculator.tools.double({value: 10}), apps.calculator.tools.double({value: 11})]); globalThis.total = values[0].value + values[1].value; console.log("calculated"); return globalThis.total;`),
 		js("second", `air.log("caller", user.displayName); return {total: globalThis.total, type: typeof values, user};`),
 		testutil.MockTextResponse("42", testutil.MockUsage(10, 10)),
-	}})
+	})
 	result, err := chatruntime.Run(ctx, chatruntime.Input{Message: "Calculate", Model: model, ModelLimits: session.ModelLimits{Input: 80000}, MaxSteps: 5, SessionStore: &agenttest.MemoryStore{}, Sink: &agenttest.Events{}, Backend: backend, Capabilities: []capability.Definition{def}, ExecutorFactory: factory})
 	if err != nil || result.Status != sol.RunCompleted {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	encoded, _ := json.Marshal(model.DoStreamCalls[2])
+	encoded, _ := json.Marshal(model.Requests()[2])
 	if len(calls) != 2 || calls[0] != "first" || calls[1] != "first" {
 		t.Fatalf("attributed callbacks=%v transcript=%s", calls, encoded)
 	}
@@ -111,4 +111,17 @@ func TestExecutorDenoSharedChat(t *testing.T) {
 			t.Fatalf("real Deno result missing %q: %s", want, encoded)
 		}
 	}
+}
+
+func scriptedModel(t *testing.T, responses [][]stream.Event) *testutil.MockModel {
+	t.Helper()
+	config := testutil.MockConfig{ID: t.Name()}
+	for _, events := range responses {
+		config.Responses = append(config.Responses, testutil.MockResponse{Events: events})
+	}
+	model, err := testutil.NewMockModel(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return model
 }

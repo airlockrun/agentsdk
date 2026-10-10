@@ -24,6 +24,24 @@ Two other documents complete the picture:
   styling palette, anything a future upgrade needs to know about).
   Keep it short and current as you go.
 
+## Running and testing locally
+
+`go tool air run --local` runs the ordinary entrypoint with the shared public
+local runtime. Configure `.airlock/local/runtime.json` with an explicit developer
+identity, each declared text/vision slot plus `@default`, and a compatible Docker
+Deno image. PostgreSQL auto-starts per app with a persistent host data bind mount;
+`databaseEnv` explicitly selects an external database instead. `go tool air build`
+prepares generated assets; `run --build-executor` builds a local development image.
+Read `reference/local-development.md` in the SDK skill for configuration and
+supported capabilities. Keep provider keys outside project configuration.
+
+`agenttest.NewWithOptions` uses the same host, disposable PostgreSQL and temporary
+storage with fake models. Native AgentHandle lifecycle and typed jobs execute
+there. Inject `Options.ExecutorFactory` for task JavaScript and explicit fake
+resource adapters for connections/MCP. Live models require test opt-in. Declare
+task-only storage with `AccessInternal`; private Go tools use normal SDK methods.
+Application-owned jobs/tasks have no substituted human owner.
+
 ## Inspecting remote builds
 
 After `go tool air deploy -m "Describe this deployment"`, inspect the build

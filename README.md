@@ -21,6 +21,13 @@ Requires Go 1.26+.
 
 ## Air CLI
 
+`go tool air run --local` runs an app's ordinary HTTP server with local
+PostgreSQL, durable storage/tasks/jobs, explicit model bindings and the packaged
+Deno executor. Configure `.airlock/local/runtime.json` and read
+[local development](reference/local-development.md) for startup and supported
+capabilities. `agenttest.NewWithOptions` uses the same host with isolated
+dependencies and fake providers.
+
 Install the global launcher once:
 
 ```bash
@@ -191,6 +198,30 @@ an executor image built with `jsexec.BuildImage`; builders inject `OpenTransport
 to an isolated host-owned executor without mounting Docker into test containers.
 Text-only and unapproved runs do not allocate an executor. See the
 [chat runtime contract](chatruntime/README.md) for required settings and callbacks.
+
+`agenttest.New(t, factory)` gives each streaming model slot an independent GoAI
+mock, configurable through `env.MockModel(slot).Configure(...)`. Use
+`NewWithOptions` for pre-start mock responses or explicit live selections.
+`RegisterFlags(flag.CommandLine)` opts a test package into repeatable
+`-agenttest.model=slot=slug/provider/model` flags selecting named Sol accounts;
+pass its options to `NewWithOptions`. Unselected slots remain mocked, and ordinary
+tests do not read credentials or make live model calls. `Env.Chat` independently
+accepts an injected model. The registered-task helper runs the app's leaf task
+contract with an explicitly selected executor and optional service backend.
+Mock-host task lifecycle requests fail with a diagnostic directing tests to
+`RunAgent`; production handles address real Airlock-owned task state.
+See [explicit local model testing](reference/testing.md).
+
+Run the [CSV task example](agenttest/examples/csv/app_test.go) with real Deno and
+default mock responses:
+
+```sh
+go test ./agenttest/examples/csv -run '^TestConversion$' -count=1 -v
+```
+
+It verifies an actual CSV artifact and typed task completion. The same test can
+select Codex through explicit flags; prerequisites and the full command are in
+the [runnable example guide](reference/testing.md#runnable-registered-task-example).
 
 ## Companion projects
 

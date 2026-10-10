@@ -82,7 +82,7 @@ func TestChatInvokesAppUnderBorrowedRun(t *testing.T) {
 				}
 				call = testutil.MockToolCallResponse("lookup-call", "run_js", map[string]any{"code": "return await apps.test_app.tools.lookup({});", "description": "Read the app database"}, testutil.MockUsage(10, 10))
 			}
-			model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{call, testutil.MockTextResponse("The answer is 42", testutil.MockUsage(10, 10))}})
+			model := scriptedModel(t, [][]stream.Event{call, testutil.MockTextResponse("The answer is 42", testutil.MockUsage(10, 10))})
 			env.Airlock.Reset()
 			user := &wire.CallerUser{ID: uuid.NewString(), PlatformMember: true}
 			caller := wire.Caller{Kind: "user", Access: wire.AccessUser, User: user, Initiator: user, Origin: wire.CallerOrigin{Interface: "chat", Execution: "request"}}

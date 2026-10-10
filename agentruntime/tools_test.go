@@ -66,8 +66,8 @@ func TestRunEnforcesSDKArrayAndNumericConstraints(t *testing.T) {
 			addChild(&in)
 			in.Subagents[0].InputSchema, in.Definition.OutputSchema = contract, contract
 			result, err := Run(t.Context(), in)
-			if err != nil || result == nil || result.Reply == nil || len(model.DoStreamCalls) != 1 {
-				t.Fatalf("result=%+v error=%v model calls=%d", result, err, len(model.DoStreamCalls))
+			if err != nil || result == nil || result.Reply == nil || len(model.Requests()) != 1 {
+				t.Fatalf("result=%+v error=%v model calls=%d", result, err, len(model.Requests()))
 			}
 			control := in.Controller.(*controller)
 			cp, _ := in.Store.LoadCheckpoint(t.Context())

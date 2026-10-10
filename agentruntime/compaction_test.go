@@ -57,10 +57,10 @@ func TestCompactionUsesSessionPersistenceAndBudgetedModel(t *testing.T) {
 	if err != nil || result.Reply == nil || store.compactions != 1 || meter.requests != 2 || meter.tokens != 250 {
 		t.Fatalf("result=%+v err=%v compactions=%d meter=%+v", result, err, store.compactions, meter)
 	}
-	if len(model.DoStreamCalls[0].Tools) != 0 || len(model.DoStreamCalls[1].Tools) == 0 {
+	if len(model.Requests()[0].Tools) != 0 || len(model.Requests()[1].Tools) == 0 {
 		t.Fatal("compaction and reasoning tool sets are wrong")
 	}
-	raw, _ := json.Marshal(model.DoStreamCalls)
+	raw, _ := json.Marshal(model.Requests())
 	if strings.Contains(string(raw), "secret") {
 		t.Fatal("compaction leaked an unredacted secret")
 	}
@@ -96,7 +96,7 @@ func TestCompactionFailureAndBudgetDenialPreserveHistory(t *testing.T) {
 			if _, err := Run(t.Context(), in); err == nil {
 				t.Fatal("expected compaction failure")
 			}
-			if mode == "budget" && len(model.DoStreamCalls) != 0 {
+			if mode == "budget" && len(model.Requests()) != 0 {
 				t.Fatal("budget-denied model request")
 			}
 			if mode != "oversized summary" && (store.compactions != 0 || store.messages[0].ID != "old") {
@@ -120,8 +120,8 @@ func TestCompactionNeverRunsInsideResumedBatch(t *testing.T) {
 	store.messages[0].Content = strings.Repeat("huge context", 100000)
 	c.waiting = false
 	result, err := Run(t.Context(), in)
-	if err != nil || result.Reply == nil || store.compactions != 0 || len(model.DoStreamCalls) != 1 {
-		t.Fatalf("result=%+v err=%v compactions=%d requests=%d", result, err, store.compactions, len(model.DoStreamCalls))
+	if err != nil || result.Reply == nil || store.compactions != 0 || len(model.Requests()) != 1 {
+		t.Fatalf("result=%+v err=%v compactions=%d requests=%d", result, err, store.compactions, len(model.Requests()))
 	}
 }
 
@@ -136,8 +136,8 @@ func TestCompactionPrunesWithoutSummaryModel(t *testing.T) {
 	}
 	in.ModelLimits = session.ModelLimits{Input: 20000, Output: 1000}
 	result, err := Run(t.Context(), in)
-	if err != nil || result.Reply == nil || store.compactions != 1 || len(model.DoStreamCalls) != 1 || in.Controller.(*controller).steps != 1 {
-		t.Fatalf("result=%+v error=%v compactions=%d requests=%d", result, err, store.compactions, len(model.DoStreamCalls))
+	if err != nil || result.Reply == nil || store.compactions != 1 || len(model.Requests()) != 1 || in.Controller.(*controller).steps != 1 {
+		t.Fatalf("result=%+v error=%v compactions=%d requests=%d", result, err, store.compactions, len(model.Requests()))
 	}
 	if !store.messages[1].Parts[0].Tool.Compacted {
 		t.Fatal("old tool output was not pruned")

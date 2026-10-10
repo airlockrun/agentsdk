@@ -64,10 +64,17 @@ const (
 	migrationTestReset
 )
 
-// autoMigrate applies migrations from the runtime image. agenttest selects the
+// autoMigrate applies migrations from the runtime image or the explicit absolute
+// AIRLOCK_MIGRATIONS_DIR. agenttest selects the
 // canonical source directory and reset/up mode before constructing the agent.
 func (a *Agent) autoMigrate() {
 	dir := runtimeMigrationsPath
+	if configured := os.Getenv("AIRLOCK_MIGRATIONS_DIR"); configured != "" {
+		if !filepath.IsAbs(configured) {
+			panic("agentsdk: AIRLOCK_MIGRATIONS_DIR must be absolute")
+		}
+		dir = configured
+	}
 	mode := migrationUp
 	var downTo int64
 

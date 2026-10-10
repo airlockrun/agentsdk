@@ -12,6 +12,8 @@ import (
 
 	"github.com/airlockrun/agentsdk/connector/protocol"
 	"github.com/airlockrun/agentsdk/wire"
+	"github.com/airlockrun/goai/stream"
+	"github.com/airlockrun/goai/testutil"
 	"github.com/airlockrun/sol/websearch"
 )
 
@@ -29,11 +31,6 @@ type Mock struct {
 	mu       sync.Mutex
 	requests []Request
 
-	// LLMResponse is the NDJSON response returned by the model endpoint.
-	LLMResponse []byte
-	// BeforeLLMResponse, when set, runs after the request is recorded and before
-	// response headers or events are written.
-	BeforeLLMResponse func()
 	// EnqueueJobResponse and GetJobResponse override the default job responses.
 	EnqueueJobResponse        *wire.EnqueueJobResponse
 	EnqueueJobError           *wire.EnqueueJobErrorResponse
@@ -42,39 +39,23 @@ type Mock struct {
 	JobProgressStatus         int
 	ConnectorCommandResponses map[string]json.RawMessage
 	ConnectorJobResponses     map[string]json.RawMessage
-	agentResponses            map[string]agentResponse
+	models                    map[string]stream.Model
+	storage                   *FileStorage
+	runtime                   http.Handler
 }
 
-type agentResponse struct {
-	status      int
-	body        json.RawMessage
-	contentType string
-}
-
-// SetAgentResponse configures one exact task-agent method and request URI,
-// including its query string. Unconfigured endpoints fail explicitly.
-func (m *Mock) SetAgentResponse(method, uri string, status int, response any) error {
-	body, err := json.Marshal(response)
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.agentResponses == nil {
-		m.agentResponses = make(map[string]agentResponse)
-	}
-	m.agentResponses[method+" "+uri] = agentResponse{status: status, body: body, contentType: "application/json"}
-	return nil
-}
-
-// New creates a mock Airlock server and returns it with its base URL.
+// New creates a mock host with a canonical default text model. Registered task
+// execution belongs to agenttest.RunAgent, not host lifecycle responses.
 func New() (*Mock, string) {
-	return NewWithLLMResponse(nil)
+	model, err := testutil.NewMockModel(testutil.MockConfig{ID: "mockairlock/default", Default: &testutil.MockResponse{Text: "Hello", Usage: stream.UsageFrom(10, 5)}})
+	if err != nil {
+		panic(err)
+	}
+	return NewWithModels(map[string]stream.Model{"": model})
 }
 
-// NewWithLLMResponse creates a mock whose model response is supplied per call.
-func NewWithLLMResponse(response func() []byte) (*Mock, string) {
-	m := &Mock{}
+func newMock(models map[string]stream.Model) (*Mock, string) {
+	m := &Mock{models: models}
 	mux := http.NewServeMux()
 	for _, pattern := range []string{
 		"POST /api/agent/agents/{definition}/runs",
@@ -85,16 +66,7 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 	} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			m.record(r)
-			m.mu.Lock()
-			response, ok := m.agentResponses[r.Method+" "+r.URL.RequestURI()]
-			m.mu.Unlock()
-			if !ok {
-				http.Error(w, "API response is not configured", http.StatusInternalServerError)
-				return
-			}
-			w.Header().Set("Content-Type", response.contentType)
-			w.WriteHeader(response.status)
-			_, _ = w.Write(response.body)
+			http.Error(w, "mockairlock: hosted task lifecycle is unsupported; use agenttest.RunAgent for registered task execution", http.StatusNotImplemented)
 		})
 	}
 
@@ -105,27 +77,45 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 	})
 
 	mux.HandleFunc("PUT /api/agent/storage/{key...}", func(w http.ResponseWriter, r *http.Request) {
-		m.record(r)
+		m.recordStorage(r)
+		if m.storageRequest(w, r, "put") {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /api/agent/storage/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.storageRequest(w, r, "get") {
+			return
+		}
 		_, _ = w.Write([]byte("mock-file-content"))
 	})
 	mux.HandleFunc("DELETE /api/agent/storage/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.storageRequest(w, r, "delete") {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /api/agent/storage", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.storageRequest(w, r, "list") {
+			return
+		}
 		_ = json.NewEncoder(w).Encode([]any{})
 	})
 	mux.HandleFunc("POST /api/agent/storage/copy", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.storageRequest(w, r, "copy") {
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /api/agent/storage/info", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
+		if m.storageRequest(w, r, "info") {
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"path": "tmp/test.txt", "filename": "test.txt", "size": 42, "contentType": "text/plain",
@@ -147,21 +137,7 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 
 	mux.HandleFunc("POST /api/agent/llm/stream", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		if m.BeforeLLMResponse != nil {
-			m.BeforeLLMResponse()
-		}
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		llmResponse := m.LLMResponse
-		if response != nil {
-			llmResponse = response()
-		}
-		if llmResponse != nil {
-			_, _ = w.Write(llmResponse)
-			return
-		}
-		_, _ = w.Write([]byte("{\"type\":\"start\",\"data\":{}}\n"))
-		_, _ = w.Write([]byte("{\"type\":\"text-delta\",\"data\":{\"text\":\"Hello\"}}\n"))
-		_, _ = w.Write([]byte("{\"type\":\"finish\",\"data\":{\"finishReason\":\"stop\",\"usage\":{\"inputTokens\":{\"total\":10},\"outputTokens\":{\"total\":5}}}}\n"))
+		m.streamModel(w, r)
 	})
 	mux.HandleFunc("POST /api/agent/llm/image", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
@@ -322,8 +298,32 @@ func NewWithLLMResponse(response func() []byte) (*Mock, string) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	m.Server = httptest.NewServer(mux)
+	m.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		runtime := m.runtime
+		m.mu.Unlock()
+		if runtime != nil {
+			if r.Method == "PUT" && len(r.URL.Path) >= 18 && r.URL.Path[:18] == "/api/agent/storage" {
+				m.recordStorage(r)
+			} else {
+				m.record(r)
+			}
+			runtime.ServeHTTP(w, r)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	}))
 	return m, m.Server.URL
+}
+
+// SetRuntime installs the shared actual local host behind the request recorder.
+func (m *Mock) SetRuntime(handler http.Handler) {
+	if handler == nil {
+		panic("mockairlock: runtime handler required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.runtime = handler
 }
 
 func wireResponse(jobID string, output json.RawMessage) map[string]any {
