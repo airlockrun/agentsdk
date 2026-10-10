@@ -123,7 +123,7 @@ go test ./agenttest/examples/csv -run '^TestConversion$' -count=1 -v -args \
 ```
 
 This command switches only the `conversion` slot. Prepare the account with
-`sol auth login work/openai --method codex`. Model selection does not authenticate the app
+`sol --auth login work/openai --method codex`. Model selection does not authenticate the app
 with Airlock, configure HTTP/MCP resources, or change other model modalities.
 No build tag or source change is needed. Live credentials and model support must
 be present; missing configuration fails rather than using the mock. Do not append

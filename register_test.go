@@ -2,10 +2,79 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/airlockrun/goai/tool"
 )
+
+func TestRegisterRouteToolCorrespondence(t *testing.T) {
+	for _, toolFirst := range []bool{true, false} {
+		name := "route first"
+		if toolFirst {
+			name = "tool first"
+		}
+		t.Run(name, func(t *testing.T) {
+			a, mock := testAgent(t)
+			registered := addTool("save", "Save a record")
+			if toolFirst {
+				a.RegisterTool(registered, AccessAdmin)
+			}
+			route := &Route{Method: http.MethodPost, Path: "/save", Handler: func(http.ResponseWriter, *http.Request) error { return nil }, Access: AccessPublic, Description: "Save through HTTP", Tool: tool.Tool{Name: registered.Name}}
+			a.RegisterRoute(route)
+			route.Tool.Name = "mutated"
+			if !toolFirst {
+				a.RegisterTool(registered, AccessAdmin)
+			}
+			manifest := a.Manifest()
+			if len(manifest.Routes) != 1 || manifest.Routes[0].ToolName != "save" || manifest.Routes[0].Access != "public" || manifest.Tools[0].Access != "admin" {
+				t.Fatalf("correspondence or independent access lost: %+v", manifest)
+			}
+			if err := a.syncWithAirlock(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			requests := mock.RequestsByPath("/api/agent/sync")
+			var payload struct {
+				Routes []map[string]any `json:"routes"`
+			}
+			if len(requests) != 1 {
+				t.Fatalf("sync requests = %d", len(requests))
+			}
+			if err := json.Unmarshal(requests[0].Body, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Routes[0]["tool_name"] != "save" {
+				t.Fatalf("manifest wire correspondence = %+v", payload.Routes)
+			}
+		})
+	}
+}
+
+func TestRouteToolValidationBeforeFreeze(t *testing.T) {
+	for _, freeze := range []string{"handler", "manifest", "sync"} {
+		t.Run(freeze, func(t *testing.T) {
+			a, mock := testAgent(t)
+			other, _ := testAgent(t)
+			foreign := addTool("foreign", "Other app tool")
+			other.RegisterTool(foreign, AccessUser)
+			a.RegisterRoute(&Route{Method: http.MethodGet, Path: "/", Handler: func(http.ResponseWriter, *http.Request) error { return nil }, Access: AccessUser, Description: "Home", Tool: foreign})
+			expectPanicContains(t, `corresponding tool "foreign" must be registered on this app`, func() {
+				switch freeze {
+				case "handler":
+					a.Handler()
+				case "manifest":
+					a.Manifest()
+				case "sync":
+					_ = a.syncWithAirlock(t.Context())
+				}
+			})
+			if len(mock.Requests()) != 0 {
+				t.Fatal("invalid correspondence reached the host")
+			}
+		})
+	}
+}
 
 type addIn struct {
 	X float64 `json:"x"`

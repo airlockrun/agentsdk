@@ -437,6 +437,8 @@ agent.RegisterRoute(&agentsdk.Route{
 
 **Always provide a Description.**
 
+Optional `Route.Tool`: see `reference/html-ui.md`.
+
 Return `agentsdk.NewHTTPError(status, publicMessage, cause)` for an intentional
 4xx/5xx. The SDK sends only the public message and records the internal cause.
 Other returned errors become a generic 500.

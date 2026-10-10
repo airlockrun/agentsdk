@@ -44,6 +44,40 @@ agent.RegisterStaticAsset(&agentsdk.StaticAsset{
 })
 ```
 
+## Route-to-tool correspondence
+
+`Route.Tool` optionally associates an HTTP route with a tool registered on the
+same app. Pass the `tool.Tool` value used with `RegisterTool`; its `Name` is the
+app-local identity. The zero value (empty `Name`) leaves the route unlinked.
+Tools may be registered after routes, but must exist before `Handler`, `Serve`,
+`Manifest`, or sync freezes the declarations. Unknown tool names panic before
+serving or syncing.
+
+```go
+agent.RegisterTool(saveProfileTool, agentsdk.AccessAdmin)
+agent.RegisterRoute(&agentsdk.Route{
+    Method:      "POST",
+    Path:        "/profile",
+    Handler:     pages.SaveProfile,
+    Access:      agentsdk.AccessUser,
+    Description: "Save profile from the web form",
+    Tool:        saveProfileTool,
+})
+```
+
+The route's `Handler` parses HTTP input, calls application logic, and renders its
+response. Correspondence does not invoke the tool, translate its input, or inherit
+its permissions. Route access and tool access are independently enforced. Share
+application logic explicitly between the HTTP handler and tool implementation.
+The manifest carries the optional `tool_name` string. Airlock records the name on
+the single HTTP route run, retaining its method/path, caller, and actual completion
+status; it does not manufacture a tool run. The name survives run compaction and
+later route/tool declaration changes.
+
+`RegisterStaticAsset` owns the reserved `/static/` namespace. Its exact registered
+`GET /static/{name}` declaration and bundled `/__air/assets/{name}` assets do not
+create route runs. Other GET routes and routes with asset-like extensions do.
+
 ## Lucide icons
 
 The `github.com/airlockrun/agentsdk/lucide` package embeds the complete

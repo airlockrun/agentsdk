@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/a-h/templ v0.3.1020
 	github.com/airlockrun/goai v0.3.1
-	github.com/airlockrun/sol v0.1.16
+	github.com/airlockrun/sol v0.1.17
 	github.com/gofrs/flock v0.13.1
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
