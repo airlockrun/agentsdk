@@ -56,6 +56,19 @@ func jsCall(id string, confirm bool) []stream.Event {
 }
 func reply() []stream.Event { return testutil.MockTextResponse("answer", testutil.MockUsage(10, 10)) }
 
+func scriptedModel(t *testing.T, responses [][]stream.Event) *testutil.MockModel {
+	t.Helper()
+	config := testutil.MockConfig{ID: t.Name()}
+	for _, events := range responses {
+		config.Responses = append(config.Responses, testutil.MockResponse{Events: events})
+	}
+	model, err := testutil.NewMockModel(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return model
+}
+
 func TestRunLazyLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
@@ -68,7 +81,7 @@ func TestRunLazyLifecycle(t *testing.T) {
 		{"approval before allocation", [][]stream.Event{jsCall("gate", true)}, 0, 0, sol.RunSuspended},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: tc.responses})
+			model := scriptedModel(t, tc.responses)
 			in := input(model)
 			e, allocations := &executor{}, 0
 			in.ExecutorFactory = func(context.Context, []capability.Definition) (jsexec.Session, error) { allocations++; return e, nil }
@@ -91,15 +104,15 @@ func TestRunLazyLifecycle(t *testing.T) {
 }
 
 func TestRunRejectsMalformedMCPSchemaBeforeModel(t *testing.T) {
-	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponse: reply()})
+	model := scriptedModel(t, [][]stream.Event{reply()})
 	in := input(model)
 	in.Capabilities = []capability.Definition{{
 		Path: capability.Local(capability.MCP, "external", "search"), Target: capability.Platform,
 		InputSchema: json.RawMessage(`{"type":"object","additionalProperties":42}`),
 	}}
 	result, err := chatruntime.Run(t.Context(), in)
-	if result != nil || err == nil || !strings.Contains(err.Error(), "additionalProperties") || len(model.DoStreamCalls) != 0 {
-		t.Fatalf("result=%+v err=%v model calls=%d", result, err, len(model.DoStreamCalls))
+	if result != nil || err == nil || !strings.Contains(err.Error(), "additionalProperties") || len(model.Requests()) != 0 {
+		t.Fatalf("result=%+v err=%v model calls=%d", result, err, len(model.Requests()))
 	}
 	messages, err := in.SessionStore.Load(t.Context())
 	if err != nil || len(messages) != 0 {
@@ -110,13 +123,13 @@ func TestRunRejectsMalformedMCPSchemaBeforeModel(t *testing.T) {
 func TestRunPermissionResume(t *testing.T) {
 	for _, approved := range []bool{true, false} {
 		t.Run(map[bool]string{true: "approve", false: "deny"}[approved], func(t *testing.T) {
-			in := input(testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{jsCall("gate", true)}}))
+			in := input(scriptedModel(t, [][]stream.Event{jsCall("gate", true)}))
 			first, err := chatruntime.Run(t.Context(), in)
 			if err != nil || first.Status != sol.RunSuspended {
 				t.Fatalf("suspension: %+v %v", first, err)
 			}
 			in.Resume, in.Approved = first.SuspensionContext, &approved
-			in.Model = testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponse: reply()})
+			in.Model = scriptedModel(t, [][]stream.Event{reply()})
 			e := &executor{}
 			in.ExecutorFactory = func(context.Context, []capability.Definition) (jsexec.Session, error) { return e, nil }
 			result, err := chatruntime.Run(t.Context(), in)
@@ -136,14 +149,14 @@ func TestRunPermissionResume(t *testing.T) {
 
 func TestRunOrderedBatchResuspendsBeforeNextScript(t *testing.T) {
 	batch := append(jsCall("first", true)[:1], jsCall("second", true)...)
-	in := input(testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponse: batch}))
+	in := input(scriptedModel(t, [][]stream.Event{batch}))
 	first, err := chatruntime.Run(t.Context(), in)
 	if err != nil || first.Status != sol.RunSuspended {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
 	approved := true
 	in.Resume, in.Approved = first.SuspensionContext, &approved
-	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponse: reply()})
+	model := scriptedModel(t, [][]stream.Event{reply()})
 	in.Model = model
 	e := &executor{}
 	in.ExecutorFactory = func(context.Context, []capability.Definition) (jsexec.Session, error) { return e, nil }
@@ -151,8 +164,8 @@ func TestRunOrderedBatchResuspendsBeforeNextScript(t *testing.T) {
 	if err != nil || second.Status != sol.RunSuspended || second.SuspensionContext.ToolCallID != "second" {
 		t.Fatalf("second=%+v err=%v", second, err)
 	}
-	if e.calls != 1 || e.closes != 1 || len(model.DoStreamCalls) != 0 || len(second.Messages) == 0 || len(second.NewMessages) != 1 {
-		t.Fatalf("execute=%d close=%d model=%d result=%+v", e.calls, e.closes, len(model.DoStreamCalls), second)
+	if e.calls != 1 || e.closes != 1 || len(model.Requests()) != 0 || len(second.Messages) == 0 || len(second.NewMessages) != 1 {
+		t.Fatalf("execute=%d close=%d model=%d result=%+v", e.calls, e.closes, len(model.Requests()), second)
 	}
 }
 
@@ -172,13 +185,13 @@ func TestRunValidationPreventsWork(t *testing.T) {
 		{"missing decision", func(in *chatruntime.Input) { in.Resume = &sol.SuspensionContext{Reason: "permission"} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponse: reply()})
+			model := scriptedModel(t, [][]stream.Event{reply()})
 			in := input(model)
 			tc.change(&in)
 			if _, err := chatruntime.Run(t.Context(), in); err == nil {
 				t.Fatal("invalid input accepted")
 			}
-			if len(model.DoStreamCalls) != 0 {
+			if len(model.Requests()) != 0 {
 				t.Fatal("model invoked before validation")
 			}
 		})
@@ -193,7 +206,7 @@ func TestRunCanonicalDispatchAndAttachments(t *testing.T) {
 			if direct {
 				call = testutil.MockToolCallResponse("lookup-call", def.Path.Direct(), map[string]any{"id": "abc"}, testutil.MockUsage(10, 10))
 			}
-			model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{call, reply()}})
+			model := scriptedModel(t, [][]stream.Event{call, reply()})
 			in := input(model)
 			in.DirectTools = direct
 			in.Capabilities = []capability.Definition{def}
@@ -219,7 +232,7 @@ func TestRunCanonicalDispatchAndAttachments(t *testing.T) {
 			if err != nil || result.Status != sol.RunCompleted || called != 1 {
 				t.Fatalf("result=%+v calls=%d err=%v", result, called, err)
 			}
-			encoded, _ := json.Marshal(model.DoStreamCalls[1])
+			encoded, _ := json.Marshal(model.Requests()[1])
 			if !strings.Contains(string(encoded), "s3ref:/tmp/image.png") {
 				t.Fatalf("attachment absent from next model turn: %s", encoded)
 			}
@@ -230,7 +243,7 @@ func TestRunCanonicalDispatchAndAttachments(t *testing.T) {
 func TestRunClosesOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	in := input(testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponse: jsCall("cancel", false)}))
+	in := input(scriptedModel(t, [][]stream.Event{jsCall("cancel", false)}))
 	e := &executor{execute: func(ctx context.Context, _ string, _ jsexec.Invoker) (jsexec.Result, error) {
 		cancel()
 		return jsexec.Result{}, ctx.Err()
@@ -243,7 +256,7 @@ func TestRunClosesOnCancellation(t *testing.T) {
 }
 
 func TestRunKeepsLogsOnScriptError(t *testing.T) {
-	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{jsCall("failed", false), reply()}})
+	model := scriptedModel(t, [][]stream.Event{jsCall("failed", false), reply()})
 	in := input(model)
 	e := &executor{execute: func(context.Context, string, jsexec.Invoker) (jsexec.Result, error) {
 		return jsexec.Result{Undefined: true, Logs: []jsexec.Log{{Level: jsexec.LogWarn, Message: "before failure"}}}, &jsexec.Exception{Name: "Error", Message: "failed script"}
@@ -252,7 +265,7 @@ func TestRunKeepsLogsOnScriptError(t *testing.T) {
 	if _, err := chatruntime.Run(t.Context(), in); err != nil {
 		t.Fatal(err)
 	}
-	encoded, _ := json.Marshal(model.DoStreamCalls[1])
+	encoded, _ := json.Marshal(model.Requests()[1])
 	if !strings.Contains(string(encoded), "before failure") || !strings.Contains(string(encoded), "failed script") || e.closes != 1 {
 		t.Fatalf("logs/error lost: %s close=%d", encoded, e.closes)
 	}

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,8 +22,78 @@ func taskRun(h *AgentHandle[taskInput, taskOutput]) wire.AgentRunInfo {
 		Reply: &wire.AgentReply{Kind: "output", Output: json.RawMessage(`{"answer":"done"}`)}, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Steps: 2, Tokens: 30}
 }
 
+// protocolHost asserts exact HTTP exchanges for production AgentHandle client
+// tests. It is test-owned transport plumbing, not a task execution service.
+type protocolHost struct {
+	server      *httptest.Server
+	mu          sync.Mutex
+	method, uri string
+	status      int
+	body        []byte
+	requests    []protocolRequest
+}
+
+type protocolRequest struct {
+	Method, Path string
+	Body         []byte
+	Header       http.Header
+}
+
+func protocolAgent(t *testing.T) (*Agent, *protocolHost) {
+	t.Helper()
+	host := &protocolHost{}
+	host.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			http.Error(w, "read request", 400)
+			return
+		}
+		host.mu.Lock()
+		host.requests = append(host.requests, protocolRequest{Method: r.Method, Path: r.URL.RequestURI(), Body: body, Header: r.Header.Clone()})
+		method, uri, status, reply := host.method, host.uri, host.status, append([]byte(nil), host.body...)
+		host.mu.Unlock()
+		if r.Method != method || r.URL.RequestURI() != uri {
+			t.Errorf("protocol request = %s %s, want %s %s", r.Method, r.URL.RequestURI(), method, uri)
+			http.Error(w, "unexpected protocol request", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write(reply)
+	}))
+	t.Cleanup(host.server.Close)
+	return newTestAgent(t, host.server.URL), host
+}
+
+func (h *protocolHost) respond(method, uri string, status int, reply any) error {
+	body, err := json.Marshal(reply)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.method, h.uri, h.status, h.body = method, uri, status, body
+	return nil
+}
+func (h *protocolHost) Requests() []protocolRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]protocolRequest(nil), h.requests...)
+}
+func (h *protocolHost) RequestsByPath(prefix string) []protocolRequest {
+	var selected []protocolRequest
+	for _, req := range h.Requests() {
+		if strings.HasPrefix(req.Path, prefix) {
+			selected = append(selected, req)
+		}
+	}
+	return selected
+}
+func (h *protocolHost) Reset() { h.mu.Lock(); defer h.mu.Unlock(); h.requests = nil }
+
 func TestAgentHandleIDLifecycle(t *testing.T) {
-	a, mock := testAgent(t)
+	a, mock := protocolAgent(t)
 	taskModel(a)
 	h := RegisterAgent(a, taskDefinition())
 	run := taskRun(h)
@@ -29,7 +101,7 @@ func TestAgentHandleIDLifecycle(t *testing.T) {
 	requestID := uuid.NewString()
 	set := func(method, path string, body any) {
 		t.Helper()
-		if err := mock.SetAgentResponse(method, base+path, 200, body); err != nil {
+		if err := mock.respond(method, base+path, 200, body); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -99,7 +171,7 @@ func TestAgentHandleIDLifecycle(t *testing.T) {
 }
 
 func TestAgentHandleListCurrentContract(t *testing.T) {
-	oldApp, mock := testAgent(t)
+	oldApp, mock := protocolAgent(t)
 	taskModel(oldApp)
 	old := RegisterAgent(oldApp, taskDefinition())
 	currentApp, _ := testAgent(t)
@@ -118,14 +190,14 @@ func TestAgentHandleListCurrentContract(t *testing.T) {
 			run = currentRun
 		}
 		path := "/api/agent/agents/worker/runs?contractHash=" + h.ContractHash()
-		if err := mock.SetAgentResponse("GET", path, 200, wire.ListAgentRunsResponse{Runs: []wire.AgentRunInfo{run}, NextCursor: "next"}); err != nil {
+		if err := mock.respond("GET", path, 200, wire.ListAgentRunsResponse{Runs: []wire.AgentRunInfo{run}, NextCursor: "next"}); err != nil {
 			t.Fatal(err)
 		}
 		page, err := h.List(t.Context(), ListAgentRunsOptions{})
 		if err != nil || len(page.Runs) != 1 || page.Runs[0].ID != run.ID {
 			t.Fatalf("page=%+v err=%v", page, err)
 		}
-		if err := mock.SetAgentResponse("GET", path+"&cursor=next&limit=1", 200, wire.ListAgentRunsResponse{Runs: []wire.AgentRunInfo{}}); err != nil {
+		if err := mock.respond("GET", path+"&cursor=next&limit=1", 200, wire.ListAgentRunsResponse{Runs: []wire.AgentRunInfo{}}); err != nil {
 			t.Fatal(err)
 		}
 		page, err = h.List(t.Context(), ListAgentRunsOptions{Cursor: page.NextCursor, Limit: 1})
@@ -135,7 +207,7 @@ func TestAgentHandleListCurrentContract(t *testing.T) {
 	}
 	// An incorrectly filtered host page still fails strict result validation.
 	path := "/api/agent/agents/worker/runs?contractHash=" + current.ContractHash()
-	if err := mock.SetAgentResponse("GET", path, 200, wire.ListAgentRunsResponse{Runs: []wire.AgentRunInfo{oldRun}}); err != nil {
+	if err := mock.respond("GET", path, 200, wire.ListAgentRunsResponse{Runs: []wire.AgentRunInfo{oldRun}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := current.List(t.Context(), ListAgentRunsOptions{}); err == nil || !strings.Contains(err.Error(), "contract mismatch") {
@@ -152,7 +224,7 @@ func TestAgentHandleOutputConstraints(t *testing.T) {
 }
 
 func testAgentOutputConstraints[Out any](t *testing.T) {
-	a, mock := testAgent(t)
+	a, mock := protocolAgent(t)
 	taskModel(a)
 	h := RegisterAgent(a, &AgentDefinition[taskInput, Out]{Slug: "worker", Description: "Work", Instructions: "Complete", ModelSlot: "reasoning", MaxAttempts: 1, MaxConcurrency: 1})
 	var cases []struct {
@@ -179,7 +251,7 @@ func testAgentOutputConstraints[Out any](t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {
 			run := wire.AgentRunInfo{ID: uuid.NewString(), SessionID: uuid.NewString(), Definition: h.Slug(), ContractHash: h.ContractHash(), Status: "completed", Reply: &wire.AgentReply{Kind: "output", Output: json.RawMessage(tc.raw)}}
-			if err := mock.SetAgentResponse("GET", "/api/agent/agents/worker/runs/"+run.ID, 200, wire.AgentRunResponse{Run: run}); err != nil {
+			if err := mock.respond("GET", "/api/agent/agents/worker/runs/"+run.ID, 200, wire.AgentRunResponse{Run: run}); err != nil {
 				t.Fatal(err)
 			}
 			info, err := h.Get(t.Context(), run.ID)
@@ -216,13 +288,13 @@ func TestAgentHandleStrictClient(t *testing.T) {
 		{"negative usage", func(r *wire.AgentRunInfo) { r.Tokens = -1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			a, mock := testAgent(t)
+			a, mock := protocolAgent(t)
 			taskModel(a)
 			h := RegisterAgent(a, taskDefinition())
 			r := taskRun(h)
 			id := r.ID
 			tc.edit(&r)
-			if err := mock.SetAgentResponse("GET", "/api/agent/agents/worker/runs/"+id, 200, wire.AgentRunResponse{Run: r}); err != nil {
+			if err := mock.respond("GET", "/api/agent/agents/worker/runs/"+id, 200, wire.AgentRunResponse{Run: r}); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := h.Get(t.Context(), id); err == nil {
@@ -249,14 +321,14 @@ func TestAgentHandleStrictClient(t *testing.T) {
 }
 
 func TestAgentHandleWaitCancellationAndFailures(t *testing.T) {
-	a, mock := testAgent(t)
+	a, mock := protocolAgent(t)
 	taskModel(a)
 	h := RegisterAgent(a, taskDefinition())
 	r := taskRun(h)
 	r.Status = "waiting"
 	r.Reply = nil
 	path := "/api/agent/agents/worker/runs/" + r.ID
-	if err := mock.SetAgentResponse("GET", path, 200, wire.AgentRunResponse{Run: r}); err != nil {
+	if err := mock.respond("GET", path, 200, wire.AgentRunResponse{Run: r}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
@@ -272,7 +344,7 @@ func TestAgentHandleWaitCancellationAndFailures(t *testing.T) {
 	for _, status := range []string{"failed", "cancelled", "budget_exceeded"} {
 		r.Status = status
 		r.Error = "stopped"
-		if err := mock.SetAgentResponse("GET", path, 200, wire.AgentRunResponse{Run: r}); err != nil {
+		if err := mock.respond("GET", path, 200, wire.AgentRunResponse{Run: r}); err != nil {
 			t.Fatal(err)
 		}
 		got, err := h.Wait(t.Context(), r.ID)
@@ -280,7 +352,7 @@ func TestAgentHandleWaitCancellationAndFailures(t *testing.T) {
 			t.Fatalf("state=%+v err=%v", got, err)
 		}
 	}
-	if err := mock.SetAgentResponse("GET", path, 409, map[string]string{"error": "incompatible deployment"}); err != nil {
+	if err := mock.respond("GET", path, 409, map[string]string{"error": "incompatible deployment"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.Get(t.Context(), r.ID); err == nil || !strings.Contains(err.Error(), "incompatible deployment") {

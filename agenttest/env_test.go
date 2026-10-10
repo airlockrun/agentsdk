@@ -12,6 +12,8 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/agenttest"
+	"github.com/airlockrun/goai/stream"
+	"github.com/airlockrun/goai/testutil"
 )
 
 func TestNewDefinesBeforeRuntimeAndStartsMigratedDatabase(t *testing.T) {
@@ -87,6 +89,45 @@ DROP TABLE bootstrap_order;
 	}
 	if migrationCycles != 1 {
 		t.Fatalf("migration down executions = %d, want 1", migrationCycles)
+	}
+}
+
+func TestNewWithOptionsPreparesMocksBeforeStart(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "go.mod"), []byte("module example.com/modeltest\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspace, "db", "migrations"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	var defaultText, namedText string
+	env := agenttest.NewWithOptions(t, func() *agentsdk.Agent {
+		a := agentsdk.New(agentsdk.Config{Description: "Pre-start model bindings"})
+		a.RegisterModel(&agentsdk.ModelSlot{Slug: "summary", Capability: agentsdk.CapText, Description: "Summary"})
+		a.OnStart("generate", func(ctx context.Context) error {
+			result, err := a.GenerateText(ctx, stream.Input{})
+			if err != nil {
+				return err
+			}
+			defaultText = result.Text
+			result, err = a.GenerateText(ctx, stream.Input{Model: a.LLM(ctx, "summary")})
+			if err != nil {
+				return err
+			}
+			namedText = result.Text
+			return nil
+		})
+		return a
+	}, agenttest.Options{Mocks: map[string]testutil.MockConfig{
+		"":        {Default: &testutil.MockResponse{Text: "default"}},
+		"summary": {Default: &testutil.MockResponse{Text: "named"}},
+	}})
+	if defaultText != "default" || namedText != "named" {
+		t.Fatalf("OnStart responses = %q, %q", defaultText, namedText)
+	}
+	if got := len(env.Airlock.RequestsByPath("/api/agent/llm/stream")); got != 2 {
+		t.Fatalf("stream requests = %d, want 2", got)
 	}
 }
 

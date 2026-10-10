@@ -232,8 +232,15 @@ func (e *executor) Execute(ctx context.Context, code string, invoker jsexec.Invo
 }
 func (e *executor) Close() error { e.closes++; return e.closeErr }
 
-func input(responses ...[]stream.Event) (Input, *testutil.MockLanguageModel) {
-	model := testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: responses})
+func input(responses ...[]stream.Event) (Input, *testutil.MockModel) {
+	config := testutil.MockConfig{ID: "runtime-test"}
+	for _, events := range responses {
+		config.Responses = append(config.Responses, testutil.MockResponse{Events: events})
+	}
+	model, err := testutil.NewMockModel(config)
+	if err != nil {
+		panic(err)
+	}
 	return Input{
 		Definition: wire.AgentDefinition{Slug: "task", ContractHash: "contract", Instructions: "Do the task.", OutputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"],"additionalProperties":false}`), Budget: wire.AgentBudget{Steps: 150}},
 		Message:    "start", Model: model, ModelLimits: session.ModelLimits{Input: 80000, Output: 4096},
@@ -291,7 +298,7 @@ func TestRunCompletionAndOrderedTail(t *testing.T) {
 			}
 			count := len(store.messages)
 			result, err = Run(t.Context(), in)
-			if err != nil || result.Reply.Kind != kind || len(model.DoStreamCalls) != 1 || len(store.messages) != count || c.completeCalls != 1 {
+			if err != nil || result.Reply.Kind != kind || len(model.Requests()) != 1 || len(store.messages) != count || c.completeCalls != 1 {
 				t.Fatalf("completed replay=%+v %v", result, err)
 			}
 		})
@@ -327,8 +334,8 @@ func TestRunCleanupFailurePreservesExecutionOutcome(t *testing.T) {
 			e := &executor{closeErr: cleanupErr}
 			in.ExecutorFactory = func(context.Context, []capability.Definition) (jsexec.Session, error) { return e, nil }
 			result, err := Run(t.Context(), in)
-			if e.calls != 1 || e.closes != 1 || len(model.DoStreamCalls) != 1 {
-				t.Fatalf("executor=%+v model calls=%d", e, len(model.DoStreamCalls))
+			if e.calls != 1 || e.closes != 1 || len(model.Requests()) != 1 {
+				t.Fatalf("executor=%+v model calls=%d", e, len(model.Requests()))
 			}
 			cp, loadErr := store.LoadCheckpoint(t.Context())
 			if loadErr != nil || (cp.Phase == PhaseCompleted) != tc.completed {
@@ -354,7 +361,7 @@ func TestRunCleanupFailurePreservesExecutionOutcome(t *testing.T) {
 			}
 			if tc.completed {
 				resumed, err := Run(t.Context(), in)
-				if err != nil || resumed == nil || !reflect.DeepEqual(resumed.Reply, cp.Reply) || resumed.CleanupError != nil || e.calls != 1 || e.closes != 1 || len(model.DoStreamCalls) != 1 {
+				if err != nil || resumed == nil || !reflect.DeepEqual(resumed.Reply, cp.Reply) || resumed.CleanupError != nil || e.calls != 1 || e.closes != 1 || len(model.Requests()) != 1 {
 					t.Fatalf("completed replay=%+v error=%v executor=%+v", resumed, err, e)
 				}
 			}
@@ -399,8 +406,8 @@ func TestRunInterruptedModelReservation(t *testing.T) {
 				_, err = Run(t.Context(), in)
 				return err
 			}()
-			if !errors.Is(firstErr, errCrash) || len(model.DoStreamCalls) != 0 {
-				t.Fatalf("interruption=%v model calls=%d", firstErr, len(model.DoStreamCalls))
+			if !errors.Is(firstErr, errCrash) || len(model.Requests()) != 0 {
+				t.Fatalf("interruption=%v model calls=%d", firstErr, len(model.Requests()))
 			}
 			cp, _ := store.LoadCheckpoint(t.Context())
 			if cp.Phase != PhaseModel || (control.steps == 1) != tc.afterCharge {
@@ -409,11 +416,11 @@ func TestRunInterruptedModelReservation(t *testing.T) {
 			control.check = nil
 			result, err := Run(t.Context(), in)
 			if tc.afterCharge && tc.limit == 1 {
-				if err == nil || !strings.Contains(err.Error(), "step budget exceeded") || result != nil || control.steps != 1 || len(model.DoStreamCalls) != 0 {
-					t.Fatalf("exhausted recovery=%+v error=%v steps=%d requests=%d", result, err, control.steps, len(model.DoStreamCalls))
+				if err == nil || !strings.Contains(err.Error(), "step budget exceeded") || result != nil || control.steps != 1 || len(model.Requests()) != 0 {
+					t.Fatalf("exhausted recovery=%+v error=%v steps=%d requests=%d", result, err, control.steps, len(model.Requests()))
 				}
-			} else if err != nil || result == nil || result.Reply == nil || control.steps != tc.limit || len(model.DoStreamCalls) != 1 {
-				t.Fatalf("recovery=%+v error=%v steps=%d requests=%d", result, err, control.steps, len(model.DoStreamCalls))
+			} else if err != nil || result == nil || result.Reply == nil || control.steps != tc.limit || len(model.Requests()) != 1 {
+				t.Fatalf("recovery=%+v error=%v steps=%d requests=%d", result, err, control.steps, len(model.Requests()))
 			}
 		})
 	}
@@ -454,8 +461,8 @@ func TestRunWaitResumesExactCallAndTail(t *testing.T) {
 	if err != nil || result.Reply == nil {
 		t.Fatalf("resume=%+v %v", result, err)
 	}
-	if len(model.DoStreamCalls) != 1 || c.steps != 1 || c.spawnCalls != 1 || c.waitCalls != 3 || len(realms) != 2 {
-		t.Fatalf("model=%d controller=%+v realms=%d", len(model.DoStreamCalls), c, len(realms))
+	if len(model.Requests()) != 1 || c.steps != 1 || c.spawnCalls != 1 || c.waitCalls != 3 || len(realms) != 2 {
+		t.Fatalf("model=%d controller=%+v realms=%d", len(model.Requests()), c, len(realms))
 	}
 	for _, e := range realms {
 		if e.calls != 1 || e.closes != 1 {
@@ -507,8 +514,8 @@ func TestRunCrashBoundaries(t *testing.T) {
 				t.Fatalf("first error=%v", err)
 			}
 			result, err := Run(t.Context(), in)
-			if err != nil || result.Reply == nil || e.calls != tc.wantJS || len(model.DoStreamCalls) != 1 {
-				t.Fatalf("resume=%+v %v JS=%d model=%d", result, err, e.calls, len(model.DoStreamCalls))
+			if err != nil || result.Reply == nil || e.calls != tc.wantJS || len(model.Requests()) != 1 {
+				t.Fatalf("resume=%+v %v JS=%d model=%d", result, err, e.calls, len(model.Requests()))
 			}
 			var results []session.ToolPart
 			for _, msg := range store.messages {
@@ -537,7 +544,7 @@ func TestRunWaitCommitRecoveryAndTimeout(t *testing.T) {
 			c.waiting = false
 			c.waitResult = &wire.AgentWaitResult{Reason: "timeout", Pending: []string{"child"}}
 			result, err := Run(t.Context(), in)
-			if err != nil || result.Reply == nil || c.waitCalls != 2 || len(model.DoStreamCalls) != 1 {
+			if err != nil || result.Reply == nil || c.waitCalls != 2 || len(model.Requests()) != 1 {
 				t.Fatalf("result=%+v error=%v controller=%+v", result, err, c)
 			}
 			if !reflect.DeepEqual(c.waitRequests[0], c.waitRequests[1]) || c.waitRequests[1].TimeoutMS == nil || *c.waitRequests[1].TimeoutMS != 0 {
@@ -575,7 +582,7 @@ func TestRunModelStreamErrorNeverDispatchesPartialBatch(t *testing.T) {
 		t.Fatalf("checkpoint=%+v", cp)
 	}
 	result, err := Run(t.Context(), in)
-	if err != nil || result.Reply == nil || allocations != 0 || len(model.DoStreamCalls) != 2 {
+	if err != nil || result.Reply == nil || allocations != 0 || len(model.Requests()) != 2 {
 		t.Fatalf("result=%+v error=%v allocations=%d", result, err, allocations)
 	}
 }
@@ -598,7 +605,7 @@ func TestRunDeterministicAdmissionRecovery(t *testing.T) {
 				t.Fatalf("admission not durable: %+v", c)
 			}
 			result, err := Run(t.Context(), in)
-			if err != nil || result.Reply == nil || len(c.handles) != 1 || c.spawnCalls+c.continueCalls != 2 || len(model.DoStreamCalls) != 1 {
+			if err != nil || result.Reply == nil || len(c.handles) != 1 || c.spawnCalls+c.continueCalls != 2 || len(model.Requests()) != 1 {
 				t.Fatalf("resume=%+v %v c=%+v", result, err, c)
 			}
 		})
@@ -615,7 +622,7 @@ func TestRunKnownToolErrorAndCompletionRejection(t *testing.T) {
 		}
 	}
 	result, err := Run(t.Context(), in)
-	if err != nil || result.Reply == nil || c.completeCalls != 2 || len(model.DoStreamCalls) != 1 {
+	if err != nil || result.Reply == nil || c.completeCalls != 2 || len(model.Requests()) != 1 {
 		t.Fatalf("result=%+v %v c=%+v", result, err, c)
 	}
 	store := in.Store.(*memoryStore)
@@ -649,8 +656,8 @@ func TestRunUnlimitedStepsAndBudgetGate(t *testing.T) {
 			in.Definition.Budget = tc.budget
 			in.Controller.(*controller).limit = tc.limit
 			result, err := Run(t.Context(), in)
-			if (err == nil) != tc.completes || len(model.DoStreamCalls) != tc.want {
-				t.Fatalf("result=%+v err=%v calls=%d", result, err, len(model.DoStreamCalls))
+			if (err == nil) != tc.completes || len(model.Requests()) != tc.want {
+				t.Fatalf("result=%+v err=%v calls=%d", result, err, len(model.Requests()))
 			}
 		})
 	}
@@ -664,16 +671,20 @@ func TestRunInterruptedModelAndFreshContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := Run(t.Context(), in)
-	if err != nil || result.Reply == nil || len(model.DoStreamCalls) != 2 {
+	if err != nil || result.Reply == nil || len(model.Requests()) != 2 {
 		t.Fatalf("resume=%+v %v", result, err)
 	}
-	raw, _ := json.Marshal(model.DoStreamCalls[1])
+	raw, _ := json.Marshal(model.Requests()[1])
 	if !strings.Contains(string(raw), "No local tools") || strings.Contains(string(raw), "discarded") {
 		t.Fatalf("recovery request=%s", raw)
 	}
 	store.cp = nil // Host creates a new run in the same completed session.
 	in.Message = "follow up"
-	in.Model = testutil.NewMockLanguageModel(testutil.MockLanguageModelOptions{StreamResponses: [][]stream.Event{batch(complete("continued"))}})
+	continued, err := testutil.NewMockModel(testutil.MockConfig{ID: "continuation", Responses: []testutil.MockResponse{{Events: batch(complete("continued"))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Model = continued
 	result, err = Run(t.Context(), in)
 	if err != nil || result.Reply == nil {
 		t.Fatalf("continuation=%+v %v", result, err)
@@ -781,8 +792,8 @@ func TestRunMissingDependenciesFailBeforeWork(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in, model := input(batch(complete("done")))
 			tc.mutate(&in)
-			if _, err := Run(t.Context(), in); err == nil || len(model.DoStreamCalls) != 0 {
-				t.Fatalf("error=%v calls=%d", err, len(model.DoStreamCalls))
+			if _, err := Run(t.Context(), in); err == nil || len(model.Requests()) != 0 {
+				t.Fatalf("error=%v calls=%d", err, len(model.Requests()))
 			}
 		})
 	}
@@ -803,8 +814,8 @@ func TestCheckpointRejectsIncompatibleOrCorruptState(t *testing.T) {
 			cp := &Checkpoint{Version: 1, Revision: 1, ContractHash: in.Definition.ContractHash, Phase: PhaseReady}
 			tc.mutate(cp)
 			in.Store.(*memoryStore).cp, _ = json.Marshal(cp)
-			if _, err := Run(t.Context(), in); err == nil || len(model.DoStreamCalls) != 0 {
-				t.Fatalf("error=%v calls=%d", err, len(model.DoStreamCalls))
+			if _, err := Run(t.Context(), in); err == nil || len(model.Requests()) != 0 {
+				t.Fatalf("error=%v calls=%d", err, len(model.Requests()))
 			}
 		})
 	}

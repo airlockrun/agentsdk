@@ -81,6 +81,8 @@ func run(args []string) error {
 		return cmdToolchain(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "run":
+		return cmdRun(args[1:])
 	case "stage-runtime-files":
 		return cmdStageRuntimeFiles(args[1:])
 	case "integrations":
@@ -123,6 +125,7 @@ Usage:
   air update [dir]                update module pins, managed files, and toolchain
   air toolchain install           ensure the pinned build tools and references
   air build [dir]                 run the local build chain
+  air run --local [flags]         run this app with the local v3 runtime
   air integrations list [flags]   list configured external integrations
   air env list [flags]            list agent environment variable declarations
   air env get <slug> [flags]      print one configured non-secret value

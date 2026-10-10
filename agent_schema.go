@@ -97,7 +97,11 @@ func agentNumericBounds(t reflect.Type) (json.Number, json.Number) {
 			return json.Number("-" + bound), json.Number(bound)
 		}
 		integer, _ := new(big.Float).SetFloat64(max).Int(nil)
-		return json.Number("-" + integer.String()), json.Number(integer.String())
+		// Exact scientific notation keeps the Float64 bound intact and avoids
+		// provider schema parsers interpreting a 309-digit integer as an int.
+		digits := integer.String()
+		bound := digits[:1] + "." + digits[1:] + "e" + strconv.Itoa(len(digits)-1)
+		return json.Number("-" + bound), json.Number(bound)
 	default:
 		return "", ""
 	}

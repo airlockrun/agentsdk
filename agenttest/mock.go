@@ -16,13 +16,6 @@ type MockRequest struct {
 	Header http.Header
 }
 
-// SetAgentResponse configures an exact task-agent HTTP method and request URI
-// (including query). Supply a wire.AgentRunResponse or wire.ListAgentRunsResponse,
-// or an error body with its HTTP status. Missing responses fail explicitly.
-func (m *MockAirlock) SetAgentResponse(method, uri string, status int, response any) error {
-	return m.mock.SetAgentResponse(method, uri, status, response)
-}
-
 // SetConnectorCommandResponse configures the typed JSON output returned for a
 // connector command name.
 func (m *MockAirlock) SetConnectorCommandResponse(name string, output any) error {
@@ -38,19 +31,13 @@ func (m *MockAirlock) SetConnectorCommandResponse(name string, output any) error
 type MockAirlock struct {
 	Server *httptest.Server
 
-	// LLMResponse is the NDJSON response returned by the model endpoint.
-	LLMResponse []byte
-
 	mock *mockairlock.Mock
 }
 
 // NewMockAirlock creates a mock Airlock server and returns its base URL.
 func NewMockAirlock() (*MockAirlock, string) {
-	m := &MockAirlock{}
-	inner, url := mockairlock.NewWithLLMResponse(func() []byte { return m.LLMResponse })
-	m.Server = inner.Server
-	m.mock = inner
-	return m, url
+	inner, url := mockairlock.New()
+	return &MockAirlock{Server: inner.Server, mock: inner}, url
 }
 
 // Requests returns all recorded requests.

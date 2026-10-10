@@ -12,6 +12,13 @@ import (
 	"unicode/utf8"
 )
 
+// ValidateJSON validates a value against the declarative SDK schema vocabulary
+// with exact numeric bounds and without fetching remote references. Unsupported
+// assertions fail explicitly. Test hosts use the same validation as task execution.
+func ValidateJSON(schema, value json.RawMessage) error {
+	return validateJSON(schema, value)
+}
+
 // validateJSON validates the declarative SDK schema vocabulary without coercing
 // numbers or fetching remote references. Unsupported assertions fail closed.
 func validateJSON(rawSchema, rawValue json.RawMessage) error {

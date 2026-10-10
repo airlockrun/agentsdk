@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/airlockrun/goai/model"
+	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/sol/websearch"
 )
 
@@ -17,7 +18,7 @@ func withBoundRun(a *Agent) context.Context {
 }
 
 func TestAgentLLM(t *testing.T) {
-	a, mock := testAgent(t)
+	a, mock := testAgentWithModels(t, []string{"ocr"})
 	a.RegisterModel(&ModelSlot{Slug: "ocr", Capability: CapVision, Description: "Extract text"})
 	ctx := withBoundRun(a)
 
@@ -26,7 +27,7 @@ func TestAgentLLM(t *testing.T) {
 		t.Fatal("expected non-nil model")
 	}
 
-	events, err := m.Stream(ctx, nil)
+	events, err := m.Stream(ctx, &stream.CallOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,12 +55,12 @@ func TestAgentLLM(t *testing.T) {
 }
 
 func TestAgentLLMTextCapability(t *testing.T) {
-	a, mock := testAgent(t)
+	a, mock := testAgentWithModels(t, []string{"summarize"})
 	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Summaries"})
 	ctx := withBoundRun(a)
 
 	m := a.LLM(ctx, "summarize")
-	events, err := m.Stream(ctx, nil)
+	events, err := m.Stream(ctx, &stream.CallOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

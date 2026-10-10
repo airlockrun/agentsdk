@@ -183,14 +183,23 @@ domain-specific idempotency when their own business operation requires it.
 
 ## Tests
 
-Use `agenttest.New(t, factory)` to exercise registration, sync, app callbacks, and
-the typed lifecycle with a started SDK. `Env.Airlock.SetAgentResponse(method,
-requestURI, status, response)` configures an exact lifecycle route, including its
-query string. Supply `wire.AgentRunResponse` or `wire.ListAgentRunsResponse`;
-unconfigured task responses fail explicitly rather than inventing successful work.
-`Requests()` includes cloned request headers for credential assertions.
+Use `agenttest.New(t, factory)` to start the app with independent canonical GoAI
+mocks for its declared text/vision model slots. Configure responses with
+`env.MockModel(slot).Configure(testutil.MockConfig{ID: mock.ID(), ...})`.
+`agenttest.RunAgent(t, ctx, env, handle, input, options)` executes a registered leaf
+task through the shared task runtime and an explicit executor factory. It checks
+typed completion and returns task, tool, event and checkpoint diagnostics. Private
+tools execute through the app's authenticated handler. An omitted scope generates
+an application-owned invocation bound to the environment's app identity.
 
-The mock does not execute the hosted model loop or emulate durable scheduling.
-Configure queued, completed, failure, and idempotent responses explicitly. Tests
-for host persistence, leases, recovery, and hierarchical budget enforcement belong
-to the host and runtime packages.
+The mock host rejects hosted task Start/Get/List/Wait/Cancel/Continue requests
+with an unsupported-service error directing tests to RunAgent. Production
+AgentHandle methods address real Airlock-owned task state. Client protocol tests
+use test-owned HTTP responders to validate serialization, contracts, statuses and
+transport errors independently of task execution.
+
+Use `NewWithOptions` and explicitly registered flags to select a live model for
+a named slot. Ordinary execution uses mocks without credential or live-network
+access. Host persistence, leases, scheduling, recovery and hierarchical budget
+enforcement have their own host/runtime tests. See
+[local agent tests](testing.md) for the runnable CSV/Deno example and commands.

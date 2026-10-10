@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/airlockrun/agentsdk/internal/streamevent"
 	"github.com/airlockrun/goai/stream"
 )
 
@@ -26,10 +27,7 @@ func newEventWriter(w http.ResponseWriter) *EventWriter {
 }
 
 // ndjsonLine is the wire format for a single NDJSON event.
-type ndjsonLine struct {
-	Type string `json:"type"`
-	Data any    `json:"data,omitempty"`
-}
+type ndjsonLine = streamevent.Line
 
 func (ew *EventWriter) ensureHeaders() {
 	if !ew.headersSent {
@@ -67,11 +65,7 @@ func (ew *EventWriter) writeLine(line ndjsonLine) error {
 
 // WriteEvent serializes a GoAI stream.Event as an NDJSON line.
 func (ew *EventWriter) WriteEvent(event stream.Event) error {
-	data := marshalEventData(event.Data)
-	return ew.writeLine(ndjsonLine{
-		Type: string(event.Type),
-		Data: data,
-	})
+	return ew.writeLine(streamevent.FromEvent(event))
 }
 
 // WriteProgress writes a progress event for webhook handlers.
@@ -84,21 +78,5 @@ func (ew *EventWriter) WriteProgress(message string) error {
 
 // WriteError writes an error event.
 func (ew *EventWriter) WriteError(err error) error {
-	return ew.writeLine(ndjsonLine{
-		Type: string(stream.EventError),
-		Data: map[string]string{"error": err.Error()},
-	})
-}
-
-// marshalEventData converts EventData to a JSON-safe representation.
-// Handles error interfaces that don't marshal cleanly.
-func marshalEventData(data stream.EventData) any {
-	switch d := data.(type) {
-	case stream.ErrorEvent:
-		return struct {
-			Error string `json:"error"`
-		}{d.Error.Error()}
-	default:
-		return data
-	}
+	return ew.WriteEvent(stream.Event{Type: stream.EventError, Data: stream.ErrorEvent{Error: err}})
 }

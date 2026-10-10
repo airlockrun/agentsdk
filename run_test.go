@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/airlockrun/agentsdk/wire"
+	"github.com/airlockrun/goai/stream"
 )
 
 func TestConnectionHandleProxy(t *testing.T) {
@@ -52,13 +53,13 @@ func TestDirectoryWriteAndRead(t *testing.T) {
 // TestBackgroundRun exercises the rolling ambient run that backs
 // `agent.LLM` calls made with a ctx that has no dispatcher-bound run.
 func TestBackgroundRun(t *testing.T) {
-	a, mock := testAgent(t)
+	a, mock := testAgentWithModels(t, []string{"summarize", "analyze"})
 	a.RegisterModel(&ModelSlot{Slug: "summarize", Capability: CapText, Description: "Summaries"})
 	a.RegisterModel(&ModelSlot{Slug: "analyze", Capability: CapText, Description: "Analysis"})
 
 	// agent.LLM with plain ctx triggers background run creation.
 	m := a.LLM(context.Background(), "summarize")
-	events, err := m.Stream(context.Background(), nil)
+	events, err := m.Stream(context.Background(), &stream.CallOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestBackgroundRun(t *testing.T) {
 	// A second call within the inactivity window reuses the same run —
 	// no additional run/create request.
 	m2 := a.LLM(context.Background(), "analyze")
-	events2, _ := m2.Stream(context.Background(), nil)
+	events2, _ := m2.Stream(context.Background(), &stream.CallOptions{})
 	for range events2 {
 	}
 	createReqs = mock.RequestsByPath("/api/agent/run/create")

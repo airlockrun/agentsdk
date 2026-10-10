@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"math/big"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/airlockrun/agentsdk/wire"
@@ -13,6 +15,44 @@ import (
 )
 
 type referencedAgentArray [2]int8
+
+func TestAgentFloat64BoundsExactScientificNotation(t *testing.T) {
+	lo, hi := agentNumericBounds(reflect.TypeFor[float64]())
+	integer, _ := new(big.Float).SetFloat64(math.MaxFloat64).Int(nil)
+	for _, tc := range []struct {
+		name     string
+		bound    json.Number
+		negative bool
+	}{{"maximum", hi, false}, {"minimum", lo, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !strings.Contains(string(tc.bound), "e308") {
+				t.Fatal("float bound is not scientific notation")
+			}
+			rational, ok := new(big.Rat).SetString(string(tc.bound))
+			if !ok {
+				t.Fatal("invalid numeric bound")
+			}
+			want := new(big.Rat).SetInt(integer)
+			if tc.negative {
+				want.Neg(want)
+			}
+			if rational.Cmp(want) != 0 {
+				t.Fatal("float bound lost precision")
+			}
+			var value float64
+			if err := json.Unmarshal([]byte(tc.bound), &value); err != nil {
+				t.Fatal(err)
+			}
+			max := math.MaxFloat64
+			if tc.negative {
+				max = -max
+			}
+			if value != max {
+				t.Fatal("bound is not maximum finite Float64")
+			}
+		})
+	}
+}
 
 func init() {
 	schema.RegisterTypeOverride(reflect.TypeFor[referencedAgentArray](), func(s *schema.Schema) {

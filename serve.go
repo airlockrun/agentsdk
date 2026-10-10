@@ -39,6 +39,11 @@ func (a *Agent) Serve() {
 	if addr == "" {
 		addr = ":8080"
 	}
+	listener, err := runtimeListener(addr)
+	if err != nil {
+		panic("agentsdk: listen: " + err.Error())
+	}
+	defer listener.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -69,8 +74,8 @@ func (a *Agent) Serve() {
 		a.stopBackgroundFlusher()
 	}()
 
-	agentLogger().Info("serving", zap.String("version", Version), zap.String("addr", addr))
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	agentLogger().Info("serving", zap.String("version", Version), zap.String("addr", listener.Addr().String()))
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		panic("agentsdk: server error: " + err.Error())
 	}
 }
