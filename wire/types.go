@@ -484,6 +484,7 @@ type RouteDef struct {
 	Method      string `json:"method"`
 	Access      Access `json:"access"`
 	Description string `json:"description,omitempty"`
+	ToolName    string `json:"tool_name,omitempty"`
 }
 
 type WebhookDef struct {

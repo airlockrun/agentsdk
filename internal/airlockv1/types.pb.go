@@ -1324,6 +1324,8 @@ type RunInfo struct {
 	Scope          string `protobuf:"bytes,20,opt,name=scope,proto3" json:"scope,omitempty"` // "platform" or "app"; platform runs have no agent_id.
 	ParentRunId    string `protobuf:"bytes,21,opt,name=parent_run_id,json=parentRunId,proto3" json:"parent_run_id,omitempty"`
 	ConversationId string `protobuf:"bytes,22,opt,name=conversation_id,json=conversationId,proto3" json:"conversation_id,omitempty"`
+	TriggerRef     string `protobuf:"bytes,23,opt,name=trigger_ref,json=triggerRef,proto3" json:"trigger_ref,omitempty"`            // Exact trigger identity; HTTP routes retain method and pattern.
+	RouteToolName  string `protobuf:"bytes,24,opt,name=route_tool_name,json=routeToolName,proto3" json:"route_tool_name,omitempty"` // Corresponding app tool, not an invocation of it.
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1508,6 +1510,20 @@ func (x *RunInfo) GetParentRunId() string {
 func (x *RunInfo) GetConversationId() string {
 	if x != nil {
 		return x.ConversationId
+	}
+	return ""
+}
+
+func (x *RunInfo) GetTriggerRef() string {
+	if x != nil {
+		return x.TriggerRef
+	}
+	return ""
+}
+
+func (x *RunInfo) GetRouteToolName() string {
+	if x != nil {
+		return x.RouteToolName
 	}
 	return ""
 }
@@ -2342,6 +2358,7 @@ type RouteInfo struct {
 	Method        string                 `protobuf:"bytes,3,opt,name=method,proto3" json:"method,omitempty"`
 	Access        string                 `protobuf:"bytes,4,opt,name=access,proto3" json:"access,omitempty"`
 	Description   string                 `protobuf:"bytes,5,opt,name=description,proto3" json:"description,omitempty"`
+	ToolName      string                 `protobuf:"bytes,6,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2407,6 +2424,13 @@ func (x *RouteInfo) GetAccess() string {
 func (x *RouteInfo) GetDescription() string {
 	if x != nil {
 		return x.Description
+	}
+	return ""
+}
+
+func (x *RouteInfo) GetToolName() string {
+	if x != nil {
+		return x.ToolName
 	}
 	return ""
 }
@@ -7526,7 +7550,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"owner_name\x18\x13 \x01(\tR\townerName\x12\x19\n" +
 	"\bis_owner\x18\x14 \x01(\bR\aisOwner\x12\x19\n" +
-	"\bgit_mode\x18\x15 \x01(\tR\agitModeJ\x04\b\x16\x10\x17R\vbuiltin_key\"\xc1\x06\n" +
+	"\bgit_mode\x18\x15 \x01(\tR\agitModeJ\x04\b\x16\x10\x17R\vbuiltin_key\"\x8a\a\n" +
 	"\aRunInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
 	"\bagent_id\x18\x02 \x01(\tR\aagentId\x12\x1b\n" +
@@ -7557,7 +7581,10 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\ftrigger_type\x18\x13 \x01(\tR\vtriggerType\x12\x14\n" +
 	"\x05scope\x18\x14 \x01(\tR\x05scope\x12\"\n" +
 	"\rparent_run_id\x18\x15 \x01(\tR\vparentRunId\x12'\n" +
-	"\x0fconversation_id\x18\x16 \x01(\tR\x0econversationId\"\x8b\x02\n" +
+	"\x0fconversation_id\x18\x16 \x01(\tR\x0econversationId\x12\x1f\n" +
+	"\vtrigger_ref\x18\x17 \x01(\tR\n" +
+	"triggerRef\x12&\n" +
+	"\x0froute_tool_name\x18\x18 \x01(\tR\rrouteToolName\"\x8b\x02\n" +
 	"\x1bAgentBuildJobBlockerSummary\x12!\n" +
 	"\fhandler_name\x18\x01 \x01(\tR\vhandlerName\x12'\n" +
 	"\x0fhandler_version\x18\x02 \x01(\x05R\x0ehandlerVersion\x12*\n" +
@@ -7649,13 +7676,14 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"nextFireAt\x12\x18\n" +
 	"\aenabled\x18\t \x01(\bR\aenabled\x12'\n" +
 	"\x0fhandler_version\x18\n" +
-	" \x01(\x05R\x0ehandlerVersion\"\x81\x01\n" +
+	" \x01(\x05R\x0ehandlerVersion\"\x9e\x01\n" +
 	"\tRouteInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
 	"\x06method\x18\x03 \x01(\tR\x06method\x12\x16\n" +
 	"\x06access\x18\x04 \x01(\tR\x06access\x12 \n" +
-	"\vdescription\x18\x05 \x01(\tR\vdescription\"\xf7\x02\n" +
+	"\vdescription\x18\x05 \x01(\tR\vdescription\x12\x1b\n" +
+	"\ttool_name\x18\x06 \x01(\tR\btoolName\"\xf7\x02\n" +
 	"\x0eConnectionInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +

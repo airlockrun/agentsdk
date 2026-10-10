@@ -22,6 +22,45 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
+func TestLinkedRouteRunsHandlerWithoutInvokingTool(t *testing.T) {
+	a, mock := testAgent(t)
+	toolCalls, handlerCalls := 0, 0
+	linked := tool.New("save").Description("Admin save").Execute(func(context.Context, json.RawMessage, tool.CallOptions) (tool.Result, error) {
+		toolCalls++
+		return tool.Result{}, nil
+	}).Build()
+	a.RegisterTool(linked, AccessAdmin)
+	runID := uuid.NewString()
+	a.RegisterRoute(&Route{Method: http.MethodPost, Path: "/save", Access: AccessUser, Description: "HTTP save", Tool: linked,
+		Handler: func(w http.ResponseWriter, r *http.Request) error {
+			handlerCalls++
+			if CallerFromContext(r.Context()).Access() != AccessUser || runFromContext(r.Context()).id != runID {
+				t.Error("correspondence changed caller access or route run")
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil || string(body) != "form input" {
+				t.Errorf("handler input = %q, %v", body, err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+			_, err = w.Write([]byte("HTTP response"))
+			return err
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/save", strings.NewReader("form input"))
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("X-Run-ID", runID)
+	req.Header.Set(wire.InvocationTokenHeader, strings.Repeat("45", 32))
+	setTestCallerHeader(t, req, testWireCaller("user", wire.AccessUser))
+	w := httptest.NewRecorder()
+	a.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted || w.Body.String() != "HTTP response" || handlerCalls != 1 || toolCalls != 0 {
+		t.Fatalf("route response=%d %q handler calls=%d tool calls=%d", w.Code, w.Body.String(), handlerCalls, toolCalls)
+	}
+	if requests := mock.RequestsByPath("/api/agent/run/complete"); len(requests) != 1 {
+		t.Fatalf("expected one route completion, got %d", len(requests))
+	}
+}
+
 func TestHandlerHostDelivery(t *testing.T) {
 	for _, family := range []string{"route", "standalone route", "webhook", "job", "runtime invoke", "refresh", "static", "bundled asset"} {
 		t.Run(family, func(t *testing.T) {

@@ -12,7 +12,7 @@ local runtime JSON `models` string map. Remove `Options.Auth` and
 `-agenttest.auth`. Put credentials only in the private OS user `sol/config.json`,
 using named provider entries prepared through Sol's account-scoped auth commands.
 For example, use `"models":{"@default":"work/openai/gpt-5.4"}` and
-`sol auth login work/openai --method codex`. See
+`sol --auth login work/openai --method codex`. See
 `/libs/agentsdk/reference/local-development.md` for startup and dependency requirements.
 
 Use `goai/testutil.NewMockModel(testutil.MockConfig{ID: ..., ...})` for streaming

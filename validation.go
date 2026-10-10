@@ -111,7 +111,11 @@ func (a *Agent) validateRegistrations() {
 		}
 		seenModels[slot.Slug] = struct{}{}
 	}
-	if err := wire.ValidateAgentDefinitions(a.buildManifest()); err != nil {
+	manifest := a.buildManifest()
+	if err := wire.ValidateAgentDefinitions(manifest); err != nil {
+		panic("agentsdk: " + err.Error())
+	}
+	if err := wire.ValidateRouteTools(manifest); err != nil {
 		panic("agentsdk: " + err.Error())
 	}
 }

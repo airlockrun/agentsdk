@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
+	"github.com/airlockrun/goai/tool"
 )
 
 // defaultTimeout is the default execution timeout for webhooks.
@@ -69,6 +70,10 @@ type Route struct {
 	Handler     RouteHandlerFunc // required
 	Access      Access           // required: AccessAdmin, AccessUser, or AccessPublic
 	Description string           // required: shown to users and the LLM
+	// Tool identifies a corresponding tool registered on this app by Name.
+	// The zero value leaves the route unlinked. Handler and Access remain
+	// independent: correspondence neither invokes the tool nor grants its access.
+	Tool tool.Tool
 }
 
 // --- Connection ---

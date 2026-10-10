@@ -6041,16 +6041,17 @@ func (x *ListConversationsResponse) GetConversations() []*ConversationInfo {
 // One row of the merged sidebar feed (agent web conversations + system
 // conversations), keyset-paginated newest-first.
 type ConversationFeedItem struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"` // "agent" | "system"
-	Id            string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
-	AgentId       string                 `protobuf:"bytes,3,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty for system conversations
-	Title         string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"` // system conversations only (e.g. awaiting_confirmation)
-	Emoji         string                 `protobuf:"bytes,7,opt,name=emoji,proto3" json:"emoji,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Kind               string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"` // "agent" | "developer" | "system"
+	Id                 string                 `protobuf:"bytes,2,opt,name=id,proto3" json:"id,omitempty"`
+	AgentId            string                 `protobuf:"bytes,3,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"` // empty for system conversations
+	Title              string                 `protobuf:"bytes,4,opt,name=title,proto3" json:"title,omitempty"`
+	UpdatedAt          *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	Status             string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"` // system conversations only (e.g. awaiting_confirmation)
+	Emoji              string                 `protobuf:"bytes,7,opt,name=emoji,proto3" json:"emoji,omitempty"`
+	DeveloperSessionId string                 `protobuf:"bytes,8,opt,name=developer_session_id,json=developerSessionId,proto3" json:"developer_session_id,omitempty"` // set only for attached developer conversations
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *ConversationFeedItem) Reset() {
@@ -6128,6 +6129,13 @@ func (x *ConversationFeedItem) GetStatus() string {
 func (x *ConversationFeedItem) GetEmoji() string {
 	if x != nil {
 		return x.Emoji
+	}
+	return ""
+}
+
+func (x *ConversationFeedItem) GetDeveloperSessionId() string {
+	if x != nil {
+		return x.DeveloperSessionId
 	}
 	return ""
 }
@@ -6574,6 +6582,7 @@ type DeveloperSessionInfo struct {
 	CreatedAt                  *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt                  *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	ClosedAt                   *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=closed_at,json=closedAt,proto3" json:"closed_at,omitempty"`
+	Attached                   bool                   `protobuf:"varint,17,opt,name=attached,proto3" json:"attached,omitempty"` // visible in the owner's conversation sidebar
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
 }
@@ -6718,6 +6727,13 @@ func (x *DeveloperSessionInfo) GetClosedAt() *timestamppb.Timestamp {
 		return x.ClosedAt
 	}
 	return nil
+}
+
+func (x *DeveloperSessionInfo) GetAttached() bool {
+	if x != nil {
+		return x.Attached
+	}
+	return false
 }
 
 // CreateDeveloperSessionRequest targets an existing app, including a newly
@@ -15743,7 +15759,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x1aCreateConversationResponse\x12@\n" +
 	"\fconversation\x18\x01 \x01(\v2\x1c.airlock.v1.ConversationInfoR\fconversation\"_\n" +
 	"\x19ListConversationsResponse\x12B\n" +
-	"\rconversations\x18\x01 \x03(\v2\x1c.airlock.v1.ConversationInfoR\rconversations\"\xd4\x01\n" +
+	"\rconversations\x18\x01 \x03(\v2\x1c.airlock.v1.ConversationInfoR\rconversations\"\x86\x02\n" +
 	"\x14ConversationFeedItem\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x0e\n" +
 	"\x02id\x18\x02 \x01(\tR\x02id\x12\x19\n" +
@@ -15752,7 +15768,8 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x16\n" +
 	"\x06status\x18\x06 \x01(\tR\x06status\x12\x14\n" +
-	"\x05emoji\x18\a \x01(\tR\x05emoji\"w\n" +
+	"\x05emoji\x18\a \x01(\tR\x05emoji\x120\n" +
+	"\x14developer_session_id\x18\b \x01(\tR\x12developerSessionId\"w\n" +
 	"\x1cListConversationFeedResponse\x126\n" +
 	"\x05items\x18\x01 \x03(\v2 .airlock.v1.ConversationFeedItemR\x05items\x12\x1f\n" +
 	"\vnext_cursor\x18\x02 \x01(\tR\n" +
@@ -15785,7 +15802,7 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x0ePromptResponse\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12'\n" +
 	"\x0fconversation_id\x18\x02 \x01(\tR\x0econversationId\x12#\n" +
-	"\rcommand_reply\x18\x03 \x01(\tR\fcommandReply\"\x9b\x06\n" +
+	"\rcommand_reply\x18\x03 \x01(\tR\fcommandReply\"\xb7\x06\n" +
 	"\x14DeveloperSessionInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x15\n" +
 	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12'\n" +
@@ -15805,7 +15822,8 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
 	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x127\n" +
-	"\tclosed_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\bclosedAt\"\x8a\x01\n" +
+	"\tclosed_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\bclosedAt\x12\x1a\n" +
+	"\battached\x18\x11 \x01(\bR\battached\"\x8a\x01\n" +
 	"\x1dCreateDeveloperSessionRequest\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12'\n" +
 	"\x0finitial_message\x18\x02 \x01(\tR\x0einitialMessage\x12)\n" +

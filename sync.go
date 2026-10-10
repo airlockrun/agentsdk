@@ -104,6 +104,7 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 			Method:      r.Method,
 			Access:      toWireAccess(r.Access),
 			Description: r.Description,
+			ToolName:    r.Tool.Name,
 		})
 	}
 	if len(a.staticAssets) > 0 {

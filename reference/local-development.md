@@ -37,7 +37,7 @@ slot by its exact slug. Unknown or missing slots fail explicitly. Values are
 `slug/provider/model` references, never credential-bearing objects. Sol's private
 OS user configuration (`sol/config.json`) owns named entries and their inline
 API keys or account-scoped Codex credentials. Prepare entries separately with
-`sol auth set-key personal/openai` or `sol auth login work/openai --method codex`.
+`sol --auth set-key personal/openai` or `sol --auth login work/openai --method codex`.
 The shared Sol resolver requires the exact named entry; it never initiates login,
 selects an environment-created profile, inherits Sol's default model, or
 substitutes mock responses. Different slots can select independent accounts of
