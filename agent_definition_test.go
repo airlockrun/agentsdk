@@ -34,6 +34,7 @@ func TestRegisterAgentManifest(t *testing.T) {
 	mcp := a.RegisterMCP(&MCP{Slug: "private", Name: "Private", URL: "https://example.com/mcp", AuthMode: MCPAuthNone, BindingMode: BindingShared})
 	d := taskDefinition()
 	d.Budget = &AgentBudget{Timeout: 30 * time.Minute, Tokens: 1000}
+	d.Capabilities = &AgentCapabilityPolicy{Allow: []AgentCapability{CapabilityFileWrite, CapabilityFileRead}}
 	d.MCPs = []*MCPHandle{mcp}
 	d.Tools = []tool.Tool{tool.Typed[taskInput, taskOutput]("lookup").Description("Look up a task").Execute(func(context.Context, taskInput) (taskOutput, error) { return taskOutput{}, nil }).Build()}
 	d.Tools[0].InputExamples = []tool.ToolInputExample{{Input: json.RawMessage(`{"task":"example"}`)}}
@@ -45,6 +46,7 @@ func TestRegisterAgentManifest(t *testing.T) {
 	d.Instructions = "mutated"
 	d.Budget.Tokens = 1
 	d.Budget.Timeout = time.Millisecond
+	d.Capabilities.Allow[0] = CapabilityHTTPRequest
 	d.MCPs[0] = nil
 	d.Tools[0].InputSchema[0] = '!'
 	d.Tools[0].InputExamples[0].Input[0] = '!'
@@ -60,6 +62,7 @@ func TestRegisterAgentManifest(t *testing.T) {
 	}
 	manifest.AgentDefinitions[0].Tools[0].InputSchema[0] = '!'
 	manifest.AgentDefinitions[0].MCPs[0] = "mutated"
+	manifest.AgentDefinitions[0].Capabilities.Allow[0] = CapabilityHTTPRequest
 	if !reflect.DeepEqual(before, a.Manifest()) {
 		t.Fatal("manifest aliases registration state")
 	}

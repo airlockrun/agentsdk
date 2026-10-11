@@ -18,21 +18,22 @@ type AgentBudget struct {
 }
 
 type AgentDefinition struct {
-	Slug                   string                `json:"slug"`
-	Description            string                `json:"description"`
-	Instructions           string                `json:"instructions"`
-	ModelSlot              string                `json:"modelSlot"`
-	InputSchema            json.RawMessage       `json:"inputSchema"`
-	OutputSchema           json.RawMessage       `json:"outputSchema"`
-	ContractHash           string                `json:"contractHash"`
-	Tools                  []AgentToolDefinition `json:"tools,omitempty"`
-	MCPs                   []string              `json:"mcps,omitempty"`
-	Subagents              []string              `json:"subagents,omitempty"`
-	Budget                 AgentBudget           `json:"budget"`
-	MaxAttempts            int32                 `json:"maxAttempts"`
-	MaxConcurrency         int32                 `json:"maxConcurrency"`
-	MaxSubagentCalls       int32                 `json:"maxSubagentCalls"`
-	MaxConcurrentSubagents int32                 `json:"maxConcurrentSubagents"`
+	Slug                   string                 `json:"slug"`
+	Description            string                 `json:"description"`
+	Instructions           string                 `json:"instructions"`
+	ModelSlot              string                 `json:"modelSlot"`
+	Capabilities           *AgentCapabilityPolicy `json:"capabilities,omitempty"`
+	InputSchema            json.RawMessage        `json:"inputSchema"`
+	OutputSchema           json.RawMessage        `json:"outputSchema"`
+	ContractHash           string                 `json:"contractHash"`
+	Tools                  []AgentToolDefinition  `json:"tools,omitempty"`
+	MCPs                   []string               `json:"mcps,omitempty"`
+	Subagents              []string               `json:"subagents,omitempty"`
+	Budget                 AgentBudget            `json:"budget"`
+	MaxAttempts            int32                  `json:"maxAttempts"`
+	MaxConcurrency         int32                  `json:"maxConcurrency"`
+	MaxSubagentCalls       int32                  `json:"maxSubagentCalls"`
+	MaxConcurrentSubagents int32                  `json:"maxConcurrentSubagents"`
 }
 
 type AgentToolDefinition struct {
@@ -165,6 +166,9 @@ func ValidateAgentDefinitions(manifest AgentManifest) error {
 		if models[d.ModelSlot] != "text" {
 			return fail("model slot must reference a registered text model")
 		}
+		if err := validateAgentCapabilities(manifest, d.Capabilities); err != nil {
+			return fail(err.Error())
+		}
 		if d.MaxAttempts <= 0 || d.MaxConcurrency <= 0 {
 			return fail("maxAttempts and maxConcurrency must be positive")
 		}
@@ -214,6 +218,9 @@ func ValidateAgentDefinitions(manifest AgentManifest) error {
 			}
 			if len(child.Subagents) != 0 {
 				return fail("subagents may not have children: " + slug)
+			}
+			if err := validateChildCapabilities(d, child); err != nil {
+				return fail(err.Error())
 			}
 			seen[slug] = true
 		}

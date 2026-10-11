@@ -27,8 +27,12 @@ Only manifest-declared external MCP servers admit discovery schemas.
 `DefinitionCatalog(manifest, wire.RuntimeAgentDefinition{Slug: slug,
 ContractHash: hash}, discovery)` validates the exact task contract and replaces
 global tools with its private inventory. Only that definition's bound MCP servers
-are included, including servers without chat access. Fixed operations, connections,
-and topics retain their normal policy. A catalogue is not proof of run authority.
+are included, including servers without chat access. An explicit definition
+`Capabilities` policy filters broker-dispatched fixed operations, connections
+and topics by exact canonical ID. Nil preserves their normal inventory; an empty
+policy excludes them. Private tools/MCPs and executor-local logging retain their
+own declaration/intrinsic rules. The same filtered inventory gates host, local
+and SDK direct dispatch as well as JS presentation. A catalogue is not proof of run authority.
 Definitions describe capabilities, not authorization grants. `AccessPublic` on
 file operations means directory-specific policy must still be checked.
 

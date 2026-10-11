@@ -15,7 +15,7 @@ import (
 
 const instructions = `You are an application-owned task agent. Finish by calling complete, never by prose alone.
 complete accepts either {kind:"output",output:<typed result>} or {kind:"needs_input",question:"..."}; both finish this run. There is no yield state.
-Agent controls are direct model tools, not JavaScript functions. run_js executes synchronously. Calls in one response execute in order; successful complete stops the batch.
+Agent controls are direct model tools, not JavaScript functions. run_js and advertised run_js_file execute synchronously with the same capabilities. Calls in one response execute in order; successful complete stops the batch.
 spawn tools return durable call IDs and session IDs. Use get_calls to inspect, wait_calls to wait for any/all, cancel_calls to cancel, and continue_agent to start a new run in a completed child's session. Resolve active children before complete.
 Waiting releases this worker and destroys JavaScript state. Every restart creates a fresh realm. Use returned transcript data, never retained JavaScript heap state, to continue work.
 An interrupted tool outcome marked unknown is not proof of failure. Do not repeat its side effects automatically. Use safe reads or complete with needs_input if a decision requires clarification.
@@ -131,7 +131,7 @@ func dispatch(ctx context.Context, in Input, set tool.Set, spawns map[string]str
 	if err := validateJSON(t.InputSchema, call.Input); err != nil {
 		return tool.Result{}, nil, fmt.Errorf("%s input: %w", call.Name, err)
 	}
-	if call.Name == "run_js" {
+	if call.Name == "run_js" || call.Name == "run_js_file" {
 		r, err := t.Execute(ctx, call.Input, tool.CallOptions{ToolCallID: call.ID, AbortSignal: ctx})
 		return r, nil, err
 	}

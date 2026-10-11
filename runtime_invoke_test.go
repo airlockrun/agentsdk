@@ -194,6 +194,25 @@ func TestRuntimeInvokeAuthorization(t *testing.T) {
 	}
 }
 
+func TestRuntimeInvokeCapabilityPolicyDeniesDirectCalls(t *testing.T) {
+	for _, id := range []string{"air//query_db", "air//file_read", "air//file_write", "air//file_delete", "air//file_stat", "air//file_encode", "air//http_request", "air__file_read", "air.fileRead", "tool//global_only"} {
+		t.Run(id, func(t *testing.T) {
+			a, mock := testAgent(t)
+			taskModel(a)
+			d := taskDefinition()
+			d.Capabilities = &AgentCapabilityPolicy{}
+			h := RegisterAgent(a, d)
+			r := runtimeRequest(a, id)
+			r.Context.Caller = testWireCaller("application", wire.AccessAdmin)
+			r.Context.Definition = &wire.RuntimeAgentDefinition{Slug: h.Slug(), ContractHash: h.ContractHash()}
+			w := invokeRuntime(t, a.Handler(), r, a.token)
+			if w.Code != http.StatusNotFound || len(mock.Requests()) != 0 {
+				t.Fatalf("denied operation reached executor: status=%d requests=%v", w.Code, mock.Requests())
+			}
+		})
+	}
+}
+
 func TestRuntimeInvokeBorrowsRunAndPreservesResult(t *testing.T) {
 	a, mock := testAgent(t)
 	req := runtimeRequest(a, "tool//check")

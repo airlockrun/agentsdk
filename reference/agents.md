@@ -88,6 +88,55 @@ ordered declaration. `Slug()` and `ContractHash()` identify the handle's immutab
 contract. Changing a declaration changes its hash; persisted sessions require an
 exact contract match, and incompatible deployments fail explicitly.
 
+### Generic operation allowlist
+
+`Capabilities *agentsdk.AgentCapabilityPolicy` selects generic operations by
+canonical ID. Use typed SDK constants for built-ins:
+
+```go
+Capabilities: &agentsdk.AgentCapabilityPolicy{
+    Allow: []agentsdk.AgentCapability{
+        agentsdk.CapabilityAttachToContext,
+        agentsdk.CapabilityFileStat,
+        agentsdk.CapabilityFileRead,
+        agentsdk.CapabilityFileWrite,
+    },
+},
+```
+
+Nil preserves the normal generic inventory. `&agentsdk.AgentCapabilityPolicy{}`
+permits no broker-dispatched generic operations. Private `Tools` and explicitly
+bound `MCPs` remain selected by those declarations. `run_js`, completion/child
+controls and executor-local console/`air.log` are runtime intrinsics, not grants
+to broker operations. Human conversations do not use a task definition's policy.
+
+An explicit policy also excludes unlisted connection and topic operations.
+Select exact canonical IDs using the existing path API, for example:
+
+```go
+agentsdk.AgentCapability(capability.Local(capability.Connection, "source", "request").ID())
+```
+
+The connection/topic must be declared on this app. JS names (`air.fileRead`,
+`conn.source.request`) and provider aliases are not IDs. Unknown entries,
+duplicates, private-tool/MCP entries and undeclared resources fail registration.
+`CapabilityAttachToContext` requires explicit `CapabilityFileStat`: local image
+adapters use authorized metadata lookup and never silently expand the allowlist.
+File operations still enforce directory, scope and caller policies; selecting
+an operation grants no home-file, foreign-app or unregistered-directory access.
+
+Registration snapshots and sorts the list. Policy presence and entries enter
+the contract hash, so an unset and an explicit empty policy are distinct through
+sync, serialization and recovery. The shared catalogue filters operations before
+JS/direct exposure and on SDK, local-host and hosted broker dispatch. Direct
+calls to forbidden canonical IDs or presentation aliases cannot bypass it.
+An explicitly restricted parent requires each child to have an explicit policy
+whose generic operations and MCP selection are subsets of its own. Private
+child tools remain owned by the explicitly declared child definition. Existing
+live host authority and resource-binding checks remain independent gates.
+Trusted native Go tools retain their own app APIs; this is a model/callback
+capability restriction, not a native-code sandbox.
+
 ## Budgets
 
 `Budget *agentsdk.AgentBudget` distinguishes omission from explicit limits:
@@ -116,6 +165,31 @@ fresh budgets. `MaxAttempts` bounds interruption recovery, not the number of
 completed-session continuations.
 
 ## Durable IDs
+
+### Original admission input in private callbacks
+
+`handle.Input(ctx) (In, error)` returns a freshly decoded copy of the original
+session-start input. Only an authenticated private callback for that handle's
+exact app, run, definition and contract can read it. It performs no network call
+and needs no app task-data table. Tool arguments and continuation prompts cannot
+replace the snapshot; every child session has its own original admission.
+Missing/foreign callback state, invalid input and cancelled contexts return
+errors. Mutating the returned struct or its nested slices does not mutate the
+stored snapshot. Paths in input identify storage; immutable paths or checked
+content fences are still needed to freeze source bytes.
+
+```go
+var extraction *agentsdk.AgentHandle[Input, Output]
+service := NewService(app, func(ctx context.Context) (Input, error) {
+    return extraction.Input(ctx)
+})
+extraction = Register(app, service)
+```
+
+The host supplies this input from persisted original admission under the current
+run/definition/owner/receipt fences. Localruntime and agenttest use the same
+delivery contract. Human routes/global tools have no task-input context.
+Saved-script execution is described in `reference/scripts.md`.
 
 ```go
 run, err := research.Start(ctx, requestID, ResearchInput{Topic: "Soil health"})

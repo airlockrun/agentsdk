@@ -32,7 +32,7 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 	if in.Definition.Slug == "" || in.Definition.ContractHash == "" || strings.TrimSpace(in.Definition.Instructions) == "" {
 		return nil, errors.New("agentruntime: definition identity and instructions are required")
 	}
-	js, closeJS, err := chatruntime.JavaScriptTool(ctx, in.Capabilities, in.Backend, in.ExecutorFactory)
+	js, closeJS, err := chatruntime.JavaScriptTools(ctx, in.Capabilities, in.Backend, in.ExecutorFactory)
 	if err != nil {
 		return nil, err
 	}
@@ -49,9 +49,12 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 		}
 		err = errors.Join(err, cleanupErr)
 	}()
-	set, spawns, err := tools(in, js)
+	set, spawns, err := tools(in, js["run_js"])
 	if err != nil {
 		return nil, err
+	}
+	if saved, ok := js["run_js_file"]; ok {
+		set[saved.Name] = saved
 	}
 	declarations, err := chatruntime.RenderTypeScript(in.Capabilities)
 	if err != nil {

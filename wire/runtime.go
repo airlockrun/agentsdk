@@ -47,6 +47,9 @@ type RuntimeContext struct {
 	SupportedModalities []string                `json:"supportedModalities,omitempty"`
 	Job                 *RuntimeJobContext      `json:"job,omitempty"`
 	Definition          *RuntimeAgentDefinition `json:"definition,omitempty"`
+	// TaskInput is the original admitted session-start input, supplied only by
+	// the authenticated host. Continuation prompts and tool arguments are separate.
+	TaskInput json.RawMessage `json:"taskInput,omitempty"`
 }
 
 type RuntimeJobContext struct {

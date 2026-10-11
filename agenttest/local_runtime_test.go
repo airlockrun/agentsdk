@@ -179,10 +179,10 @@ func TestSharedLocalRuntimeDenoPrivateTool(t *testing.T) {
 			}
 			return tool.Result{Output: `{"answer":"saved"}`}, nil
 		}).Build()
-		handle = agentsdk.RegisterAgent(a, &agentsdk.AgentDefinition[durableInput, durableOutput]{Slug: "task", Description: "Fixture", Instructions: "Save then complete", ModelSlot: "reasoning", Tools: []tool.Tool{private}, MaxAttempts: 2, MaxConcurrency: 1})
+		handle = agentsdk.RegisterAgent(a, &agentsdk.AgentDefinition[durableInput, durableOutput]{Slug: "task", Description: "Fixture", Instructions: "Save then complete", ModelSlot: "reasoning", Capabilities: &agentsdk.AgentCapabilityPolicy{}, Tools: []tool.Tool{private}, MaxAttempts: 2, MaxConcurrency: 1})
 		return a
 	}, agenttest.Options{ExecutorFactory: executor, Mocks: map[string]testutil.MockConfig{"reasoning": {Responses: []testutil.MockResponse{
-		{ToolCalls: []stream.ToolCall{{ID: "script", Name: "run_js", Input: json.RawMessage(`{"code":"return await tools.save({value:'actual Deno'});","description":"Persist fixture"}`)}}, Usage: stream.UsageFrom(1, 1)},
+		{ToolCalls: []stream.ToolCall{{ID: "script", Name: "run_js", Input: json.RawMessage(`{"code":"for(const name of ['fileWrite','queryDB','httpRequest','attachToContext']) { if(typeof air[name] !== 'undefined') throw Error('generic capability escaped empty policy: '+name); } return await tools.save({value:'actual Deno'});","description":"Verify empty generic policy and invoke private persistence tool"}`)}}, Usage: stream.UsageFrom(1, 1)},
 		{ToolCalls: []stream.ToolCall{{ID: "done", Name: "complete", Input: json.RawMessage(`{"kind":"output","output":{"answer":"saved"}}`)}}, Usage: stream.UsageFrom(1, 1)},
 	}}}})
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

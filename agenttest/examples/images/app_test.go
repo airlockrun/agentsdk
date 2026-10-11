@@ -76,12 +76,12 @@ func TestStoredImage(t *testing.T) {
 		app := agentsdk.New(agentsdk.Config{Description: "Stored image example"})
 		app.RegisterDirectory("evidence", agentsdk.DirectoryOpts{Read: agentsdk.AccessInternal, Write: agentsdk.AccessInternal, List: agentsdk.AccessInternal, Description: "Task image evidence"})
 		app.RegisterModel(&agentsdk.ModelSlot{Slug: "image_probe", Capability: agentsdk.CapText, Description: "Inspect stored image"})
-		handle = agentsdk.RegisterAgent(app, &agentsdk.AgentDefinition[struct{}, Output]{Slug: "image_probe", ModelSlot: "image_probe", Description: "Describe a stored image", Instructions: "Use run_js to attach evidence/probe.png with air.attachToContext. Then call complete with an output description of the visible image. Do not use any other capability.", Budget: &agentsdk.AgentBudget{Steps: 4, Timeout: time.Minute, Tokens: 30000}, MaxAttempts: 1, MaxConcurrency: 1})
+		handle = agentsdk.RegisterAgent(app, &agentsdk.AgentDefinition[struct{}, Output]{Slug: "image_probe", ModelSlot: "image_probe", Description: "Describe a stored image", Instructions: "Use run_js to attach evidence/probe.png with air.attachToContext. Then call complete with an output description of the visible image. Do not use any other capability.", Capabilities: &agentsdk.AgentCapabilityPolicy{Allow: []agentsdk.AgentCapability{agentsdk.CapabilityAttachToContext, agentsdk.CapabilityFileStat, agentsdk.CapabilityFileWrite, agentsdk.CapabilityFileRead}}, Budget: &agentsdk.AgentBudget{Steps: 4, Timeout: time.Minute, Tokens: 30000}, MaxAttempts: 1, MaxConcurrency: 1})
 		return app
 	}, options)
 	mock := env.MockModel("image_probe")
 	if err := mock.Configure(testutil.MockConfig{ID: mock.ID(), Responses: []testutil.MockResponse{
-		{ToolCalls: []stream.ToolCall{{ID: "attach", Name: "run_js", Input: json.RawMessage(`{"code":"await air.attachToContext({path:'evidence/probe.png'}); return {attached:true};","description":"Inspect stored image"}`)}}, Usage: stream.UsageFrom(10, 5)},
+		{ToolCalls: []stream.ToolCall{{ID: "attach", Name: "run_js", Input: json.RawMessage(`{"code":"let denied=0; for(const name of ['queryDB','httpRequest','fileDelete']) { try { await air[name]({}); } catch { denied++; } } if(denied!==3) throw Error('forbidden callback exposed'); await air.fileWrite({path:'evidence/script-result.txt',data:'allowed'}); if(await air.fileRead({path:'evidence/script-result.txt'})!=='allowed') throw Error('allowed read/write failed'); await air.attachToContext({path:'evidence/probe.png'}); return {attached:true};","description":"Verify restricted storage and inspect image"}`)}}, Usage: stream.UsageFrom(10, 5)},
 		{ToolCalls: []stream.ToolCall{{ID: "finish", Name: "complete", Input: json.RawMessage(`{"kind":"output","output":{"description":"Image inspected"}}`)}}, Usage: stream.UsageFrom(10, 5)},
 	}}); err != nil {
 		t.Fatal(err)
@@ -165,6 +165,15 @@ func TestStoredImage(t *testing.T) {
 		}
 	}
 	// SDK stat/list/range/copy/delete use the same configured mock-host objects.
+	if !live {
+		text, err := env.Agent.ReadFile(ctx, "evidence/script-result.txt")
+		if err != nil || string(text) != "allowed" {
+			t.Fatalf("allowlisted Deno file effect=%q %v", text, err)
+		}
+		if err := env.Agent.DeleteFile(ctx, "evidence/script-result.txt"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	info, err := env.Agent.StatFile(ctx, "evidence/probe.png")
 	if err != nil || info.Size != int64(len(data)) {
 		t.Fatalf("stat: %+v %v", info, err)

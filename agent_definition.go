@@ -28,6 +28,7 @@ type AgentDefinition[In, Out any] struct {
 	Description            string
 	Instructions           string
 	ModelSlot              string
+	Capabilities           *AgentCapabilityPolicy
 	Tools                  []tool.Tool
 	MCPs                   []*MCPHandle
 	Subagents              []Subagent
@@ -104,6 +105,10 @@ func RegisterAgent[In, Out any](a *Agent, def *AgentDefinition[In, Out]) *AgentH
 		InputSchema: agentTypeSchema(reflect.TypeFor[In]()), OutputSchema: agentTypeSchema(reflect.TypeFor[Out]()),
 		Budget: wire.AgentBudget{Steps: 150}, MaxAttempts: int32(def.MaxAttempts), MaxConcurrency: int32(def.MaxConcurrency),
 		MaxSubagentCalls: int32(def.MaxSubagentCalls), MaxConcurrentSubagents: int32(def.MaxConcurrentSubagents),
+	}
+	if def.Capabilities != nil {
+		d.Capabilities = &wire.AgentCapabilityPolicy{Allow: append([]wire.AgentCapability{}, def.Capabilities.Allow...)}
+		sort.Slice(d.Capabilities.Allow, func(i, j int) bool { return d.Capabilities.Allow[i] < d.Capabilities.Allow[j] })
 	}
 	if budget := def.Budget; budget != nil {
 		if budget.Timeout < 0 {

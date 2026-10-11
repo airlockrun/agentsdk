@@ -30,6 +30,12 @@ func NewClient(transport io.ReadWriteCloser, options Options) (*Client, error) {
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
+	for _, binding := range options.Bindings {
+		if binding.Name == scriptArgsCapability || len(binding.Path) > 0 && binding.Path[0] == scriptArgsBinding {
+			return nil, errors.New("jsexec: reserved script argument binding")
+		}
+	}
+	options.Bindings = append(append([]Binding(nil), options.Bindings...), Binding{Name: scriptArgsCapability, Path: []string{scriptArgsBinding}})
 	b, _ := json.Marshal(options)
 	var copy Options
 	_ = json.Unmarshal(b, &copy)
@@ -55,6 +61,30 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Execute(ctx context.Context, code string, callback Invoker) (result Result, err error) {
+	return c.execute(ctx, code, callback)
+}
+
+func (c *Client) ExecuteWithArgs(ctx context.Context, code string, args json.RawMessage, callback Invoker) (Result, error) {
+	if !validArguments(args) {
+		return Result{}, errors.New("jsexec: args must be a bounded JSON object")
+	}
+	if callback == nil {
+		return Result{}, errors.New("jsexec: invoker required")
+	}
+	snapshot := append(json.RawMessage(nil), args...)
+	wrapped := InvokerFunc(func(ctx context.Context, name string, input json.RawMessage) (json.RawMessage, error) {
+		if name == scriptArgsCapability {
+			if string(input) != "[{}]" {
+				return nil, errors.New("jsexec: invalid argument intrinsic call")
+			}
+			return append(json.RawMessage(nil), snapshot...), nil
+		}
+		return callback.Invoke(ctx, name, input)
+	})
+	return c.execute(ctx, "const args = await "+scriptArgsBinding+"({});\n"+code, wrapped)
+}
+
+func (c *Client) execute(ctx context.Context, code string, callback Invoker) (result Result, err error) {
 	if callback == nil {
 		return result, errors.New("jsexec: invoker required")
 	}

@@ -154,6 +154,9 @@ func validateRuntimeContext(c wire.RuntimeContext) error {
 			return errors.New("agent definition requires an application-owned caller without a job fence")
 		}
 	}
+	if len(c.TaskInput) > 0 && (c.Definition == nil || !json.Valid(c.TaskInput)) {
+		return errors.New("task input requires an authenticated task definition scope")
+	}
 	if c.Job != nil {
 		if err := validateJobID(c.Job.ID); err != nil {
 			return errors.New("invalid job ID")

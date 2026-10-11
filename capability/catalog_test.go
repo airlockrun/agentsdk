@@ -168,3 +168,56 @@ func TestDefinitionCatalogPrivacy(t *testing.T) {
 		t.Fatal("wrong contract accepted")
 	}
 }
+
+func TestDefinitionCapabilitySelection(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy *wire.AgentCapabilityPolicy
+		want   []string
+	}{
+		{"unset", nil, []string{"air//query_db", "air//file_read", "conn/source/request", "topic/events/subscribe"}},
+		{"empty", &wire.AgentCapabilityPolicy{}, nil},
+		{"files and images", &wire.AgentCapabilityPolicy{Allow: []wire.AgentCapability{wire.CapabilityFileRead, wire.CapabilityFileStat, wire.CapabilityAttachToContext}}, []string{"air//file_read", "air//file_stat", "air//attach_to_context"}},
+		{"one connection operation", &wire.AgentCapabilityPolicy{Allow: []wire.AgentCapability{"conn/source/request"}}, []string{"conn/source/request"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := wire.AgentDefinition{Slug: "worker", Description: "Work", Instructions: "Finish", ModelSlot: "reasoning", Capabilities: tc.policy,
+				InputSchema: []byte(`{}`), OutputSchema: []byte(`{}`), Budget: wire.AgentBudget{Steps: 10}, MaxAttempts: 1, MaxConcurrency: 1,
+				MCPs: []string{"private"}, Tools: []wire.AgentToolDefinition{{Name: "private", Description: "Private", InputSchema: []byte(`{}`), OutputSchema: []byte(`{}`)}}}
+			d.ContractHash, _ = wire.AgentDefinitionHash(d)
+			m := wire.AgentManifest{AgentDefinitions: []wire.AgentDefinition{d}, ModelSlots: []wire.ModelSlotDef{{Slug: "reasoning", Capability: "text"}},
+				Connections: []wire.ConnectionDef{{Slug: "source", AuthMode: wire.ConnectionAuthNone}}, Topics: []wire.TopicDef{{Slug: "events"}},
+				MCPServers: []wire.MCPDef{{Slug: "private", AuthMode: wire.MCPAuthNone}}}
+			defs, err := DefinitionCatalog(m, wire.RuntimeAgentDefinition{Slug: d.Slug, ContractHash: d.ContractHash}, Discovery{MCPSchemas: map[string][]wire.MCPToolSchema{"private": {{Name: "lookup"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := map[string]bool{}
+			for _, def := range defs {
+				found[def.Path.ID()] = true
+			}
+			for _, id := range []string{"tool//private", "mcp/private/lookup", "air//log"} {
+				if !found[id] {
+					t.Fatalf("declared private or intrinsic capability missing: %s", id)
+				}
+				delete(found, id)
+			}
+			if tc.policy == nil {
+				for _, id := range tc.want {
+					if !found[id] {
+						t.Fatalf("unset policy lost %s", id)
+					}
+				}
+				return
+			}
+			if len(found) != len(tc.want) {
+				t.Fatalf("inventory=%v want=%v", found, tc.want)
+			}
+			for _, id := range tc.want {
+				if !found[id] {
+					t.Fatalf("missing %s", id)
+				}
+			}
+		})
+	}
+}
