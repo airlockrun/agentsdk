@@ -156,6 +156,7 @@ func RunAgent[In, Out any](t *testing.T, ctx context.Context, env *Env, handle *
 	if err := agentruntime.ValidateJSON(def.InputSchema, raw); err != nil {
 		return nil, fmt.Errorf("agenttest: input contract: %w", err)
 	}
+	scope.TaskInput = append(json.RawMessage(nil), raw...)
 	model, limits, err := env.modelForSlot(def.ModelSlot)
 	if err != nil {
 		return nil, err

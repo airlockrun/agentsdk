@@ -59,7 +59,7 @@ func (r *runtime) tools() tool.Set {
 		return set
 	}
 	set["run_js"] = tool.New("run_js").
-		Description("Execute an async JavaScript function body. This is the only provider tool in JavaScript mode. Call capabilities by their exact fully qualified names from the generated declarations, such as platform.operation(...) or apps.<alias>.tools.<name>(...). A namespace exists only when declared; these bindings are usable only inside run_js code, never as provider tool names. Await capability calls; explicitly return the result. Supply a short description of the effect. Request confirmation for external side effects that need user approval.").
+		Description("Execute an async JavaScript function body. Call capabilities by their exact fully qualified names from the generated declarations. Bindings exist only inside JavaScript. Await capability calls and explicitly return the result. Supply a short description. For saved bodies use run_js_file when available. Request confirmation for external side effects that need user approval.").
 		SchemaFromStruct(struct {
 			Code                string `json:"code"`
 			Description         string `json:"description"`
@@ -77,50 +77,75 @@ func (r *runtime) tools() tool.Set {
 			if strings.TrimSpace(args.Code) == "" || strings.TrimSpace(args.Description) == "" {
 				return tool.Result{}, errors.New("code and description are required")
 			}
-			if args.RequestConfirmation && !r.input.AutoConfirm {
-				pm := bus.PermissionManagerFromContext(ctx)
-				if pm == nil {
-					return tool.Result{}, errors.New("permission manager is required")
-				}
-				if err := pm.Ask(ctx, bus.PermissionRequest{Permission: "run_js", Patterns: []string{"*"}, ToolCallID: opts.ToolCallID, Metadata: map[string]any{"code": args.Code, "description": args.Description}}); err != nil {
-					var denied *bus.PermissionDeniedError
-					if errors.As(err, &denied) {
-						return tool.Result{}, tool.DeniedError{Reason: "Code execution was denied by the user."}
-					}
-					return tool.Result{}, err
-				}
-			}
-			if err := ctx.Err(); err != nil {
-				return tool.Result{}, err
-			}
-			if r.executor == nil {
-				executor, err := r.input.ExecutorFactory(r.ctx, r.input.Capabilities)
-				if err != nil {
-					return tool.Result{}, err
-				}
-				if executor == nil {
-					return tool.Result{}, errors.New("executor factory returned nil session")
-				}
-				r.executor = executor
-			}
-			callback := &invoker{backend: r.input.Backend, callID: opts.ToolCallID, catalog: r.input.Capabilities}
-			result, err := r.executor.Execute(ctx, r.input.JavaScriptPrelude+args.Code, callback)
-			var output strings.Builder
-			for _, log := range result.Logs {
-				fmt.Fprintf(&output, "[%s] %s\n", log.Level, log.Message)
-			}
-			if !result.Undefined && len(result.Output) > 0 {
-				if !json.Valid(result.Output) {
-					return tool.Result{}, errors.New("executor returned invalid JSON")
-				}
-				output.Write(result.Output)
-			}
-			if err != nil && output.Len() != 0 {
-				err = fmt.Errorf("%s\n%w", strings.TrimSpace(output.String()), err)
-			}
-			return tool.Result{Output: output.String(), Attachments: callback.attachments}, err
+			return r.executeCode(ctx, opts, "run_js", args.Code, args.Description, args.RequestConfirmation, nil, nil)
 		}).Build()
+	if r.scriptReader() != nil {
+		set["run_js_file"] = r.scriptTool()
+	}
 	return set
+}
+
+func (r *runtime) executeCode(ctx context.Context, opts tool.CallOptions, name, code, description string, confirm bool, args json.RawMessage, metadata map[string]any) (tool.Result, error) {
+	permissionMetadata := map[string]any{"code": code, "description": description}
+	for k, v := range metadata {
+		permissionMetadata[k] = v
+	}
+	if confirm && !r.input.AutoConfirm {
+		patterns := []string{"*"}
+		if hash, ok := metadata["source_sha256"].(string); ok {
+			patterns = []string{"sha256:" + hash}
+		}
+		pm := bus.PermissionManagerFromContext(ctx)
+		if pm == nil {
+			return tool.Result{}, errors.New("permission manager is required")
+		}
+		if err := pm.Ask(ctx, bus.PermissionRequest{Permission: name, Patterns: patterns, ToolCallID: opts.ToolCallID, Metadata: permissionMetadata}); err != nil {
+			var denied *bus.PermissionDeniedError
+			if errors.As(err, &denied) {
+				return tool.Result{}, tool.DeniedError{Reason: "Code execution was denied by the user."}
+			}
+			return tool.Result{}, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return tool.Result{}, err
+	}
+	if r.executor == nil {
+		executor, err := r.input.ExecutorFactory(r.ctx, r.input.Capabilities)
+		if err != nil {
+			return tool.Result{}, err
+		}
+		if executor == nil {
+			return tool.Result{}, errors.New("executor factory returned nil session")
+		}
+		r.executor = executor
+	}
+	callback := &invoker{backend: r.input.Backend, callID: opts.ToolCallID, catalog: r.input.Capabilities}
+	var result jsexec.Result
+	var err error
+	if args == nil {
+		result, err = r.executor.Execute(ctx, r.input.JavaScriptPrelude+code, callback)
+	} else {
+		executor, ok := r.executor.(jsexec.ArgumentSession)
+		if !ok {
+			return tool.Result{}, errors.New("executor does not support structured script args")
+		}
+		result, err = executor.ExecuteWithArgs(ctx, r.input.JavaScriptPrelude+code, args, callback)
+	}
+	var output strings.Builder
+	for _, log := range result.Logs {
+		fmt.Fprintf(&output, "[%s] %s\n", log.Level, log.Message)
+	}
+	if !result.Undefined && len(result.Output) > 0 {
+		if !json.Valid(result.Output) {
+			return tool.Result{}, errors.New("executor returned invalid JSON")
+		}
+		output.Write(result.Output)
+	}
+	if err != nil && output.Len() != 0 {
+		err = fmt.Errorf("%s\n%w", strings.TrimSpace(output.String()), err)
+	}
+	return tool.Result{Output: output.String(), Attachments: callback.attachments, Metadata: metadata}, err
 }
 
 // Each script receives a fresh immutable invoker, so retained JS callbacks

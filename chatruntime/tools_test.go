@@ -20,7 +20,7 @@ func TestJavaScriptModeAdvertisesOnlyRunJS(t *testing.T) {
 	if !ok {
 		t.Fatalf("tools = %v, want run_js", tools.Names())
 	}
-	for _, want := range []string{"only provider tool", "exact fully qualified names", "platform.operation(...) or apps.<alias>.tools.<name>(...)", "namespace exists only when declared", "only inside run_js code", "never as provider tool names"} {
+	for _, want := range []string{"exact fully qualified names", "Bindings exist only inside JavaScript", "run_js_file when available"} {
 		if !strings.Contains(runJS.Description, want) {
 			t.Errorf("run_js description missing %q: %s", want, runJS.Description)
 		}

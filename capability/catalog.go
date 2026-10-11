@@ -184,7 +184,8 @@ func Catalog(manifest wire.AgentManifest, discovery Discovery) ([]Definition, er
 
 // DefinitionCatalog constructs the private tool and bound MCP inventory for an
 // exact task contract. It excludes global app tools and unbound MCPs. Fixed
-// platform operations, connections and topics retain their normal access rules.
+// platform operations, connections and topics are restricted by an explicit
+// definition capability policy and retain their normal access rules.
 // The host must authenticate scope from a persisted application-owned run.
 func DefinitionCatalog(manifest wire.AgentManifest, scope wire.RuntimeAgentDefinition, discovery Discovery) ([]Definition, error) {
 	if err := wire.ValidateAgentDefinitions(manifest); err != nil {
@@ -217,5 +218,19 @@ func DefinitionCatalog(manifest wire.AgentManifest, scope wire.RuntimeAgentDefin
 			manifest.MCPServers = append(manifest.MCPServers, m)
 		}
 	}
-	return Catalog(manifest, discovery)
+	defs, err := Catalog(manifest, discovery)
+	if err != nil || selected.Capabilities == nil {
+		return defs, err
+	}
+	allowed := make(map[string]bool, len(selected.Capabilities.Allow))
+	for _, id := range selected.Capabilities.Allow {
+		allowed[string(id)] = true
+	}
+	filtered := make([]Definition, 0, len(defs))
+	for _, d := range defs {
+		if d.Target == Executor || d.Path.Kind() == Tool || d.Path.Kind() == MCP || allowed[d.Path.ID()] {
+			filtered = append(filtered, d)
+		}
+	}
+	return filtered, nil
 }

@@ -2,6 +2,7 @@ package agentsdk
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/airlockrun/agentsdk/wire"
 )
@@ -14,6 +15,14 @@ import (
 type runCtxKey struct{}
 type lazyRunCtxKey struct{}
 
+type taskInputCtxKey struct{}
+type taskInputSnapshot struct {
+	agent      *Agent
+	runID      string
+	definition wire.RuntimeAgentDefinition
+	input      json.RawMessage
+}
+
 func (a *Agent) borrowRuntimeRun(ctx context.Context, scope wire.RuntimeContext) *run {
 	if scope.Job != nil {
 		ctx = contextWithJobRun(ctx, &jobRunContext{agent: a, id: scope.Job.ID, attempt: scope.Job.Attempt, leaseToken: scope.Job.LeaseToken})
@@ -23,6 +32,7 @@ func (a *Agent) borrowRuntimeRun(ctx context.Context, scope wire.RuntimeContext)
 	r.setCaller(callerFromWire(scope.Caller))
 	if scope.Definition != nil {
 		r.callerAccess = AccessInternal
+		r.ctx = context.WithValue(r.ctx, taskInputCtxKey{}, taskInputSnapshot{agent: a, runID: scope.RunID, definition: *scope.Definition, input: append(json.RawMessage(nil), scope.TaskInput...)})
 	}
 	r.ctx = r.checkedCtx()
 	return r

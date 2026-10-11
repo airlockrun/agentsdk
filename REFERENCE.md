@@ -1,6 +1,6 @@
 # agentsdk — API reference
 
-SDK APIs and runtime contracts for app authors and the Airlock builder.
+SDK APIs.
 Editor skill: `.airlock/toolchain/skills/agentsdk/SKILL.md`. App layout, MVC,
 build-chain, NOTES.md and UI conventions: scaffolded app-root **`AGENTS.md`**.
 
@@ -44,6 +44,7 @@ Read the relevant companion at its build-container path:
 - **[Runtime ingress](reference/ingress.md)** (`/libs/agentsdk/reference/ingress.md`) - host delivery authentication, attribution, health/manifest exceptions, and HTTP tests.
 - **[Caller identity](reference/caller.md)** (`/libs/agentsdk/reference/caller.md`) - snapshots, origin, and test callers.
 - **[Task agents](reference/agents.md)** (`/libs/agentsdk/reference/agents.md`) - typed application-owned agents, private tools, budgets, durable IDs, and continuation.
+- **Stored scripts** — /libs/agentsdk/reference/scripts.md.
 - **[Object storage](reference/files.md)** (`/libs/agentsdk/reference/files.md`) — `RegisterDirectory`, the
   trusted Go file API, gating untrusted (LLM-supplied) paths with
   `ResolveFilePath`, shelling out to CLIs over storage, presigned URLs.

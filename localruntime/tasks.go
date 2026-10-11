@@ -78,6 +78,18 @@ func (h *Host) enqueue(d *stateData, slug string, req wire.StartAgentRequest, se
 		sessionID = uuid.NewString()
 	}
 	scope.ConversationID = sessionID
+	scope.TaskInput = append(json.RawMessage(nil), req.Input...)
+	if sessionID != "" {
+		for _, previous := range d.Tasks {
+			if previous.Info.SessionID == sessionID {
+				scope.TaskInput = append(json.RawMessage(nil), previous.Scope.TaskInput...)
+				if len(scope.TaskInput) == 0 {
+					return wire.AgentRunResponse{}, errors.New("localruntime: original session input unavailable")
+				}
+				break
+			}
+		}
+	}
 	record := &taskRecord{Info: wire.AgentRunInfo{ID: scope.RunID, SessionID: sessionID, Definition: slug, ContractHash: req.ContractHash, Status: "queued", CreatedAt: now, UpdatedAt: now}, Scope: scope, RequestID: req.RequestID, Input: string(req.Input), ParentID: parent}
 	if parent != "" {
 		record.Scope.Caller = appCaller("background")
