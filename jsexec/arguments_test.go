@@ -1,17 +1,15 @@
+//go:build airlockplatformintegration
+
 package jsexec
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"testing"
 )
 
 func TestPublishedStructuredArguments(t *testing.T) {
-	if os.Getenv("JSEXEC_DOCKER_TEST") != "1" {
-		t.Skip("set JSEXEC_DOCKER_TEST=1 for published executor argument validation")
-	}
 	image, err := PrepareDockerImage(t.Context(), PublishedExecutorImage)
 	if err != nil {
 		t.Fatal(err)

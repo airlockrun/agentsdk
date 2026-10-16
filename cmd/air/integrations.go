@@ -31,20 +31,18 @@ type integrationTargetFlags struct {
 	url    string
 	remote string
 	agent  string
+	target string
 }
 
 func resolveIntegrationTarget(ctx context.Context, flags integrationTargetFlags) (integrationTarget, error) {
 	baseURL := os.Getenv("AIRLOCK_API_URL")
 	agentID := os.Getenv("AIRLOCK_AGENT_ID")
 	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
-		token := os.Getenv("AIRLOCK_TOKEN")
-		if baseURL == "" || agentID == "" || token == "" {
-			return integrationTarget{}, errors.New("developer session requires AIRLOCK_API_URL, AIRLOCK_AGENT_ID, and AIRLOCK_TOKEN")
+		selected, err := resolveDeployment(ctx, targetFlags{dir: ".", url: flags.url, remote: flags.remote, agent: flags.agent, target: flags.target}, false)
+		if err != nil {
+			return integrationTarget{}, err
 		}
-		if flags != (integrationTargetFlags{}) {
-			return integrationTarget{}, errors.New("--url, --remote, and --agent are unavailable in a hosted developer session")
-		}
-		return integrationTarget{baseURL: normalizeBaseURL(baseURL), agentID: agentID, token: token}, nil
+		return integrationTarget{baseURL: selected.baseURL, agentID: selected.info.Id, token: selected.token}, nil
 	}
 	token := os.Getenv("AIRLOCK_INTEGRATION_TOKEN")
 	if baseURL != "" || agentID != "" || token != "" {
@@ -57,37 +55,11 @@ func resolveIntegrationTarget(ctx context.Context, flags integrationTargetFlags)
 		return integrationTarget{baseURL: normalizeBaseURL(baseURL), agentID: agentID, token: token, codegen: true}, nil
 	}
 
-	binding, ok, err := loadAgentBinding(".")
+	selected, err := resolveDeployment(ctx, targetFlags{dir: ".", url: flags.url, remote: flags.remote, agent: flags.agent, target: flags.target}, false)
 	if err != nil {
 		return integrationTarget{}, err
 	}
-	if !ok {
-		return integrationTarget{}, errors.New("workspace is not bound to Airlock; deploy or clone it first")
-	}
-	remoteName := flags.remote
-	if remoteName == "" {
-		remoteName = binding.DefaultRemote
-	}
-	remote, _ := binding.remote(remoteName)
-	baseURL = normalizeBaseURL(flags.url)
-	if baseURL != "" && remote.AirlockURL != "" && baseURL != normalizeBaseURL(remote.AirlockURL) {
-		return integrationTarget{}, fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remoteName, remote.AirlockURL, baseURL)
-	}
-	if baseURL == "" {
-		baseURL = remote.AirlockURL
-	}
-	if baseURL == "" {
-		return integrationTarget{}, fmt.Errorf("remote %q needs an Airlock URL: pass --url or configure %s", remoteName, agentBindingPath)
-	}
-	token, err = accessTokenForURL(ctx, baseURL)
-	if err != nil {
-		return integrationTarget{}, err
-	}
-	resolved, err := resolveAgentTarget(ctx, baseURL, token, flags.agent, remoteName, remote)
-	if err != nil {
-		return integrationTarget{}, err
-	}
-	return integrationTarget{baseURL: baseURL, agentID: resolved.AgentID, token: token}, nil
+	return integrationTarget{baseURL: selected.baseURL, agentID: selected.info.Id, token: selected.token}, nil
 }
 
 func (t integrationTarget) path(suffix string) string {
@@ -310,7 +282,7 @@ func parseIntegrationTargetFlags(args []string) (integrationTargetFlags, error) 
 
 func consumeIntegrationTargetFlag(args []string, index *int, flags *integrationTargetFlags) (bool, error) {
 	key := args[*index]
-	if key != "--url" && key != "--remote" && key != "--agent" {
+	if key != "--url" && key != "--remote" && key != "--agent" && key != "--target" {
 		return false, nil
 	}
 	if *index+1 >= len(args) {
@@ -328,6 +300,11 @@ func consumeIntegrationTargetFlag(args []string, index *int, flags *integrationT
 		flags.remote = value
 	case "--agent":
 		flags.agent = value
+	case "--target":
+		if err := requireTarget(value); err != nil {
+			return true, err
+		}
+		flags.target = value
 	}
 	return true, nil
 }

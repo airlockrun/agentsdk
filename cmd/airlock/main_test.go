@@ -49,13 +49,13 @@ func TestCloneBootstrapsLogsInAndClones(t *testing.T) {
 	var calls []commandCall
 	stubLauncher(t, &calls)
 
-	if err := run([]string{"clone", "todo", dir, "--remote", "prod", "--url", "https://airlock.example.com"}); err != nil {
+	if err := run([]string{"clone", "todo", dir, "--target", "production", "--remote", "prod", "--url", "https://airlock.example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	want := []commandCall{
 		{dir: dir, name: "go", args: []string{"get", "-tool", "github.com/airlockrun/agentsdk/cmd/air@v0.4.0-rc.32"}},
 		{dir: dir, name: "go", args: []string{"tool", "air", "login", "https://airlock.example.com", "--wait"}},
-		{dir: dir, name: "go", args: []string{"tool", "air", "clone", "todo", ".", "--url", "https://airlock.example.com", "--remote", "prod"}},
+		{dir: dir, name: "go", args: []string{"tool", "air", "clone", "todo", ".", "--url", "https://airlock.example.com", "--target", "production", "--remote", "prod"}},
 	}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)

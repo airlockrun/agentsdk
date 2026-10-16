@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 const agentBindingPath = ".airlock/local/agent.toml"
 const defaultRemoteName = "default"
+const bindingSchema = "targets-v1"
 
 type agentBinding struct {
 	DefaultRemote string
@@ -27,6 +29,17 @@ type agentRemoteBinding struct {
 	DeveloperSession   string
 	PendingTask        string
 	PendingSourceState string
+	Targets            map[string]targetSourceBinding
+	Previews           map[string]previewReference
+}
+
+// A reference selects a target; it is not its ownership or authorization record.
+type previewReference struct{ DeploymentID, Name string }
+
+// Targets are keyed by the server-issued concrete runtime ID, so personal
+// previews belonging to different logins never share source synchronization.
+type targetSourceBinding struct {
+	Name, OwnerUserID, SourceETag, SourceState, PendingTask, PendingSourceState string
 }
 
 func loadAgentBinding(dir string) (agentBinding, bool, error) {
@@ -42,6 +55,9 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 
 	b := agentBinding{Remotes: map[string]agentRemoteBinding{}}
 	currentRemote := ""
+	currentTarget := ""
+	currentPreview := ""
+	schema := ""
 	seenSections := map[string]bool{}
 	seenKeys := map[string]bool{}
 	s := bufio.NewScanner(f)
@@ -58,15 +74,28 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 			if !strings.HasPrefix(name, "remotes.") {
 				return agentBinding{}, false, fmt.Errorf("%s: unknown section %q", path, name)
 			}
-			currentRemote = strings.TrimPrefix(name, "remotes.")
+			section := strings.Split(strings.TrimPrefix(name, "remotes."), ".")
+			currentRemote, currentTarget, currentPreview = section[0], "", ""
+			if len(section) != 1 {
+				if len(section) != 3 || (section[1] != "targets" && section[1] != "previews") || !deployUUIDRe.MatchString(section[2]) {
+					return agentBinding{}, false, fmt.Errorf("%s: invalid target section %q", path, name)
+				}
+				if section[1] == "targets" {
+					currentTarget = section[2]
+				} else {
+					currentPreview = section[2]
+				}
+			}
 			if !validRemoteName(currentRemote) {
 				return agentBinding{}, false, fmt.Errorf("%s: invalid remote name %q", path, currentRemote)
 			}
-			if seenSections[currentRemote] {
+			if seenSections[name] {
 				return agentBinding{}, false, fmt.Errorf("%s: duplicate remote section %q", path, currentRemote)
 			}
-			seenSections[currentRemote] = true
-			b.Remotes[currentRemote] = agentRemoteBinding{}
+			seenSections[name] = true
+			if _, exists := b.Remotes[currentRemote]; !exists {
+				b.Remotes[currentRemote] = agentRemoteBinding{}
+			}
 			continue
 		}
 		key, value, ok := strings.Cut(line, "=")
@@ -79,7 +108,7 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 		if err != nil {
 			return agentBinding{}, false, fmt.Errorf("%s: invalid value for %s: %w", path, key, err)
 		}
-		scopedKey := currentRemote + "\x00" + key
+		scopedKey := currentRemote + "\x00" + currentTarget + "\x00" + currentPreview + "\x00" + key
 		if seenKeys[scopedKey] {
 			return agentBinding{}, false, fmt.Errorf("%s: duplicate key %q", path, key)
 		}
@@ -88,12 +117,56 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 			switch key {
 			case "default_remote":
 				b.DefaultRemote = unquoted
+			case "schema":
+				schema = unquoted
 			default:
 				return agentBinding{}, false, fmt.Errorf("%s: unknown top-level key %q", path, key)
 			}
 			continue
 		}
 		remote := b.Remotes[currentRemote]
+		if currentPreview != "" {
+			if remote.Previews == nil {
+				remote.Previews = map[string]previewReference{}
+			}
+			ref := remote.Previews[currentPreview]
+			switch key {
+			case "deployment_id":
+				ref.DeploymentID = unquoted
+			case "name":
+				ref.Name = unquoted
+			default:
+				return agentBinding{}, false, fmt.Errorf("%s: unknown preview key %q", path, key)
+			}
+			remote.Previews[currentPreview] = ref
+			b.Remotes[currentRemote] = remote
+			continue
+		}
+		if currentTarget != "" {
+			if remote.Targets == nil {
+				remote.Targets = map[string]targetSourceBinding{}
+			}
+			target := remote.Targets[currentTarget]
+			switch key {
+			case "name":
+				target.Name = unquoted
+			case "owner_user_id":
+				target.OwnerUserID = unquoted
+			case "source_etag":
+				target.SourceETag = unquoted
+			case "source_state":
+				target.SourceState = unquoted
+			case "pending_task":
+				target.PendingTask = unquoted
+			case "pending_source_state":
+				target.PendingSourceState = unquoted
+			default:
+				return agentBinding{}, false, fmt.Errorf("%s: unknown target key %q", path, key)
+			}
+			remote.Targets[currentTarget] = target
+			b.Remotes[currentRemote] = remote
+			continue
+		}
 		switch key {
 		case "url":
 			remote.AirlockURL = normalizeBaseURL(unquoted)
@@ -118,6 +191,16 @@ func loadAgentBinding(dir string) (agentBinding, bool, error) {
 	}
 	if err := s.Err(); err != nil {
 		return agentBinding{}, false, err
+	}
+	if schema != bindingSchema {
+		return agentBinding{}, false, fmt.Errorf("%s: unsupported alpha binding schema", path)
+	}
+	for _, remote := range b.Remotes {
+		for _, ref := range remote.Previews {
+			if !deployUUIDRe.MatchString(ref.DeploymentID) || !validRemoteName(ref.Name) || ref.Name == "preview" || ref.Name == "production" {
+				return agentBinding{}, false, fmt.Errorf("%s: invalid selected preview reference", path)
+			}
+		}
 	}
 	if b.DefaultRemote == "" && len(b.Remotes) > 0 {
 		return agentBinding{}, false, fmt.Errorf("%s: default_remote is required", path)
@@ -147,9 +230,15 @@ func writeAgentBinding(dir string, b agentBinding) error {
 		if !validRemoteName(name) {
 			return fmt.Errorf("%s: invalid remote name %q", agentBindingPath, name)
 		}
+		remote := b.Remotes[name]
+		for _, ref := range remote.Previews {
+			if !deployUUIDRe.MatchString(ref.DeploymentID) || !validRemoteName(ref.Name) || ref.Name == "preview" || ref.Name == "production" {
+				return errors.New("invalid preview reference")
+			}
+		}
 	}
 	var content strings.Builder
-	fmt.Fprintf(&content, "default_remote = %s\n", strconv.Quote(b.DefaultRemote))
+	fmt.Fprintf(&content, "schema = %s\ndefault_remote = %s\n", strconv.Quote(bindingSchema), strconv.Quote(b.DefaultRemote))
 	var names []string
 	for name := range b.Remotes {
 		names = append(names, name)
@@ -181,6 +270,38 @@ func writeAgentBinding(dir string, b agentBinding) error {
 		}
 		if remote.PendingSourceState != "" {
 			fmt.Fprintf(&content, "pending_source_state = %s\n", strconv.Quote(remote.PendingSourceState))
+		}
+		var ids []string
+		for id := range remote.Targets {
+			if !deployUUIDRe.MatchString(id) {
+				return fmt.Errorf("%s: invalid runtime target ID %q", agentBindingPath, id)
+			}
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			target := remote.Targets[id]
+			fmt.Fprintf(&content, "\n[remotes.%s.targets.%s]\n", name, id)
+			for _, field := range []struct{ key, value string }{
+				{"name", target.Name}, {"owner_user_id", target.OwnerUserID}, {"source_etag", target.SourceETag},
+				{"source_state", target.SourceState}, {"pending_task", target.PendingTask}, {"pending_source_state", target.PendingSourceState},
+			} {
+				if field.value != "" {
+					fmt.Fprintf(&content, "%s = %s\n", field.key, strconv.Quote(field.value))
+				}
+			}
+		}
+		var apps []string
+		for id := range remote.Previews {
+			if !deployUUIDRe.MatchString(id) {
+				return fmt.Errorf("invalid selected app ID %q", id)
+			}
+			apps = append(apps, id)
+		}
+		sort.Strings(apps)
+		for _, id := range apps {
+			ref := remote.Previews[id]
+			fmt.Fprintf(&content, "\n[remotes.%s.previews.%s]\ndeployment_id = %s\nname = %s\n", name, id, strconv.Quote(ref.DeploymentID), strconv.Quote(ref.Name))
 		}
 	}
 
@@ -256,7 +377,7 @@ func (b *agentBinding) setDefaultRemote(name string) error {
 }
 
 func validRemoteName(name string) bool {
-	if name == "" {
+	if name == "" || len(name) > 128 {
 		return false
 	}
 	for _, r := range name {

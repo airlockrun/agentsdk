@@ -31,12 +31,21 @@ func TestToolsUseExactChildAndCompletionSchemas(t *testing.T) {
 		{"mixed output question", `{"kind":"output","output":{"n":9007199254740993},"question":""}`, false},
 		{"empty question", `{"kind":"needs_input","question":""}`, false},
 		{"untyped output", `{"kind":"output","output":42}`, false},
+		{"artifact path", `{"kind":"output","output":{"n":9007199254740993},"artifacts":[{"path":"reports/result.json"}]}`, true},
+		{"artifact assertions", `{"kind":"output","output":{"n":9007199254740993},"artifacts":[{"path":"reports/result.json","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","contentId":"pinned"}]}`, true},
+		{"artifact authority", `{"kind":"output","output":{"n":9007199254740993},"artifacts":[{"path":"reports/result.json","id":"model-selected"}]}`, false},
+		{"question artifacts", `{"kind":"needs_input","question":"Which?","artifacts":[{"path":"reports/result.json"}]}`, false},
+		{"invalid digest", `{"kind":"output","output":{"n":9007199254740993},"artifacts":[{"path":"report","sha256":"bad"}]}`, false},
+		{"empty path", `{"kind":"output","output":{"n":9007199254740993},"artifacts":[{"path":""}]}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := validateJSON(set["complete"].InputSchema, json.RawMessage(tc.value)); (err == nil) != tc.valid {
-				t.Fatalf("valid=%v error=%v schema=%s", tc.valid, err, set["complete"].InputSchema)
+			if err := validateJSON(set["submit"].InputSchema, json.RawMessage(tc.value)); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v error=%v schema=%s", tc.valid, err, set["submit"].InputSchema)
 			}
 		})
+	}
+	if _, ok := set["complete"]; ok {
+		t.Fatal("complete exposed as model control")
 	}
 }
 
@@ -60,8 +69,8 @@ func TestRunEnforcesSDKArrayAndNumericConstraints(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			in, model := input(batch(
 				call("spawn", "spawn_research", tc.value),
-				call("output", "complete", `{"kind":"output","output":`+tc.value+`}`),
-				call("question", "complete", `{"kind":"needs_input","question":"Which valid values should I use?"}`),
+				call("output", "submit", `{"kind":"output","output":`+tc.value+`}`),
+				call("question", "submit", `{"kind":"needs_input","question":"Which valid values should I use?"}`),
 			))
 			addChild(&in)
 			in.Subagents[0].InputSchema, in.Definition.OutputSchema = contract, contract
@@ -99,10 +108,10 @@ func TestControlValidationPreventsDispatch(t *testing.T) {
 		{"wait_calls", `{"ids":["one"],"mode":"some"}`},
 		{"wait_calls", `{"ids":["one"],"mode":"all","timeoutMs":-1}`},
 		{"wait_calls", `{"ids":["one"],"mode":"all","timeoutMs":null}`},
-		{"complete", `{"kind":"needs_input","question":"  "}`},
-		{"complete", `{"kind":"output","output":{"answer":1},"unexpected":true}`},
-		{"complete", `{"kind":"output","output":{"answer":1},"question":""}`},
-		{"complete", `null`},
+		{"submit", `{"kind":"needs_input","question":"  "}`},
+		{"submit", `{"kind":"output","output":{"answer":1},"unexpected":true}`},
+		{"submit", `{"kind":"output","output":{"answer":1},"question":""}`},
+		{"submit", `null`},
 		{"run_js", `{"code":"return 1"}`},
 	} {
 		t.Run(tc.name+tc.args, func(t *testing.T) {
@@ -144,7 +153,7 @@ func TestRunRejectsMalformedModelCallIdentity(t *testing.T) {
 		{"empty ID", [][]stream.Event{batch(complete(""))}},
 		{"duplicate batch ID", [][]stream.Event{batch(call("same", "get_calls", `{"ids":["child"]}`), complete("same"))}},
 		{"reused prior ID", [][]stream.Event{batch(call("same", "get_calls", `{"ids":["child"]}`)), batch(complete("same"))}},
-		{"invalid JSON", [][]stream.Event{batch(call("invalid", "complete", `{"kind":`))}},
+		{"invalid JSON", [][]stream.Event{batch(call("invalid", "submit", `{"kind":`))}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, _ := input(tc.responses...)

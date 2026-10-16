@@ -86,57 +86,55 @@ credential.
 
 ## Tests
 
-Import `github.com/airlockrun/agentsdk/agenttest` and inject human callers
+Import `github.com/airlockrun/agentsdk/testutil` and inject human callers
 explicitly, including when calling a handler or service method directly:
 
 ```go
-user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
-ctx := agenttest.WithUser(t.Context(), user) // user with AccessUser
+user := wire.CallerUser{ID: "00000000-0000-0000-0000-000000000001", PlatformMember: true}
+ctx := testutil.WithCaller(t.Context(), wire.Caller{
+    Kind: "user", Access: wire.AccessUser, User: &user, Initiator: &user,
+    Origin: wire.CallerOrigin{Interface: "http", Execution: "request"},
+})
 got, ok := agentsdk.CallerFromContext(ctx).User()
 if !ok || got.ID != user.ID || !got.PlatformMember {
     t.Fatalf("unexpected caller user: %+v, present=%t", got, ok)
 }
 
-publicUserCtx := agenttest.WithCaller(t.Context(), user, agentsdk.AccessPublic)
+publicUserCtx := testutil.WithCaller(t.Context(), wire.Caller{
+    Kind: "user", Access: wire.AccessPublic, User: &user, Initiator: &user,
+    Origin: wire.CallerOrigin{Interface: "http", Execution: "request"},
+})
 publicUser := agentsdk.CallerFromContext(publicUserCtx)
 if publicUser.Kind() != agentsdk.CallerUser || publicUser.Access() != agentsdk.AccessPublic {
     t.Fatal("expected a user with public app access")
 }
 ```
 
-`WithUser(ctx, user)` is the ordinary authenticated-user helper;
-`WithCaller(ctx, user, access)` selects that user's explicit app access. These
-helpers require a nonempty user ID and valid access. Both set `PlatformMember`
-to true, use the same human for `User` and `Initiator`, and select
-`InterfaceUnknown` / `ExecutionUnknown` for test origin.
-
-`agenttest.WithCallerInfo(ctx, agenttest.CallerInfo)` validates and copies an
-explicit snapshot. `CallerInfo` has `Kind`, `Access`, `User *agentsdk.User`,
-`Initiator *agentsdk.User`, and `Origin agentsdk.Origin` fields. Kind, access,
-origin interface, and execution are required; use the Unknown constants when a
-test does not specify a source. User callers require matching user and initiator
-snapshots. Use this helper for anonymous/application fixtures, not an empty
-`User` passed to a human helper or an unadorned context:
+`testutil.WithCaller(ctx, wire.Caller)` validates and copies the explicit snapshot
+without runtime, credential, DB or network lookup. Kind/access/interface/execution
+are required; human fixtures require matching user and initiator snapshots with
+explicit platform membership. Anonymous/application callers do not receive a
+substituted app owner. Use explicit `unknown` origins when unspecified:
 
 ```go
-anonymousCtx := agenttest.WithCallerInfo(t.Context(), agenttest.CallerInfo{
-    Kind:   agentsdk.CallerAnonymous,
-    Access: agentsdk.AccessPublic,
-    Origin: agentsdk.Origin{
-        Interface: agentsdk.InterfaceHTTP,
-        Execution: agentsdk.ExecutionRequest,
+anonymousCtx := testutil.WithCaller(t.Context(), wire.Caller{
+    Kind:   "anonymous",
+    Access: wire.AccessPublic,
+    Origin: wire.CallerOrigin{
+        Interface: "http",
+        Execution: "request",
     },
 })
 if _, ok := agentsdk.CallerFromContext(anonymousCtx).User(); ok {
     t.Fatal("anonymous caller has a user")
 }
 
-applicationCtx := agenttest.WithCallerInfo(t.Context(), agenttest.CallerInfo{
-    Kind:   agentsdk.CallerApplication,
-    Access: agentsdk.AccessAdmin,
-    Origin: agentsdk.Origin{
-        Interface: agentsdk.InterfaceApplication,
-        Execution: agentsdk.ExecutionBackground,
+applicationCtx := testutil.WithCaller(t.Context(), wire.Caller{
+    Kind:   "application",
+    Access: wire.AccessAdmin,
+    Origin: wire.CallerOrigin{
+        Interface: "application",
+        Execution: "background",
     },
 })
 if _, ok := agentsdk.CallerFromContext(applicationCtx).Initiator(); ok {
@@ -145,11 +143,9 @@ if _, ok := agentsdk.CallerFromContext(applicationCtx).Initiator(); ok {
 ```
 
 Caller injection does not bypass delivery authentication or grant host authority.
-In-process `Agent.Handler()` tests also send `Authorization: Bearer test-token`
-when using `agenttest.New`. Call `agenttest.SetCallerHeader(req)` after injecting
-the test context to encode its snapshot for SDK HTTP dispatch. Context values
-alone do not cross `httptest.NewServer` or other network boundaries. See
-[Runtime ingress](ingress.md) for delivery tests.
+Context values do not cross network boundaries. SDK Handler/startup/delivery tests
+use a real remote Airlock target and host-owned credentials/receipts. See
+[remote development](remote-development.md) for supported operations.
 
 ## Source Migration
 

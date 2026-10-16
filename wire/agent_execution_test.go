@@ -101,3 +101,31 @@ func TestAgentBudgetAndManifestOmission(t *testing.T) {
 		t.Fatal("explicit zero wait timeout omitted")
 	}
 }
+
+func TestAgentReviewManifestBinding(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		edit  func(*AgentManifest)
+		valid bool
+	}{
+		{"bound", func(*AgentManifest) {}, true},
+		{"absent job", func(m *AgentManifest) { m.JobHandlers = nil }, false},
+		{"job version", func(m *AgentManifest) { m.JobHandlers[0].Version++ }, false},
+		{"job timeout", func(m *AgentManifest) { m.JobHandlers[0].TimeoutMs++ }, false},
+		{"corrections", func(m *AgentManifest) { m.AgentDefinitions[0].Review.MaxCorrections = -1 }, false},
+		{"job name", func(m *AgentManifest) { m.AgentDefinitions[0].Review.JobName = "model_selected" }, false},
+		{"duplicate job", func(m *AgentManifest) { m.JobHandlers = append(m.JobHandlers, m.JobHandlers[0]) }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := agentManifest(t)
+			r := &AgentReviewPolicy{Version: 1, TimeoutMS: 1000, MaxAttempts: 2, MaxConcurrency: 3, JobName: AgentReviewJobName("worker")}
+			m.AgentDefinitions[0].Review = r
+			m.JobHandlers = []JobHandlerDef{{Name: r.JobName, Version: r.Version, TimeoutMs: r.TimeoutMS, MaxAttempts: r.MaxAttempts, MaxConcurrency: r.MaxConcurrency}}
+			tc.edit(&m)
+			m.AgentDefinitions[0].ContractHash, _ = AgentDefinitionHash(m.AgentDefinitions[0])
+			if err := ValidateAgentDefinitions(m); (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+}

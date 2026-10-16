@@ -30,6 +30,7 @@ type sourceFlags struct {
 	remote string
 	agent  string
 	force  bool
+	target string
 }
 
 func cmdClone(args []string) (retErr error) {
@@ -43,6 +44,10 @@ func cmdClone(args []string) (retErr error) {
 	if len(positional) != 2 {
 		return errors.New("clone requires an agent slug-or-id and destination directory")
 	}
+	f.target = defaultTarget(f.target)
+	if err := requireTarget(f.target); err != nil {
+		return err
+	}
 	baseURL, remoteName, err := resolveSourceAirlock(".", f, false)
 	if err != nil {
 		return err
@@ -54,6 +59,26 @@ func cmdClone(args []string) (retErr error) {
 	}
 	target, err := resolveAgentTarget(ctx, baseURL, token, positional[0], remoteName, agentRemoteBinding{})
 	if err != nil {
+		return err
+	}
+	selected := selectedDeployment{flags: targetFlags{target: f.target}, app: target, baseURL: baseURL, token: token, remoteName: remoteName}
+	if f.target == "preview" {
+		current, _, err := loadAgentBinding(".")
+		if err != nil {
+			return err
+		}
+		bound, _ := current.remote(remoteName)
+		if normalizeBaseURL(bound.AirlockURL) != baseURL {
+			return errors.New("clone preview requires the selected remote; use a concrete target name to clone another preview")
+		}
+		ref, ok := bound.Previews[target.AgentID]
+		if !ok {
+			return errors.New("this remote/app has no selected preview; run air preview first")
+		}
+		selected.app.Previews = bound.Previews
+		selected.selector = ref.DeploymentID
+	}
+	if err := selected.refresh(ctx, http.MethodGet); err != nil {
 		return err
 	}
 	dst := positional[1]
@@ -89,7 +114,7 @@ func cmdClone(args []string) (retErr error) {
 			retErr = errors.Join(retErr, fmt.Errorf("restore clone destination: %w", cleanupErr))
 		}
 	}()
-	tmp, metadata, err := downloadSource(ctx, baseURL, token, target.AgentID)
+	tmp, metadata, err := downloadSource(ctx, baseURL, token, selected.path("/source"))
 	if err != nil {
 		return err
 	}
@@ -98,8 +123,7 @@ func cmdClone(args []string) (retErr error) {
 		return fmt.Errorf("write cloned source: %w", err)
 	}
 	target.AirlockURL = baseURL
-	target.SourceETag = metadata.ETag
-	target.SourceState = metadata.State
+	target.Targets = map[string]targetSourceBinding{selected.info.Id: {Name: selected.info.Name, OwnerUserID: selected.info.OwnerUserId, SourceETag: metadata.ETag, SourceState: metadata.State}}
 	binding := agentBinding{}
 	binding.putRemote(remoteName, target)
 	if err := writeAgentBinding(dst, binding); err != nil {
@@ -148,6 +172,9 @@ func cmdPull(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := requireTarget(f.target); err != nil {
+		return err
+	}
 	dir := "."
 	if len(positional) > 1 {
 		return errors.New("pull takes at most one positional argument: the agent repo directory")
@@ -155,71 +182,69 @@ func cmdPull(args []string) error {
 	if len(positional) == 1 {
 		dir = positional[0]
 	}
-	binding, _, err := loadAgentBinding(dir)
-	if err != nil {
-		return err
-	}
-	baseURL, remoteName, err := resolveSourceAirlock(dir, f, true)
-	if err != nil {
-		return err
-	}
-	bound, _ := binding.remote(remoteName)
 	ctx := context.Background()
-	token, err := accessTokenForURL(ctx, baseURL)
+	selected, err := resolveDeployment(ctx, targetFlags{dir: dir, url: f.url, remote: f.remote, agent: f.agent, target: f.target}, false)
 	if err != nil {
 		return err
 	}
-	target, err := resolveAgentTarget(ctx, baseURL, token, f.agent, remoteName, bound)
-	if err != nil {
-		return err
-	}
-	tmp, metadata, err := downloadSource(ctx, baseURL, token, target.AgentID)
+	f.target = selected.info.Name
+	tmp, metadata, err := downloadSource(ctx, selected.baseURL, selected.token, selected.path("/source"))
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(tmp)
 	remoteState := metadata.State
+	state := selected.app.Targets[selected.info.Id]
+	state.Name, state.OwnerUserID = selected.info.Name, selected.info.OwnerUserId
+	if state.PendingTask != "" {
+		task, err := getDeploymentTask(ctx, selected.baseURL, selected.token, state.PendingTask)
+		if err != nil {
+			return err
+		}
+		switch task.Info.Status {
+		case "queued", "running":
+			return errors.New("accepted target deployment is still running; observe deploy status before pulling")
+		case "succeeded", "failed", "cancelled":
+			state.PendingTask, state.PendingSourceState = "", ""
+		default:
+			return errors.New("accepted deployment task has an unknown status")
+		}
+	}
 	localState, err := sourcebundle.Digest(dir)
 	if err != nil {
 		return fmt.Errorf("hash local source: %w", err)
 	}
 	if localState == remoteState {
-		target.SourceState = remoteState
-		target.SourceETag = metadata.ETag
-		target.AirlockURL = baseURL
-		binding.putRemote(remoteName, target)
-		if err := writeAgentBinding(dir, binding); err != nil {
+		state.SourceState, state.SourceETag = remoteState, metadata.ETag
+		if err := selected.saveSource(state); err != nil {
 			return err
 		}
 		fmt.Println("Local source already matches Airlock")
 		return nil
 	}
-	baseState := target.SourceState
+	baseState := state.SourceState
 	if remoteState == baseState && !f.force {
 		fmt.Println("Airlock source is unchanged; local source has unpushed changes")
 		return nil
 	}
 	if !f.force && (baseState == "" || localState != baseState) {
-		return sourceConflictError(target, baseURL, remoteName)
+		return fmt.Errorf("local and remote source both changed for target %s; use a separate clone --target %s or explicitly pull --force", f.target, f.target)
 	}
 	if err := sourcebundle.Mirror(tmp, dir); err != nil {
 		return fmt.Errorf("update local source: %w", err)
 	}
-	state, err := sourcebundle.Digest(dir)
+	actual, err := sourcebundle.Digest(dir)
 	if err != nil {
 		return err
 	}
-	if state != remoteState {
-		return fmt.Errorf("pulled source state %s, want %s", state, remoteState)
+	if actual != remoteState {
+		return fmt.Errorf("pulled source state %s, want %s", actual, remoteState)
 	}
-	target.SourceState = remoteState
-	target.SourceETag = metadata.ETag
-	target.AirlockURL = baseURL
-	binding.putRemote(remoteName, target)
-	if err := writeAgentBinding(dir, binding); err != nil {
+	state.SourceState, state.SourceETag = remoteState, metadata.ETag
+	if err := selected.saveSource(state); err != nil {
 		return err
 	}
-	fmt.Printf("Pulled %s (%s) from %s\n", target.Slug, target.AgentID, baseURL)
+	fmt.Printf("Pulled app %s target %s from %s\n", selected.app.AgentID, f.target, selected.baseURL)
 	return nil
 }
 
@@ -250,6 +275,11 @@ func parseSourceFlags(args []string, allowForce bool) (sourceFlags, []string, er
 			f.remote = value
 		case "agent":
 			f.agent = value
+		case "target":
+			if f.target != "" {
+				return sourceFlags{}, nil, errors.New("duplicate --target")
+			}
+			f.target = value
 		default:
 			return sourceFlags{}, nil, fmt.Errorf("unknown flag --%s", key)
 		}
@@ -312,9 +342,9 @@ func resolveSourceAirlock(dir string, f sourceFlags, requireRemoteMatch bool) (s
 	return baseURL, remoteName, nil
 }
 
-func downloadSource(ctx context.Context, baseURL, token, agentID string) (string, sourceMetadata, error) {
+func downloadSource(ctx context.Context, baseURL, token, sourcePath string) (string, sourceMetadata, error) {
 	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalizeBaseURL(baseURL)+sourcePath, nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}

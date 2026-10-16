@@ -20,8 +20,6 @@ import (
 
 const (
 	runtimeMigrationsPath  = "/migrations"
-	sourceMigrationsPath   = "db/migrations"
-	testMigrationEnv       = "AGENTSDK_TEST_MIGRATIONS"
 	migrationTimeout       = 10 * time.Minute
 	migrationUnlockTimeout = 5 * time.Second
 )
@@ -61,12 +59,10 @@ const (
 	migrationValidate
 	migrationDownTo
 	migrationUpOnly
-	migrationTestReset
 )
 
-// autoMigrate applies migrations from the runtime image or the explicit absolute
-// AIRLOCK_MIGRATIONS_DIR. agenttest selects the
-// canonical source directory and reset/up mode before constructing the agent.
+// autoMigrate applies the real app's runtime-image migrations or the explicitly
+// configured absolute AIRLOCK_MIGRATIONS_DIR.
 func (a *Agent) autoMigrate() {
 	dir := runtimeMigrationsPath
 	if configured := os.Getenv("AIRLOCK_MIGRATIONS_DIR"); configured != "" {
@@ -78,14 +74,7 @@ func (a *Agent) autoMigrate() {
 	mode := migrationUp
 	var downTo int64
 
-	if os.Getenv(testMigrationEnv) == "1" {
-		var err error
-		dir, err = sourceMigrationsDir()
-		if err != nil {
-			panic("agentsdk: resolve source migrations: " + err.Error())
-		}
-		mode = migrationTestReset
-	} else if isValidatingMigrations() {
+	if isValidatingMigrations() {
 		mode = migrationValidate
 	} else if downStr := os.Getenv("AGENT_MIGRATE_DOWN_TO"); downStr != "" {
 		v, err := strconv.ParseInt(downStr, 10, 64)
@@ -131,33 +120,6 @@ func (a *Agent) autoMigrate() {
 	}
 }
 
-func sourceMigrationsDir() (string, error) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("get working directory: %w", err)
-	}
-	start := dir
-	for {
-		goMod := filepath.Join(dir, "go.mod")
-		info, err := os.Stat(goMod)
-		switch {
-		case err == nil:
-			if !info.Mode().IsRegular() {
-				return "", fmt.Errorf("module marker %s is not a regular file", goMod)
-			}
-			return filepath.Join(dir, sourceMigrationsPath), nil
-		case !os.IsNotExist(err):
-			return "", fmt.Errorf("inspect module marker %s: %w", goMod, err)
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "", fmt.Errorf("find enclosing Go module from %s: go.mod not found", start)
-		}
-		dir = parent
-	}
-}
-
 func (a *Agent) runMigrationPass(ctx context.Context, dir string, mode migrationMode, downTo int64) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
@@ -170,8 +132,6 @@ func (a *Agent) runMigrationPass(ctx context.Context, dir string, mode migration
 		case migrationDownTo:
 			agentLogger().Info("migrating down", zap.Int64("to_version", downTo))
 			return goose.DownToContext(ctx, a.db.db, dir, downTo)
-		case migrationTestReset:
-			return runMigrationValidation(ctx, a.db.db, dir, "test validation")
 		default:
 			return goose.UpContext(ctx, a.db.db, dir)
 		}

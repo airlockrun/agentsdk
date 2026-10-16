@@ -14,23 +14,37 @@
 // is suitable for production.
 //
 // Controller owns authority, child admission, durable budgets, cancellation and
-// completion. Spawn and Continue must deduplicate by parent run plus model tool
+// reply validation. Spawn and Continue must deduplicate by parent run plus model tool
 // call ID and recover the same durable handle after interruption. Wait must
 // persist its dependency and original deadline by that key before ErrWaiting,
-// and be idempotent on resume. Complete must atomically reject active children
-// and accept an identical reply idempotently: it can be called again after a
+// and be idempotent on resume. Complete validates output and rejects active children
+// without persisting a reply: it can be called again after a
 // crash. Other interrupted calls have unknown effects and are not replayed.
 // Complete must leave the lease and checkpoint writable until the runtime's
-// completed checkpoint commits. Only then may the host finalize the run and
-// admit a session continuation. Ordinary control errors are model feedback;
+// submission or question checkpoint commits. PhaseSubmitted contains a draft;
+// SaveCheckpoint must atomically resolve/pin its artifacts, journal the submission
+// identified by Calls[Next-1], and schedule its bound review job or autoaccept it.
+// Result.Submitted never establishes application acceptance. PhaseCompleted
+// completes a needs_input question. All tail calls have denied results; Next
+// remains immediately after submit. Review Continue atomically appends feedback,
+// advances Revision, clears Reply/Calls/Response/Next, and sets PhaseReady while
+// preserving CallIDs, original input and cumulative budgets. Only acceptance or
+// a completed question admits public session continuation. Ordinary control errors are model feedback;
 // errors implementing tool.FatalToolError terminate the attempt. Context errors
-// and all store/model/budget errors terminate the attempt without executing tail
+// and all store/budget errors terminate the attempt without executing tail
 // calls. Persisted tool arguments are exact dispatch data and can be sensitive;
 // access to checkpoints requires the same protection as execution records.
 //
 // BeforeModel reserves a durable hierarchical reasoning step before each model
-// request, including compaction. The injected model wrapper accounts for all
-// input and output tokens, including compaction and interrupted requests. The
+// request, including compaction and model-stream retries. Native response capture
+// allows two retries for retryable provider failures with exponential jittered
+// backoff (1–2s, 2–4s). It discards all failed response events and requests again
+// from the committed transcript; it never retries tool dispatch or provider tools.
+// Missing finish events and definitive model errors fail the attempt. The host
+// model wrapper charges reported input/output tokens for each request, including
+// interrupted requests. Checkpoint.ModelStreamFailures preserves failed-request
+// usage; UsageUnknown marks unreported totals, so host token totals are lower
+// bounds rather than fabricated zero-cost failed calls. The
 // host enforces wall-clock deadlines across waits and restarts and cancels the
 // supplied context on expiry or lease loss. Zero Steps means unlimited steps;
 // no Sol runner defaults are applied. Host enforcement covers descendants too.

@@ -37,6 +37,7 @@ type AgentDefinition[In, Out any] struct {
 	MaxConcurrency         int
 	MaxSubagentCalls       int
 	MaxConcurrentSubagents int
+	Review                 *AgentReview[In, Out]
 }
 
 // Subagent is a sealed reference to an already registered task agent. A child
@@ -106,6 +107,9 @@ func RegisterAgent[In, Out any](a *Agent, def *AgentDefinition[In, Out]) *AgentH
 		Budget: wire.AgentBudget{Steps: 150}, MaxAttempts: int32(def.MaxAttempts), MaxConcurrency: int32(def.MaxConcurrency),
 		MaxSubagentCalls: int32(def.MaxSubagentCalls), MaxConcurrentSubagents: int32(def.MaxConcurrentSubagents),
 	}
+	if def.Review != nil {
+		d.Review = agentReviewPolicy(def.Slug, def.Review)
+	}
 	if def.Capabilities != nil {
 		d.Capabilities = &wire.AgentCapabilityPolicy{Allow: append([]wire.AgentCapability{}, def.Capabilities.Allow...)}
 		sort.Slice(d.Capabilities.Allow, func(i, j int) bool { return d.Capabilities.Allow[i] < d.Capabilities.Allow[j] })
@@ -161,6 +165,9 @@ func RegisterAgent[In, Out any](a *Agent, def *AgentDefinition[In, Out]) *AgentH
 		panic("agentsdk: RegisterAgent: " + err.Error())
 	}
 	d.ContractHash = hash
+	if def.Review != nil {
+		registerAgentReview(a, d, *def.Review)
+	}
 	manifest := a.buildManifest()
 	manifest.AgentDefinitions = append(manifest.AgentDefinitions, d)
 	if err := wire.ValidateAgentDefinitions(manifest); err != nil {

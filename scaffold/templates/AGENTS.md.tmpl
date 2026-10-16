@@ -24,33 +24,45 @@ Two other documents complete the picture:
   styling palette, anything a future upgrade needs to know about).
   Keep it short and current as you go.
 
-## Running and testing locally
+## Developing with a real preview
 
-`go tool air run --local` runs the ordinary entrypoint with the shared public
-local runtime. Configure `.airlock/local/runtime.json` with an explicit developer
-identity, each declared text/vision slot plus `@default`, and a compatible Docker
-Deno image. PostgreSQL auto-starts per app with a persistent host data bind mount;
-`databaseEnv` explicitly selects an external database instead. `go tool air build`
-prepares generated assets; `run --build-executor` builds a local development image.
-Read `reference/local-development.md` in the SDK skill for configuration and
-supported capabilities. Keep provider keys outside project configuration.
+`go tool air build` generates assets, runs deterministic domain tests and compiles
+without provisioning Docker, PostgreSQL, Deno or a model. `go tool air test` runs
+the local deterministic tests. SDK simulator/testcontainers imports are rejected
+in the default app build/test selection. Inject typed repository/model/HTTP
+fixtures directly into domain code; do not start an SDK host in local tests.
 
-`agenttest.NewWithOptions` uses the same host, disposable PostgreSQL and temporary
-storage with fake models. Native AgentHandle lifecycle and typed jobs execute
-there. Inject `Options.ExecutorFactory` for task JavaScript and explicit fake
-resource adapters for connections/MCP. Live models require test opt-in. Declare
-task-only storage with `AccessInternal`; private Go tools use normal SDK methods.
-Application-owned jobs/tasks have no substituted human owner.
+`go tool air preview -m "Describe the candidate" --wait` uploads the complete
+source tree and test fixtures to the selected Airlock remote and starts your
+personal real app. First bind/create the logical app with `--agent <app>` or
+`--create --name <name>`. No preview ID or local resource-binding file is required.
+Named instances live in `.airlock/local/agent.toml`; `--remote` selects an instance,
+and `--target` independently selects its deployment. General commands default to
+production. `air preview` creates or updates the saved preview per app/remote and
+never changes later defaults. Explicit `--target preview` requires a saved reference.
+Copied/moved checkouts may retain that reference; server authorization decides access.
+Inside real hosted development workspaces, the injected preview is the default;
+explicit production is subject to existing host permissions.
+
+Use `air request GET / --target preview`, `air tools invoke <name> --input <json>
+--target preview`, `air agent start <definition> --target preview`, and
+`air agent get|wait|cancel <definition> <run-id> --target preview`. Registered
+agents execute through the real host controller. Wait cancellation only stops
+observation. Native application work does not acquire the developer's identity.
+Bindings are explicit server-side selections through `air resources bind` or
+`air resources fixture`; fixture bodies belong in the whole source candidate.
+Read the SDK testing/remote-development reference for current host-runner support.
 
 ## Inspecting remote builds
 
-After `go tool air deploy -m "Describe this deployment"`, inspect the build
+After `go tool air preview -m "Describe this deployment"`, inspect the build
 without uploading or changing this workspace:
 
 ```sh
-go tool air deploy list --limit 10
-go tool air deploy status --watch --logs
-go tool air deploy status --build <UUID> --json
+go tool air deploy list --target preview --limit 10
+go tool air deploy status --target preview --watch --logs
+go tool air deploy status --target preview --build <UUID> --json
+go tool air status --target preview --json
 ```
 
 Both commands take an optional repo directory and the deploy target flags
@@ -312,9 +324,9 @@ Use relative paths (`/auth`, `/settings`) for links within the same agent UI.
 `agentsdk.AgentURL()` / `agentsdk.AgentURLFromContext(ctx)` return the agent's
 public origin for absolute URLs that leave the request context, such as emails,
 third-party callbacks, or chat messages. These accessors are unavailable during
-definition and offline manifest inspection. `agenttest.New` returns a synced
-agent; render pages so they can omit absolute links when the URL is unavailable
-in narrower unit tests.
+definition and offline manifest inspection. Render pages so they can omit
+absolute links when the URL is unavailable in direct unit tests. Real preview
+startup supplies the synchronized target origin.
 
 ## Build chain
 
@@ -364,80 +376,35 @@ templ, and Tailwind output before compiling.
 ## Testing
 
 Write Go tests for what you add. The build runs
-`go test -p=1 -count=1 ./...` so cached successes cannot hide a regression and
-packages sharing `$TEST_DB_URL` cannot reset the schema concurrently. A failing
+`go test -p=1 -count=1 ./...` so cached successes cannot hide a regression.
+No database or host runtime is provisioned for that step. A failing
 test means the build isn't done. Keep the suite focused: test
 complex logic, regressions, and important route behavior, not every function or
 handler by default.
 
 Tests must not load secrets, connection credentials, or MCP credentials from
-`.env` or the developer's environment. Secrets stay in Airlock. Use
-`agenttest.New(t, newAgent)` and its mock Airlock for agent-level tests.
+`.env` or the developer's environment. Secrets stay in Airlock. Local tests
+exercise domain logic and explicit mocks; integration uses real remote targets.
 
 - **Unit tests** sit next to the code they cover, one `_test.go` per source
   file: `<domain>/service_test.go` for business logic, `handlers/home_test.go`
   for handler rendering. Construct the receiver with typed test dependencies
   and invoke the method directly. Use table-driven subtests with `t.Run`.
-- **Agent composition smoke tests** live in `main_test.go`. Build the agent with
-  `agenttest.New(t, newAgent)` and serve `env.Agent.Handler()` through
-  `httptest` so a small request set proves the complete dependency graph,
-  routes, and static declarations are wired. The helper stands up a mock
-  Airlock and selects a test database only after it invokes `newAgent` with
-  runtime environment cleared. It then starts the runtime, validates migrations
-  with an up, down-to-zero, up cycle, syncs declarations, runs named `OnStart`
-  hooks, and returns a ready agent:
-
-  ```go
-  func TestAgentComposition(t *testing.T) {
-      env := agenttest.New(t, newAgent)
-      user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
-      req := httptest.NewRequest(http.MethodGet, "/", nil)
-      req.Header.Set("Authorization", "Bearer test-token")
-       req = req.WithContext(agenttest.WithUser(req.Context(), user))
-       agenttest.SetCallerHeader(req)
-      rec := httptest.NewRecorder()
-      env.Agent.Handler().ServeHTTP(rec, req)
-      // assert status, content type, body
-  }
-  ```
-
-  Use `agenttest.WithUser` for ordinary authenticated users and
-  `agenttest.WithCaller(ctx, user, access)` when a user needs explicit public,
-  user, or admin access. Direct handler unit tests that read callers also need
-  explicit caller state; plain contexts are not anonymous fixtures. Use the
-  `agenttest.WithCallerInfo` helper described in `reference/caller.md` for anonymous
-  and application cases. Do not construct private attribution headers in app tests.
-  Every non-health HTTP request, including assets and public routes,
-  needs `Authorization: Bearer test-token`, the credential installed by
-  `agenttest.New`. Caller contexts do not bypass delivery authentication.
-  Use `agenttest.SetCallerHeader(req)` to encode injected test caller metadata
-  for SDK HTTP dispatch, both in process and through `httptest.NewServer`.
-  Direct handler unit tests need only the injected context.
-
-  Keep this test as a narrow composition check. Put detailed route behavior in
-  the handler package and detailed domain behavior beside its service. Exercise
-  render tests in the empty/resting state (no rows, nil pointers), where view
-  failures commonly occur.
-- **DB-backed tests:** `agenttest.New` uses `$TEST_DB_URL` only when supplied;
-  otherwise it starts a throwaway `pgvector/pgvector:pg17` container. It never
-  connects to an inherited `$AIRLOCK_DB_URL`. The factory may wire the
-  late-bound `agent.DB()` into dependency constructors but must not query it.
-  `go tool air build` supplies one shared throwaway database to the serial
-  package test run, avoiding one container per `agenttest.New` call.
-  After the factory returns, startup validates source migrations with an up,
-  down-to-zero, up cycle from the enclosing module's `db/migrations`, including
-  when the test belongs to a subpackage. Never change process cwd to find migrations.
-  `agenttest.New` returns only after sync and `OnStart` hooks, so tests can use
-  the migrated database immediately. The helper closes the pool and test
-  services during cleanup.
-
-  ```go
-  func TestThing(t *testing.T) {
-      env := agenttest.New(t, newAgent)
-      q := db.New(env.Agent.DB())
-      // exercise queries, assert results
-  }
-  ```
+- **Offline composition** in `main_test.go` calls `newAgent().Manifest()` and
+  checks declarations/schema. It never calls Start, Serve or Handler.
+- **Caller fixtures** for direct handler/domain tests use
+  `testutil.WithCaller(ctx, wire.Caller{...})` with explicit validated actor,
+  access and origin. This context is metadata, not remote authorization.
+- **Model fixtures** use `goai/testutil.NewMockModel` with explicit scripted
+  responses injected into the domain service's model dependency. No automatic
+  model-slot fallback, live account resolution or local agent scheduler.
+- **Integration packages** use `//go:build airlockintegration` and a real remote
+  scoped runner client with explicit app/deployment/revision/runtime generation.
+  Keep testdata in the source candidate. `air test --remote NAME --target preview
+  --revision UUID --suite integration --wait` admits the packaged real-host suite;
+  missing capability is an error, never a skipped or simulated pass.
+- **DB/startup/HTTP/agent integration** executes on the real host with isolated
+  target credentials, migrations, manifest sync, OnStart and durable workers.
 - `go test` can exceed the default bash timeout on a cold cache — pass a larger
   `timeout` when you run it.
 
@@ -452,18 +419,10 @@ jobs over an expand/migrate/contract layout; never perform them from goose or
 input; each `-- name: FuncName :one|:many|:exec` block becomes a typed Go
 function in `internal/db/`.
 
-For SQL-only migrations, validate locally when `$TEST_DB_URL` is set:
-
-```bash
-goose -dir db/migrations postgres "$TEST_DB_URL" up
-goose -dir db/migrations postgres "$TEST_DB_URL" reset
-goose -dir db/migrations postgres "$TEST_DB_URL" up
-psql "$TEST_DB_URL" -c "\dt"  # verify final schema shape
-```
-
-The standalone goose CLI cannot register Go migrations. When any numbered `.go`
-migration exists, use `go tool air build` for source verification; Airlock runs
-the compiled agent image through up, down, and up before deployment.
+`go tool air build` verifies source/schema generation without a database. Airlock
+runs actual compiled migrations and its host validation gates remotely. Query
+correctness, migration locking and startup are real-host integration assertions,
+not properties proved by a domain repository mock.
 
 ## Dockerfile & system setup
 

@@ -21,12 +21,14 @@ Requires Go 1.26+.
 
 ## Air CLI
 
-`go tool air run --local` runs an app's ordinary HTTP server with local
-PostgreSQL, durable storage/tasks/jobs, explicit model bindings and the packaged
-Deno executor. Configure `.airlock/local/runtime.json` and read
-[local development](reference/local-development.md) for startup and supported
-capabilities. `agenttest.NewWithOptions` uses the same host with isolated
-dependencies and fake providers.
+`go tool air build` and `go tool air test` run deterministic generation/domain
+tests without provisioning Docker or a database. `go tool air preview` uploads
+the complete source candidate and fixtures and starts your personal real Airlock
+app. General operations default to production; `--target preview` selects the
+saved preview per app/remote. `air preview` never changes that default. `--remote` selects the
+instance independently. `air run --local` is unsupported. Read
+[remote development](reference/remote-development.md) for commands, resource
+authority, fixture support and the current remote-suite boundary.
 
 Install the global launcher once:
 
@@ -59,7 +61,7 @@ start time, and message. `--limit` defaults to 10 and accepts 1-50.
 Both accept `--remote`, `--url`, and `--agent <slug-or-id>` with the same binding
 conflict checks as source deployment, and use the saved login for that URL.
 They do not upload source, start builds, or check SDK compatibility. When a
-deployment accepted by this workspace finishes, status refreshes the canonical
+deployment accepted by this checkout finishes, status refreshes the canonical
 source ETag in `.airlock/local/agent.toml` without changing source files. Login
 refresh can update credentials outside the repository. `go tool air status` is
 the direct alias for deployment status.
@@ -183,45 +185,17 @@ process-local `OnStart` hooks, then serves HTTP until shutdown. Keep durable
 startup work in registered jobs; `OnStart` is for disposable process-local
 state.
 
-Tests use `agenttest.New(t, factory)`. It invokes the factory first while the
-agent is definition-only, then provisions the mock Airlock and test database,
-starts the runtime, validates migrations with an up, down-to-zero, up cycle,
-synchronizes declarations, runs `OnStart` hooks, and returns a ready agent.
-`go tool air build` provisions one throwaway PostgreSQL container for the serial
-test run instead of starting one per `agenttest.New` call.
-
-`env.Chat(ctx, scope, input)` exercises the actual shared Sol chat loop with mock
-models and the real authenticated app capability handler. Use `agenttest.MemoryStore`
-for conversation history, `agenttest.Events` for typed events, and
-`agenttest.Executor(ExecutorConfig)` for a lazy Deno factory. Local tests select
-an executor image built with `jsexec.BuildImage`; builders inject `OpenTransport`
-to an isolated host-owned executor without mounting Docker into test containers.
-Text-only and unapproved runs do not allocate an executor. See the
-[chat runtime contract](chatruntime/README.md) for required settings and callbacks.
-
-`agenttest.New(t, factory)` gives each streaming model slot an independent GoAI
-mock, configurable through `env.MockModel(slot).Configure(...)`. Use
-`NewWithOptions` for pre-start mock responses or explicit live selections.
-`RegisterFlags(flag.CommandLine)` opts a test package into repeatable
-`-agenttest.model=slot=slug/provider/model` flags selecting named Sol accounts;
-pass its options to `NewWithOptions`. Unselected slots remain mocked, and ordinary
-tests do not read credentials or make live model calls. `Env.Chat` independently
-accepts an injected model. The registered-task helper runs the app's leaf task
-contract with an explicitly selected executor and optional service backend.
-Mock-host task lifecycle requests fail with a diagnostic directing tests to
-`RunAgent`; production handles address real Airlock-owned task state.
-See [explicit local model testing](reference/testing.md).
-
-Run the [CSV task example](agenttest/examples/csv/app_test.go) with real Deno and
-default mock responses:
-
-```sh
-go test ./agenttest/examples/csv -run '^TestConversion$' -count=1 -v
-```
-
-It verifies an actual CSV artifact and typed task completion. The same test can
-select Codex through explicit flags; prerequisites and the full command are in
-the [runnable example guide](reference/testing.md#runnable-registered-task-example).
+Local tests exercise domain logic, direct handlers and offline manifests using
+explicit typed fixtures and `goai/testutil` model mocks. `agentsdk/testutil`
+injects validated caller metadata without authentication or runtime work.
+Real startup, migrations, SDK HTTP admission, tasks/jobs and Deno integration
+execute on Airlock targets. `agentsdk/remote` supplies an explicit operator client
+for HTTP, registered tools, durable agent lifecycle and server-side bindings.
+`air test --remote NAME --target preview --revision UUID --suite integration --wait`
+requests the candidate's packaged real-host suite. `remote.TestClientFromEnvironment`
+uses a scoped opaque runner capability, never laptop login/provider credentials
+or a simulated host. Source contains the entire fixture set.
+See [remote development](reference/remote-development.md).
 
 ## Companion projects
 

@@ -104,8 +104,8 @@ Airlock release, downloaded Go dependencies, or working-tree copy is required.
 - Optional `Options.User` supplies a frozen lexical `user` object containing only
   `id`, `email`, and `displayName`; nil exposes `null`. The host derives it from
   authenticated run attribution. It is display context, not authorization.
-  `user` and `air.log` are reserved binding paths. Local tests supply the same
-  claims through `agenttest.ExecutorConfig.User`.
+  `user` and `air.log` are reserved binding paths. The host supplies display claims
+  through `chatruntime.ExecutorFromTransport`; none establish authorization.
 
 Background work is not a supported session-persistence mechanism. Worker use,
 unreferenced timer controls, `Atomics.waitAsync`, outstanding timer/resource

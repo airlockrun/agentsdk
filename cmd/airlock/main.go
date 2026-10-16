@@ -65,7 +65,7 @@ func usage(w io.Writer) {
 
 Usage:
   airlock init <dir> --url <url>
-  airlock clone <agent> --url <url> <dir> [--remote <name>]
+  airlock clone <agent> --url <url> <dir> --target <name> [--remote <name>]
   airlock <command> [args...]   delegate from an agent repo to go tool air
 `, agentsdk.Version)
 }
@@ -97,12 +97,18 @@ func rewriteInitOutput(output, dir string) string {
 }
 
 func cmdClone(args []string) error {
-	positional, flags, err := parseArgs(args, map[string]bool{"url": true, "remote": true})
+	positional, flags, err := parseArgs(args, map[string]bool{"url": true, "remote": true, "target": true})
 	if err != nil {
 		return err
 	}
 	if len(positional) != 2 {
 		return errors.New("clone requires an agent slug-or-id and destination directory")
+	}
+	if flags["target"] == "" {
+		flags["target"] = "production"
+	}
+	if strings.ContainsAny(flags["target"], "/\\?# \t\r\n") {
+		return errors.New("clone requires a valid deployment target")
 	}
 	baseURL, err := validateBaseURL(flags["url"])
 	if err != nil {
@@ -115,7 +121,7 @@ func cmdClone(args []string) error {
 	if err := execute(dir, "go", "tool", "air", "login", baseURL, "--wait"); err != nil {
 		return err
 	}
-	toolArgs := []string{"tool", "air", "clone", positional[0], ".", "--url", baseURL}
+	toolArgs := []string{"tool", "air", "clone", positional[0], ".", "--url", baseURL, "--target", flags["target"]}
 	if flags["remote"] != "" {
 		toolArgs = append(toolArgs, "--remote", flags["remote"])
 	}
@@ -133,6 +139,9 @@ func parseArgs(args []string, allowed map[string]bool) ([]string, map[string]str
 		key := strings.TrimPrefix(args[i], "--")
 		if !allowed[key] {
 			return nil, nil, fmt.Errorf("unknown flag --%s", key)
+		}
+		if _, exists := flags[key]; exists {
+			return nil, nil, fmt.Errorf("duplicate flag --%s", key)
 		}
 		if i+1 >= len(args) {
 			return nil, nil, fmt.Errorf("flag --%s needs a value", key)

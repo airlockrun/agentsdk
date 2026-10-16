@@ -11,11 +11,11 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/buildconfig"
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
-	"github.com/airlockrun/agentsdk/scaffold"
 	"github.com/airlockrun/agentsdk/sourcebundle"
 	"github.com/airlockrun/agentsdk/wire"
 	"golang.org/x/mod/semver"
@@ -29,19 +29,30 @@ var (
 const maxDeployMessageBytes = 200
 
 type deployFlags struct {
-	create      bool
-	force       bool
-	slug        string
-	agent       string
-	url         string
-	remote      string
-	name        string
-	description string
-	message     string
-	dir         string
+	ensurePreview bool
+	launch        bool
+	create        bool
+	force         bool
+	slug          string
+	agent         string
+	url           string
+	remote        string
+	name          string
+	description   string
+	message       string
+	dir           string
+	target        string
+	wait          bool
+	timeout       time.Duration
+	binds         []string
+	fixtures      []string
 }
 
 func cmdDeploy(args []string) error {
+	return deployCommand(args, false)
+}
+
+func deployCommand(args []string, ensurePreview bool) error {
 	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" {
 		return errors.New("deploy is unavailable with a codegen integration token")
 	}
@@ -52,9 +63,13 @@ func cmdDeploy(args []string) error {
 	if err != nil {
 		return err
 	}
-	hostedDevelopment := os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != ""
-	if hostedDevelopment && os.Getenv("AIRLOCK_DEPLOY_APPROVED") != "1" {
-		return errors.New("hosted developer deployment requires approval; rerun this exact command through bash with request_permission=true")
+	f.ensurePreview = ensurePreview
+	if f.launch && !ensurePreview {
+		return errors.New("--launch requires air preview")
+	}
+	f.target = defaultTarget(f.target)
+	if err := requireTarget(f.target); err != nil {
+		return err
 	}
 	if _, err := os.Stat(filepath.Join(f.dir, "go.mod")); err != nil {
 		return fmt.Errorf("deploy requires an agent repo with go.mod in %s: %w", f.dir, err)
@@ -62,177 +77,11 @@ func cmdDeploy(args []string) error {
 	if _, err := buildconfig.Load(f.dir); err != nil {
 		return fmt.Errorf("validate runtime files: %w", err)
 	}
-	binding, _, err := loadAgentBinding(f.dir)
-	if err != nil {
-		return err
-	}
-	remoteName := f.remote
-	if remoteName == "" {
-		remoteName = binding.DefaultRemote
-	}
-	if remoteName == "" {
-		remoteName = defaultRemoteName
-	}
-	boundRemote, _ := binding.remote(remoteName)
-	baseURL := normalizeBaseURL(f.url)
-	if hostedDevelopment {
-		injectedURL := normalizeBaseURL(os.Getenv("AIRLOCK_API_URL"))
-		injectedAgent := strings.TrimSpace(os.Getenv("AIRLOCK_AGENT_ID"))
-		if injectedURL == "" || injectedAgent == "" {
-			return errors.New("developer session requires AIRLOCK_API_URL and AIRLOCK_AGENT_ID")
-		}
-		if baseURL != "" && baseURL != injectedURL {
-			return fmt.Errorf("developer session is restricted to %s", injectedURL)
-		}
-		baseURL = injectedURL
-		if boundRemote.AgentID != "" && boundRemote.AgentID != injectedAgent {
-			return errors.New("workspace binding does not match AIRLOCK_AGENT_ID")
-		}
-		boundRemote.AirlockURL, boundRemote.AgentID = injectedURL, injectedAgent
-	}
-	if baseURL != "" && boundRemote.AirlockURL != "" && baseURL != normalizeBaseURL(boundRemote.AirlockURL) {
-		return fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remoteName, boundRemote.AirlockURL, baseURL)
-	}
-	if baseURL == "" {
-		baseURL = boundRemote.AirlockURL
-	}
-	if baseURL == "" {
-		return errors.New("deploy needs an Airlock URL: pass --url or configure an Airlock remote for this workspace")
-	}
-	if f.create && boundRemote.AgentID != "" {
-		return fmt.Errorf("remote %q is already bound to %s (%s); deploy without --create to update that agent\n\nTo intentionally replace this local binding, run from %s:\n  go tool air remote unbind %s", remoteName, boundRemote.Slug, boundRemote.AgentID, f.dir, remoteName)
-	}
-
-	ctx := context.Background()
-	token, err := accessTokenForURL(ctx, baseURL)
-	if err != nil {
-		return err
-	}
-	sdkInfo, err := ensureDeploySDKVersion(ctx, baseURL, token)
-	if err != nil {
-		return err
-	}
-	var target agentRemoteBinding
-	if !f.create {
-		if hostedDevelopment {
-			if err := hydrateDeveloperSource(ctx, baseURL, token, &boundRemote); err != nil {
-				return err
-			}
-		}
-		if err := reconcilePendingDeployment(ctx, f.dir, remoteName, &binding, &boundRemote, baseURL, token); err != nil {
-			return err
-		}
-		target, err = resolveAgentTarget(ctx, baseURL, token, f.agent, remoteName, boundRemote)
-		if err != nil {
-			return explainDeployTargetError(ctx, baseURL, token, remoteName, f.dir, f.agent, boundRemote, err)
-		}
-	}
-
-	before, err := snapshotManagedFiles(f.dir)
-	if err != nil {
-		return err
-	}
-	agentBaseImage, err := deployAgentBaseImage(f.dir, sdkInfo.GetAgentBaseImage())
-	if err != nil {
-		return err
-	}
-	if err := runUpdate(f.dir, scaffold.ScaffoldData{
-		AgentSDKVersion: "v" + agentsdk.Version,
-		AgentBaseImage:  agentBaseImage,
-	}); err != nil {
-		return err
-	}
-	after, err := snapshotManagedFiles(f.dir)
-	if err != nil {
-		return err
-	}
-	if changed := changedManagedFiles(before, after); len(changed) > 0 {
-		return fmt.Errorf("update changed airlock-managed files (%s); review the changes and rerun deploy", strings.Join(changed, ", "))
-	}
-
-	if f.create {
-		target, err = createDraftAgent(ctx, baseURL, token, f)
-		if err != nil {
-			return explainCreateAgentError(ctx, baseURL, token, remoteName, f.dir, f.slug, err)
-		}
-		target.AirlockURL = baseURL
-		binding.putRemote(remoteName, target)
-		if err := writeAgentBinding(f.dir, binding); err != nil {
-			return err
-		}
-	}
-
-	fmt.Printf("Deploying %s to %s (%s) at %s\n", f.dir, target.Slug, target.AgentID, baseURL)
-	localState, err := sourcebundle.Digest(f.dir)
-	if err != nil {
-		return fmt.Errorf("hash source: %w", err)
-	}
-	previousState := target.SourceState
-	expectedETag := target.SourceETag
-	if f.force {
-		expectedETag, err = observeSourceETag(ctx, baseURL, token, target.AgentID)
-		if err != nil && !hasHTTPStatus(err, http.StatusNotFound) {
-			return fmt.Errorf("observe current source before force deploy: %w", err)
-		}
-	} else if previousState != "" && expectedETag == "" {
-		return errors.New("this workspace binding predates revision-aware source synchronization; run go tool air pull before deploying")
-	}
-	accepted, err := uploadSource(ctx, baseURL, token, target.AgentID, f.dir, expectedETag, f.message)
-	if err != nil {
-		var stale *staleSourceError
-		if errors.As(err, &stale) {
-			return deploySourceStateError(stale, target, baseURL, remoteName)
-		}
-		bindingStored := f.create || boundRemote.AgentID == target.AgentID
-		if hasHTTPStatus(err, http.StatusNotFound) && bindingStored {
-			return missingBoundAgentError(ctx, baseURL, token, remoteName, f.dir, target, f.create)
-		}
-		if hasHTTPStatus(err, http.StatusForbidden) {
-			return fmt.Errorf("Airlock refused source deployment to %s (%s): the current login does not have permission to deploy this agent.\n\nNo source was uploaded. Ask an agent administrator for admin access, or use a different remote", target.Slug, target.AgentID)
-		}
-		if hasHTTPStatus(err, http.StatusUnauthorized) {
-			return fmt.Errorf("Airlock rejected the login while deploying to %s (%s).\n\nLog in again, then rerun deploy:\n  go tool air login %s --reauthenticate", target.Slug, target.AgentID, baseURL)
-		}
-		if hasHTTPStatus(err, http.StatusConflict) {
-			return fmt.Errorf("Airlock refused source deployment to %s (%s): %w", target.Slug, target.AgentID, err)
-		}
-		return err
-	}
-	if accepted.State != localState {
-		return fmt.Errorf("Airlock returned candidate source state %s, want uploaded state %s", accepted.State, localState)
-	}
-	if accepted.TaskID == "" {
-		generation, parseErr := strconv.ParseInt(accepted.Generation, 10, 64)
-		if parseErr != nil || generation < 0 {
-			return fmt.Errorf("Airlock returned invalid source generation %q", accepted.Generation)
-		}
-		target.AirlockURL = baseURL
-		target.SourceState = accepted.State
-		target.SourceETag = (wire.SourceVersion{Revision: accepted.Revision, Generation: generation}).ETag()
-		target.DeveloperSession = boundRemote.DeveloperSession
-		binding.putRemote(remoteName, target)
-		if err := writeAgentBinding(f.dir, binding); err != nil {
-			return fmt.Errorf("save synchronized source state: %w", err)
-		}
-		fmt.Println("Source is unchanged; no build started")
-	} else {
-		target.AirlockURL = baseURL
-		target.SourceETag = boundRemote.SourceETag
-		target.SourceState = boundRemote.SourceState
-		target.DeveloperSession = boundRemote.DeveloperSession
-		target.PendingTask = accepted.TaskID
-		target.PendingSourceState = accepted.State
-		binding.putRemote(remoteName, target)
-		if err := writeAgentBinding(f.dir, binding); err != nil {
-			return fmt.Errorf("save accepted deployment task: %w", err)
-		}
-		fmt.Printf("Source candidate %s accepted; task %s started\n", accepted.Revision, accepted.TaskID)
-	}
-	return nil
+	return deployToTarget(f)
 }
 
 func parseDeployFlags(args []string) (deployFlags, error) {
-	f := deployFlags{dir: "."}
+	f := deployFlags{dir: ".", timeout: 10 * time.Minute}
 	var positional []string
 	messageSet := false
 	for i := 0; i < len(args); i++ {
@@ -251,12 +100,20 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 			continue
 		}
 		key := a[2:]
+		if key == "launch" {
+			f.launch = true
+			continue
+		}
 		if key == "create" {
 			f.create = true
 			continue
 		}
 		if key == "force" {
 			f.force = true
+			continue
+		}
+		if key == "wait" {
+			f.wait = true
 			continue
 		}
 		if i+1 >= len(args) {
@@ -280,6 +137,21 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 		case "message":
 			f.message = value
 			messageSet = true
+		case "target":
+			if f.target != "" {
+				return deployFlags{}, errors.New("duplicate --target")
+			}
+			f.target = value
+		case "timeout":
+			duration, parseErr := time.ParseDuration(value)
+			if parseErr != nil || duration <= 0 {
+				return deployFlags{}, errors.New("--timeout requires a positive duration")
+			}
+			f.timeout = duration
+		case "bind":
+			f.binds = append(f.binds, value)
+		case "fixture":
+			f.fixtures = append(f.fixtures, value)
 		default:
 			return deployFlags{}, fmt.Errorf("unknown flag --%s", key)
 		}
@@ -647,7 +519,7 @@ type acceptedSource struct {
 	TaskID     string
 }
 
-func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceETag, commitMessage string) (acceptedSource, error) {
+func uploadSource(ctx context.Context, baseURL, token, sourcePath, dir, sourceETag, commitMessage, candidateConfig string) (acceptedSource, error) {
 	archive, err := os.CreateTemp("", "air-source-upload-*.tar.gz")
 	if err != nil {
 		return acceptedSource{}, err
@@ -658,14 +530,15 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceETag,
 	if err := archive.Chmod(0o600); err != nil {
 		return acceptedSource{}, err
 	}
-	if err := writeSourceArchive(archive, dir); err != nil {
+	state, err := sourcebundle.WriteArchive(archive, dir)
+	if err != nil {
 		return acceptedSource{}, err
 	}
 	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
 		if _, err := archive.Seek(0, io.SeekStart); err != nil {
 			return nil, err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, normalizeBaseURL(baseURL)+"/api/v1/agents/"+agentID+"/source", io.NopCloser(archive))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, normalizeBaseURL(baseURL)+sourcePath, io.NopCloser(archive))
 		if err != nil {
 			return nil, err
 		}
@@ -675,6 +548,9 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceETag,
 			req.Header.Set("If-Match", quoteETag(sourceETag))
 		}
 		req.Header.Set("X-Airlock-Commit-Message", commitMessage)
+		if candidateConfig != "" {
+			req.Header.Set(wire.CandidateConfigHeader, candidateConfig)
+		}
 		if err := setDeveloperDeploymentHeaders(req); err != nil {
 			return nil, err
 		}
@@ -703,6 +579,12 @@ func uploadSource(ctx context.Context, baseURL, token, agentID, dir, sourceETag,
 	if accepted.State == "" || accepted.Revision == "" || accepted.Generation == "" || resp.StatusCode == http.StatusAccepted && accepted.TaskID == "" {
 		return acceptedSource{}, errors.New("upload source: Airlock response omitted candidate metadata")
 	}
+	if generation, err := strconv.ParseInt(accepted.Generation, 10, 64); err != nil || generation < 0 || !deployUUIDRe.MatchString(accepted.Revision) {
+		return acceptedSource{}, errors.New("upload source: invalid candidate revision/generation")
+	}
+	if accepted.State != state {
+		return acceptedSource{}, fmt.Errorf("upload source: server state %s does not match uploaded archive %s", accepted.State, state)
+	}
 	return accepted, nil
 }
 
@@ -717,12 +599,15 @@ func setDeveloperDeploymentHeaders(req *http.Request) error {
 	}
 	req.Header.Set("X-Airlock-Developer-Session", sessionID)
 	req.Header.Set("X-Airlock-Developer-Run", runID)
+	commandID, owner := os.Getenv("AIRLOCK_WORKSPACE_COMMAND_TASK"), os.Getenv("AIRLOCK_WORKSPACE_COMMAND_OWNER")
+	if commandID != "" || owner != "" {
+		if !deployUUIDRe.MatchString(commandID) || !deployUUIDRe.MatchString(owner) {
+			return errors.New("workspace command requires exact task and owner IDs")
+		}
+		req.Header.Set("X-Airlock-Workspace-Command", commandID)
+		req.Header.Set("X-Airlock-Workspace-Owner", owner)
+	}
 	return nil
-}
-
-func observeSourceETag(ctx context.Context, baseURL, token, agentID string) (string, error) {
-	metadata, err := observeSourceMetadata(ctx, baseURL, token, agentID)
-	return metadata.ETag, err
 }
 
 func writeSourceArchive(w io.Writer, dir string) error {
@@ -731,27 +616,4 @@ func writeSourceArchive(w io.Writer, dir string) error {
 	}
 	_, err := sourcebundle.WriteArchive(w, dir)
 	return err
-}
-
-func snapshotManagedFiles(dir string) (map[string][]byte, error) {
-	files := []string{"Dockerfile", "AGENTS.md", scaffold.NoticesFilename}
-	out := make(map[string][]byte, len(files))
-	for _, file := range files {
-		b, err := os.ReadFile(filepath.Join(dir, file))
-		if err != nil && !os.IsNotExist(err) {
-			return nil, err
-		}
-		out[file] = b
-	}
-	return out, nil
-}
-
-func changedManagedFiles(before, after map[string][]byte) []string {
-	var changed []string
-	for name, b := range before {
-		if string(b) != string(after[name]) {
-			changed = append(changed, name)
-		}
-	}
-	return changed
 }

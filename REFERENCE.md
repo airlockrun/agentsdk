@@ -74,45 +74,22 @@ Generated `*_templ.go`, `views/static/app.css`, `internal/db/*` except
 `internal/db/doc.go`, and root binaries are gitignored. Commit source inputs;
 builds regenerate outputs.
 
-`agenttest.New(t, factory)` invokes the factory first with runtime environment
-cleared, then provisions its mock and database, starts, migrates, syncs, and
-runs `OnStart` hooks. It returns an agent ready for `DB` and `Handler`;
-`Env.Airlock` records platform calls. Tests needing only the HTTP mock can use
-`agenttest.NewMockAirlock`; wire payloads remain an SDK runtime detail.
+The local build provisions no Docker, PostgreSQL, Deno or model. Unit tests use
+typed domain/repository/HTTP fixtures and directly injected `goai/testutil` mocks.
+Composition tests call `newAgent().Manifest()` without runtime startup. Direct
+handler caller fixtures use `agentsdk/testutil.WithCaller(ctx, wire.Caller{...})`.
+No local host lifecycle or durable scheduler is part of employee testing.
 
-For per-slot mocks, `agenttest.NewWithOptions`, runnable tasks, and opt-in live tests,
-read [local model testing](reference/testing.md) (`/libs/agentsdk/reference/testing.md`).
+`air preview` uploads complete source/tests/fixtures and builds a real personal
+Airlock app. General operations default to production; `--target preview` requires
+a saved concrete reference per app/remote. `air preview` does not change later defaults.
+Named `--remote` instance selection is independent. Source ETags are target/user
+scoped. `agentsdk/remote` exposes the real operator client without host imports.
+Read [remote development](reference/remote-development.md) for commands,
+atomic candidate binding/fixture plans, suite admission and scoped runner APIs.
 
-Tests that execute JavaScript through the shared chat runtime must select an
-executor explicitly. Airlock codegen provisions a build-scoped endpoint and
-credential in `AIRLOCK_TEST_EXECUTOR_URL` and `AIRLOCK_TEST_EXECUTOR_TOKEN`.
-These are inherited by `go tool air build` and its Go test subprocesses:
-
-```go
-config, err := agenttest.ExecutorConfigFromEnv(jsexec.DefaultLimits())
-if err != nil {
-    t.Fatal(err)
-}
-factory, err := agenttest.Executor(config)
-if err != nil {
-    t.Fatal(err)
-}
-// Set chatruntime.Input.ExecutorFactory to factory.
-```
-
-The test endpoint carries only framed executor traffic. It does not run model
-loops or grant platform capabilities; the test supplies its model and backend.
-Airlock owns the network-none executor container, with the same image and
-resource recipe used by hosted chat. No Docker socket is mounted into tests.
-One executor may be live per build; close each session before opening another.
-Missing endpoint/auth configuration is an error, not a skipped or fake test.
-For standalone tests, explicitly build a local image with `jsexec.BuildImage`
-and select `agenttest.ExecutorConfig{Image: image, Limits: jsexec.DefaultLimits()}`.
-Both choices execute the same Deno runtime and framed protocol.
-
-Handler tests require explicit `agenttest` caller state and HTTP delivery
-credentials, including public routes/assets. Examples:
-`/libs/agentsdk/reference/caller.md` and `/libs/agentsdk/reference/ingress.md`.
+Testing contracts: `/libs/agentsdk/reference/testing.md` and
+`/libs/agentsdk/reference/remote-development.md`.
 
 ## Design principle: register granular tools
 

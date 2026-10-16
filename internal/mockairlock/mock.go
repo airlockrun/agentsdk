@@ -25,7 +25,8 @@ type Request struct {
 	Header http.Header
 }
 
-// Mock is an httptest server that implements the Airlock agent API.
+// Mock records SDK wire requests and returns narrow configured/static responses.
+// It implements no scheduler, persistence, admission authority or host lifecycle.
 type Mock struct {
 	Server   *httptest.Server
 	mu       sync.Mutex
@@ -40,12 +41,9 @@ type Mock struct {
 	ConnectorCommandResponses map[string]json.RawMessage
 	ConnectorJobResponses     map[string]json.RawMessage
 	models                    map[string]stream.Model
-	storage                   *FileStorage
-	runtime                   http.Handler
 }
 
-// New creates a mock host with a canonical default text model. Registered task
-// execution belongs to agenttest.RunAgent, not host lifecycle responses.
+// New creates an SDK serialization fixture with a deterministic text response.
 func New() (*Mock, string) {
 	model, err := testutil.NewMockModel(testutil.MockConfig{ID: "mockairlock/default", Default: &testutil.MockResponse{Text: "Hello", Usage: stream.UsageFrom(10, 5)}})
 	if err != nil {
@@ -66,7 +64,7 @@ func newMock(models map[string]stream.Model) (*Mock, string) {
 	} {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			m.record(r)
-			http.Error(w, "mockairlock: hosted task lifecycle is unsupported; use agenttest.RunAgent for registered task execution", http.StatusNotImplemented)
+			http.Error(w, "mockairlock: durable task execution requires real Airlock", http.StatusNotImplemented)
 		})
 	}
 
@@ -77,45 +75,27 @@ func newMock(models map[string]stream.Model) (*Mock, string) {
 	})
 
 	mux.HandleFunc("PUT /api/agent/storage/{key...}", func(w http.ResponseWriter, r *http.Request) {
-		m.recordStorage(r)
-		if m.storageRequest(w, r, "put") {
-			return
-		}
+		m.record(r)
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /api/agent/storage/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		if m.storageRequest(w, r, "get") {
-			return
-		}
 		_, _ = w.Write([]byte("mock-file-content"))
 	})
 	mux.HandleFunc("DELETE /api/agent/storage/{key...}", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		if m.storageRequest(w, r, "delete") {
-			return
-		}
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /api/agent/storage", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		if m.storageRequest(w, r, "list") {
-			return
-		}
 		_ = json.NewEncoder(w).Encode([]any{})
 	})
 	mux.HandleFunc("POST /api/agent/storage/copy", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		if m.storageRequest(w, r, "copy") {
-			return
-		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /api/agent/storage/info", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)
-		if m.storageRequest(w, r, "info") {
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"path": "tmp/test.txt", "filename": "test.txt", "size": 42, "contentType": "text/plain",
@@ -298,32 +278,8 @@ func newMock(models map[string]stream.Model) (*Mock, string) {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	m.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		m.mu.Lock()
-		runtime := m.runtime
-		m.mu.Unlock()
-		if runtime != nil {
-			if r.Method == "PUT" && len(r.URL.Path) >= 18 && r.URL.Path[:18] == "/api/agent/storage" {
-				m.recordStorage(r)
-			} else {
-				m.record(r)
-			}
-			runtime.ServeHTTP(w, r)
-			return
-		}
-		mux.ServeHTTP(w, r)
-	}))
+	m.Server = httptest.NewServer(mux)
 	return m, m.Server.URL
-}
-
-// SetRuntime installs the shared actual local host behind the request recorder.
-func (m *Mock) SetRuntime(handler http.Handler) {
-	if handler == nil {
-		panic("mockairlock: runtime handler required")
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.runtime = handler
 }
 
 func wireResponse(jobID string, output json.RawMessage) map[string]any {

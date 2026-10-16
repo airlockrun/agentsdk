@@ -561,7 +561,7 @@ func TestDeployCreateRejectsBoundRemoteWithRetryInstruction(t *testing.T) {
 	if err := writeAgentBinding(dir, binding); err != nil {
 		t.Fatal(err)
 	}
-	err := cmdDeploy([]string{dir, "--create", "--slug", "dev", "-m", "Initial implementation"})
+	err := cmdDeploy([]string{dir, "--target", "preview", "--create", "--slug", "dev", "-m", "Initial implementation"})
 	if err == nil || !strings.Contains(err.Error(), "without --create") {
 		t.Fatalf("cmdDeploy error = %v", err)
 	}
@@ -770,14 +770,6 @@ func TestBuildStepsWritesBinaryOutsideRepository(t *testing.T) {
 	gotTest := steps[len(steps)-2].cmd
 	if strings.Join(gotTest, "\x00") != strings.Join(wantTest, "\x00") {
 		t.Fatalf("test command = %q, want %q", gotTest, wantTest)
-	}
-	if !steps[len(steps)-2].sharedTestDatabase {
-		t.Fatal("test step does not request a shared test database")
-	}
-	for i, step := range steps {
-		if i != len(steps)-2 && step.sharedTestDatabase {
-			t.Fatalf("steps[%d] %q unexpectedly requests a shared test database", i, step.name)
-		}
 	}
 	want := []string{"go", "build", "-buildvcs=false", "-o", output, "."}
 	got := steps[len(steps)-1].cmd

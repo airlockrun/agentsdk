@@ -10,7 +10,7 @@ import (
 )
 
 // Input returns a fresh decoded copy of this session's original admitted Start
-// input. It is available only in this handle's authenticated private callback.
+// input. It is available only in this handle's authenticated private or review callback.
 // Continue prompts never replace it. No network or app-owned task storage is used.
 func (h *AgentHandle[In, Out]) Input(ctx context.Context) (In, error) {
 	var out In

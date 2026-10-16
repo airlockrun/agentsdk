@@ -115,10 +115,6 @@ func writeDigestHeader(w io.Writer, path string, executable bool, size int64) {
 // WriteArchive writes root as a deterministic tar.gz source archive and
 // returns the state represented by that archive.
 func WriteArchive(w io.Writer, root string) (string, error) {
-	state, err := Digest(root)
-	if err != nil {
-		return "", err
-	}
 	entries, err := entries(root)
 	if err != nil {
 		return "", err
@@ -126,7 +122,9 @@ func WriteArchive(w io.Writer, root string) (string, error) {
 	gz := gzip.NewWriter(w)
 	gz.Header.ModTime = time.Unix(0, 0)
 	tw := tar.NewWriter(gz)
+	h := sha256.New()
 	for _, entry := range entries {
+		writeDigestHeader(h, entry.path, entry.mode&0o111 != 0, entry.size)
 		hdr := &tar.Header{
 			Name:    entry.path,
 			Mode:    int64(entry.mode.Perm()),
@@ -144,8 +142,11 @@ func WriteArchive(w io.Writer, root string) (string, error) {
 			_ = gz.Close()
 			return "", fmt.Errorf("open %s: %w", entry.path, err)
 		}
-		_, copyErr := io.Copy(tw, f)
+		n, copyErr := io.Copy(io.MultiWriter(tw, h), f)
 		closeErr := f.Close()
+		if copyErr == nil && n != entry.size {
+			copyErr = fmt.Errorf("source file changed size while archiving: got %d bytes, want %d", n, entry.size)
+		}
 		if copyErr != nil {
 			_ = tw.Close()
 			_ = gz.Close()
@@ -164,7 +165,7 @@ func WriteArchive(w io.Writer, root string) (string, error) {
 	if err := gz.Close(); err != nil {
 		return "", fmt.Errorf("close gzip: %w", err)
 	}
-	return state, nil
+	return StatePrefix + hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // ExtractArchive extracts a source archive into an empty or existing directory.

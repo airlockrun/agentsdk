@@ -41,6 +41,9 @@ type Store interface {
 	// starts at 1 and increases by one. Reject stale writers; an identical retry
 	// of a committed revision must not append messages twice. Append is a commit
 	// payload, not a buffer to replay on LoadCheckpoint. See package documentation.
+	// PhaseSubmitted commits the draft, immutable artifact resolution and bound
+	// review scheduling (or autoaccept) in the same transaction. cp.Calls[cp.Next-1]
+	// identifies the submit call; subsequent results deny the rest of its batch.
 	SaveCheckpoint(context.Context, *Checkpoint) error
 }
 
@@ -51,14 +54,18 @@ type Controller interface {
 	Get(ctx context.Context, ids []string) ([]wire.AgentRunInfo, error)
 	Wait(ctx context.Context, toolCallID string, request wire.AgentWaitRequest) (wire.AgentWaitResult, error)
 	Cancel(ctx context.Context, ids []string) (wire.AgentCancelResult, error)
+	// Complete validates a proposed reply and settled children only. Persistence
+	// and publication belong exclusively to Store.SaveCheckpoint.
 	Complete(ctx context.Context, reply wire.AgentReply) error
 }
 
 type Result struct {
 	Reply   *wire.AgentReply
 	Waiting bool
+	// Submitted marks Reply as a draft; only host acceptance publishes output.
+	Submitted bool
 	// CleanupError reports executor teardown failure separately from a durably
-	// committed reply. The host must log it without changing completed status.
+	// committed reply/submission. The host logs it without changing committed state.
 	// For waiting results it is also joined into Run's returned error. Unfinished
 	// runs without a Result report cleanup failure only in the returned error.
 	// This attempt-local diagnostic is not part of the durable checkpoint.
@@ -67,7 +74,7 @@ type Result struct {
 
 // Checkpoint is a JSON-serializable journal scoped to one run, not its session.
 // The host must preserve it verbatim and must not infer completion from Phase
-// until the associated transaction commits. Version is currently 1.
+// until the associated transaction commits. Version is currently 2.
 type Checkpoint struct {
 	Version      int               `json:"version"`
 	Revision     int64             `json:"revision"`
@@ -79,6 +86,14 @@ type Checkpoint struct {
 	Next         int               `json:"next"`
 	Reply        *wire.AgentReply  `json:"reply,omitempty"`
 	Append       []session.Message `json:"append,omitempty"`
+	// ModelStreamFailures records attempted requests whose output was discarded.
+	// Reported host token totals are lower bounds when UsageUnknown is true.
+	ModelStreamFailures []ModelStreamFailure `json:"modelStreamFailures,omitempty"`
+}
+
+type ModelStreamFailure struct {
+	Usage        stream.Usage `json:"usage"`
+	UsageUnknown bool         `json:"usageUnknown"`
 }
 
 type Phase string
@@ -90,6 +105,7 @@ const (
 	PhaseDispatch  Phase = "dispatch"
 	PhaseWaiting   Phase = "waiting"
 	PhaseCompleted Phase = "completed"
+	PhaseSubmitted Phase = "submitted"
 )
 
 // Call records model order. Result is set only after the outcome is committed.
