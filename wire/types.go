@@ -98,6 +98,8 @@ type FileInfo struct {
 }
 
 type PromptInput struct {
+	// RequestID is the stable admission UUID retained when retrying a human message.
+	RequestID       string     `json:"requestId,omitempty"`
 	Message         string     `json:"message,omitempty"`
 	ConversationID  string     `json:"conversationId,omitempty"`
 	Temperature     *float64   `json:"temperature,omitempty"`

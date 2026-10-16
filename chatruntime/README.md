@@ -33,8 +33,9 @@ methods and `air.log` are executor intrinsics, not backend invocations.
 The host factory supplies optional `jsexec.Options.User` from its authenticated
 run scope. Only `id`, `email`, and `displayName` enter the realm; no grants or
 credentials do. JavaScript receives a frozen lexical `user` object, or `null`.
-For local tests, set `agenttest.ExecutorConfig.User` to the same identity as
-`Env.Chat`'s `wire.RuntimeContext`. This display context never authorizes calls.
+`ExecutorFromTransport` uses the host-owned transport opener, explicit limits and
+optional display identity. Pure algorithm tests inject independent model/backend/
+session fixtures; real Deno/host callbacks execute in explicit integration suites.
 
 JS executes as an async function body. Call only paths present in the generated
 declarations, for example `return await platform.inspectApp({app: "orders"});`.

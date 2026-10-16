@@ -581,6 +581,12 @@ func RegisterJob[In, Out any](a *Agent, job *Job[In, Out]) *JobHandle[In, Out] {
 	}
 	done := a.beginRegistration("RegisterJob")
 	defer done()
+	return registerJob(a, job, nil)
+}
+
+// registerJob requires the registration lock. Internal wire contracts contain
+// raw JSON whose schema is deliberately supplied by the SDK.
+func registerJob[In, Out any](a *Agent, job *Job[In, Out], internalInputSchema json.RawMessage) *JobHandle[In, Out] {
 	if job == nil {
 		panic("agentsdk: RegisterJob: nil *Job")
 	}
@@ -593,13 +599,18 @@ func RegisterJob[In, Out any](a *Agent, job *Job[In, Out]) *JobHandle[In, Out] {
 		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): input type must be a struct", job.Name))
 	}
 	declaration := fmt.Sprintf("agentsdk: RegisterJob(%q)", job.Name)
-	validateContractGoType(declaration, "input", inputType, make(map[reflect.Type]bool))
-	validateContractGoType(declaration, "output", reflect.TypeOf((*Out)(nil)).Elem(), make(map[reflect.Type]bool))
+	if internalInputSchema == nil {
+		validateContractGoType(declaration, "input", inputType, make(map[reflect.Type]bool))
+		validateContractGoType(declaration, "output", reflect.TypeOf((*Out)(nil)).Elem(), make(map[reflect.Type]bool))
+	}
 	input := schema.MustFromType(*new(In))
 	if input.Type != "object" {
 		panic(fmt.Sprintf("agentsdk: RegisterJob(%q): input type must encode as a JSON object", job.Name))
 	}
 	inputSchema := canonicalJobSchema(input.MustJSON())
+	if internalInputSchema != nil {
+		inputSchema = canonicalJobSchema(internalInputSchema)
+	}
 	outputSchema := canonicalJobSchema(schema.MustFromType(*new(Out)).MustJSON())
 
 	rj := &registeredJob{

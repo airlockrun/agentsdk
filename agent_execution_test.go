@@ -22,6 +22,37 @@ func taskRun(h *AgentHandle[taskInput, taskOutput]) wire.AgentRunInfo {
 		Reply: &wire.AgentReply{Kind: "output", Output: json.RawMessage(`{"answer":"done"}`)}, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Steps: 2, Tokens: 30}
 }
 
+func TestAgentSubmissionStatusesAndAcceptedArtifacts(t *testing.T) {
+	a, _ := testAgent(t)
+	taskModel(a)
+	h := RegisterAgent(a, taskDefinition())
+	for _, status := range []AgentRunStatus{AgentRunSubmitted, AgentRunReviewing} {
+		t.Run(string(status), func(t *testing.T) {
+			r := taskRun(h)
+			r.Status = string(status)
+			r.Reply = nil
+			info, err := agentRunInfo[taskOutput](h.registeredAgent().definition, r, false)
+			if err != nil || info.Status.Terminal() || info.Reply != nil {
+				t.Fatalf("info=%+v err=%v", info, err)
+			}
+			r.Reply = &wire.AgentReply{Kind: "output", Output: json.RawMessage(`{"answer":"draft"}`)}
+			if _, err := agentRunInfo[taskOutput](h.registeredAgent().definition, r, false); err == nil {
+				t.Fatal("draft exposed as accepted reply")
+			}
+		})
+	}
+	r := taskRun(h)
+	r.Reply.Artifacts = []wire.AgentArtifact{{Path: "report", ContentID: "pinned", SHA256: "hash", Size: 10}}
+	info, err := agentRunInfo[taskOutput](h.registeredAgent().definition, r, false)
+	if err != nil || len(info.Reply.Artifacts) != 1 || info.Reply.Artifacts[0].ContentID != "pinned" {
+		t.Fatalf("info=%+v err=%v", info, err)
+	}
+	info.Reply.Artifacts[0].ContentID = "changed"
+	if r.Reply.Artifacts[0].ContentID != "pinned" {
+		t.Fatal("artifact response aliased")
+	}
+}
+
 // protocolHost asserts exact HTTP exchanges for production AgentHandle client
 // tests. It is test-owned transport plumbing, not a task execution service.
 type protocolHost struct {

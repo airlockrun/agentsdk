@@ -124,13 +124,8 @@ func TestMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read main_test.go: %v", err)
 	}
-	if !strings.Contains(string(mainTest), "agenttest.WithUser") {
-		t.Error("main_test.go missing authenticated caller helper")
-	}
-	if !strings.Contains(string(mainTest), "agenttest.New invokes") ||
-		!strings.Contains(string(mainTest), "newAgent first, then provisions runtime dependencies") ||
-		!strings.Contains(string(mainTest), "up, down-to-zero, up cycle") {
-		t.Error("main_test.go missing factory-first agenttest lifecycle guidance")
+	if !strings.Contains(string(mainTest), "newAgent().Manifest()") || strings.Contains(string(mainTest), "agenttest.New") {
+		t.Error("main_test.go must inspect the offline factory without a simulated host")
 	}
 	if strings.Contains(string(mainTest), "applies migrations before newAgent constructs") {
 		t.Error("main_test.go claims migrations run before the definition factory")
@@ -144,8 +139,8 @@ func TestMaterialize(t *testing.T) {
 		"newAgent()` is the definition-only composition root",
 		"Agent.DB()` and registration APIs return late-bound handles",
 		"AIRLOCK_AGENT_MODE=manifest",
-		"After the factory returns, startup validates source migrations with an up",
-		"down-to-zero, up cycle",
+		"Offline composition",
+		"No database or host runtime is provisioned",
 		`runtime_files = ["python-app/", "templates/", "static/"]`,
 		"Go registrations remain authoritative",
 	} {

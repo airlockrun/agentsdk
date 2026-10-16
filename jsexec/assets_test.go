@@ -1,3 +1,5 @@
+//go:build airlockplatformintegration
+
 package jsexec
 
 import (
@@ -16,9 +18,6 @@ import (
 // TestDenoSecurityGate verifies permission-based isolation. Module loading is
 // permitted; privileged operations must still be denied.
 func TestDenoSecurityGate(t *testing.T) {
-	if os.Getenv("JSEXEC_DENO_PROBE") != "1" {
-		t.Skip("set JSEXEC_DENO_PROBE=1 to run the stock-Deno feasibility gate")
-	}
 	source, err := ProbeAssets.ReadFile("probe/feasibility.mjs")
 	if err != nil {
 		t.Fatal(err)

@@ -107,8 +107,8 @@ func (a *Agent) serveManifest(w io.Writer) {
 // and supplies delivery credentials and attribution to this private listener.
 //
 // Handler requires a started runtime, validates and freezes registrations, and
-// does not listen. Tests use it after agenttest.New to exercise routes through
-// the real dispatch (including {param} extraction) with httptest.
+// does not listen. Full dispatch/startup integration uses real Airlock targets;
+// direct domain/handler unit tests do not start this runtime mux.
 func (a *Agent) Handler() http.Handler {
 	a.requireRuntime("Handler")
 	if strings.TrimSpace(a.token) == "" {

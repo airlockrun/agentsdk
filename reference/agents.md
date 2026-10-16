@@ -28,7 +28,7 @@ source := a.RegisterMCP(&agentsdk.MCP{
 research := agentsdk.RegisterAgent(a, &agentsdk.AgentDefinition[ResearchInput, ResearchOutput]{
     Slug: "researcher",
     Description: "Research a topic and return a concise summary",
-    Instructions: "Research the topic using the source. Complete with a factual summary. Ask a question when required information is missing.",
+    Instructions: "Research the topic using the source. Submit a factual summary. Ask a question when required information is missing.",
     ModelSlot: "research",
     MCPs: []*agentsdk.MCPHandle{source},
     MaxAttempts: 3,
@@ -44,11 +44,13 @@ and pointers. Recursive types, maps, interfaces, custom JSON/text codecs, byte
 slices, embedded fields, and unsupported JSON tags fail at registration rather
 than advertise a schema that differs from their encoding.
 Fixed arrays require exactly their Go length, including nested and zero-length
-arrays. Numeric schemas carry the declared Go width's bounds, preserving exact
-64-bit integer limits. Pointer and nested field constraints are retained. These
-constraints participate in the contract hash; changing an array length or numeric
-width changes the contract. Floating-point values retain Go's rounding semantics.
-The SDK checks array lengths and numeric ranges before decoding a typed reply.
+arrays. Numeric schemas advertise integer or number types without inferred Go
+machine-width limits. Explicit `minimum` and `maximum` field tags are preserved,
+including exact integer JSON values. Array lengths and explicit annotations
+participate in the contract hash; numeric width alone does not change the schema.
+Floating-point values retain Go's rounding semantics. The SDK checks array lengths
+and native numeric ranges before decoding a typed reply, even without advertised
+numeric bounds.
 
 No-auth connections and MCP servers use their fixed declared endpoint directly
 through Airlock's outbound transport and do not create or bind a user resource.
@@ -169,7 +171,7 @@ completed-session continuations.
 ### Original admission input in private callbacks
 
 `handle.Input(ctx) (In, error)` returns a freshly decoded copy of the original
-session-start input. Only an authenticated private callback for that handle's
+session-start input. Only an authenticated private or review callback for that handle's
 exact app, run, definition and contract can read it. It performs no network call
 and needs no app task-data table. Tool arguments and continuation prompts cannot
 replace the snapshot; every child session has its own original admission.
@@ -236,19 +238,96 @@ through Go's error result.
 the corresponding event occurs.
 
 Statuses are `AgentRunQueued`, `AgentRunRunning`, `AgentRunWaiting`,
+`AgentRunSubmitted`, `AgentRunReviewing`,
 `AgentRunCompleted`, `AgentRunFailed`, `AgentRunCancelled`, and
 `AgentRunBudgetExceeded`. `Status.Terminal()` reports completion, failure,
 cancellation, or budget exhaustion. Waiting means durable child dependencies;
 it is not a request for human input.
+Submitted means durable evaluation is pending; reviewing means a review delivery
+is active. Both are nonterminal and expose no `Reply`. `Wait` observes the entire
+review/correction lifecycle.
 
 A completed run has `*AgentReply[Out]` with exactly one kind:
 
-- `AgentReplyOutput`: `Output *Out` contains the typed result; `Question` is empty.
+- `AgentReplyOutput`: `Output *Out` contains the accepted typed result; `Question` is empty.
+  `Artifacts []AgentArtifact` contains the host-resolved immutable manifest.
 - `AgentReplyNeedsInput`: `Question` is nonblank; `Output` is absent.
 
 Both reply kinds finish the run as `AgentRunCompleted`. Any completed session
 can receive a `Continue` prompt, including one that produced output. There is no
 yield status or special input suspension.
+
+## Typed submission review
+
+The model finishes a batch with `submit`. It accepts
+`{kind:"output",output:<typed result>,artifacts:[{path:"reports/result.json"}]}`
+or `{kind:"needs_input",question:"..."}`. Artifacts are optional, bounded to 32,
+and may carry expected `sha256` (lowercase hex) or `contentId` assertions. The
+model cannot supply entry IDs, sizes or content types as authority. The host
+resolves and pins actual metadata under the subject run's storage permissions.
+Successful submit denies every remaining call in the response.
+
+Add an optional typed reviewer to a definition:
+
+```go
+Review: &agentsdk.AgentReview[ResearchInput, ResearchOutput]{
+    Version: 1, Timeout: 30 * time.Second,
+    MaxAttempts: 3, MaxConcurrency: 2, MaxCorrections: 2,
+    Handler: func(ctx context.Context, review agentsdk.AgentReviewContext,
+        s agentsdk.AgentSubmission[ResearchInput, ResearchOutput],
+    ) (agentsdk.AgentReviewDecision, error) {
+        if s.Output.Summary == "" {
+            return agentsdk.Continue("Include a factual summary."), nil
+        }
+        return agentsdk.Accept(), nil
+    },
+},
+```
+
+Version, delivery attempts and concurrency are positive. Timeout is a positive
+whole-millisecond duration bounded to 24 hours. Delivery attempts are bounded to
+100, concurrency to 1000. MaxCorrections is nonnegative; zero allows no automatic
+correction. Registration snapshots the policy and callback and derives an
+internal versioned Go job. Applications do not register/enqueue that job themselves.
+The review policy participates in the definition hash.
+
+`AgentSubmission[In, Out]` exposes ID, RunID, SessionID, ToolCallID, ContractHash,
+Revision, Input, Output, Artifacts and Decision. Pending callbacks have no Decision.
+Input is a fresh copy of the original admitted Start input, including on
+corrections. Output is the typed draft for this revision. `AgentReviewContext`
+exposes the submission ID, subject RunID/SessionID/Revision and Job attempt
+diagnostics. The review execution run is distinct from the subject run.
+
+Use `review.Open(ctx, s.Artifacts[i])` to read exact pinned bytes. It returns an
+`io.ReadCloser` the reviewer must close. It rejects foreign or mutated manifest
+entries and requires the exact callback execution/job/attempt/lease context.
+Replacing or deleting a display path does not change the submitted content.
+Ordinary storage reads select current content and do not provide this guarantee.
+Original `handle.Input(ctx)` access remains scoped to the matching definition.
+
+Return `Accept()` to publish this output, `Fail(reason)` to terminate the subject,
+or `Continue(feedback)` to request correction. Fail/Continue require nonblank
+feedback of at most 4096 bytes. A returned error is review execution failure.
+Corrections preserve the subject run ID, original input, captured call IDs and
+cumulative reasoning budgets. They append durable feedback and resume the model
+with a fresh JavaScript realm, without replaying interrupted effects. Public
+`handle.Continue` creates a new run in a completed session; it cannot continue a
+submitted/reviewing session. needs_input bypasses review and completes a question.
+Omitting Review atomically autoaccepts output during the submission commit.
+
+Review delivery is at least once. Deduplicate any external effects by submission
+ID; the persisted decision and feedback transition do not imply exactly-once Go
+or external effects. Host scheduling and decision settlement retain live authority,
+deadline/cancellation fences and exact admitted executable identity throughout
+review and correction. Callback code is not identified by declaration hash alone.
+Hosts retain submission drafts and pinned content without an arbitrary SDK expiry.
+
+Checkpoint version 2 distinguishes a submitted draft from completed questions.
+Controller.Complete validates only; SaveCheckpoint commits the submission,
+artifact pins, ordered transcript and review scheduling/autoaccept atomically.
+Recovery of a committed submitted checkpoint does not call the model again.
+Version 1 completed checkpoints preserve their recorded replies; in-flight
+version 1 checkpoints require draining or explicit termination before cutover.
 
 Sessions persist conversation messages and compaction. Interrupted generic tool
 calls with uncertain outcomes produce an explicit recovery notice; side effects
@@ -257,23 +336,13 @@ domain-specific idempotency when their own business operation requires it.
 
 ## Tests
 
-Use `agenttest.New(t, factory)` to start the app with independent canonical GoAI
-mocks for its declared text/vision model slots. Configure responses with
-`env.MockModel(slot).Configure(testutil.MockConfig{ID: mock.ID(), ...})`.
-`agenttest.RunAgent(t, ctx, env, handle, input, options)` executes a registered leaf
-task through the shared task runtime and an explicit executor factory. It checks
-typed completion and returns task, tool, event and checkpoint diagnostics. Private
-tools execute through the app's authenticated handler. An omitted scope generates
-an application-owned invocation bound to the environment's app identity.
+Local tests cover typed domain logic, explicit GoAI model responses, schemas,
+checkpoint algorithms and offline factory manifests. Client protocol fixtures
+validate serialization/error handling without claiming host execution semantics.
 
-The mock host rejects hosted task Start/Get/List/Wait/Cancel/Continue requests
-with an unsupported-service error directing tests to RunAgent. Production
-AgentHandle methods address real Airlock-owned task state. Client protocol tests
-use test-owned HTTP responders to validate serialization, contracts, statuses and
-transport errors independently of task execution.
-
-Use `NewWithOptions` and explicitly registered flags to select a live model for
-a named slot. Ordinary execution uses mocks without credential or live-network
-access. Host persistence, leases, scheduling, recovery and hierarchical budget
-enforcement have their own host/runtime tests. See
-[local agent tests](testing.md) for the runnable CSV/Deno example and commands.
+Registered tasks, review/artifact submission, durable scheduling, cancellation,
+recovery and hierarchical budgets execute on the real Airlock host. Candidate
+integration tests use `remote.TestClientFromEnvironment()` with the host's scoped
+capability and exact revision/runtime coordinates; there is no simulated Env or
+task scheduler. Model policy belongs to the selected real target, never an implicit
+laptop account. See [testing](testing.md) for local/remote suite commands.

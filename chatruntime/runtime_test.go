@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/airlockrun/agentsdk/agenttest"
 	"github.com/airlockrun/agentsdk/capability"
 	"github.com/airlockrun/agentsdk/chatruntime"
 	"github.com/airlockrun/agentsdk/jsexec"
@@ -41,7 +40,7 @@ func (e *executor) Close() error { e.closes++; return nil }
 func input(model stream.Model) chatruntime.Input {
 	return chatruntime.Input{
 		Message: "help", Model: model, ModelLimits: session.ModelLimits{Input: 80000, Output: 4096},
-		MaxSteps: 10, SessionStore: &agenttest.MemoryStore{}, Sink: &agenttest.Events{},
+		MaxSteps: 10, SessionStore: &memoryStore{}, Sink: &events{},
 		Backend: backendFunc(func(context.Context, chatruntime.Invocation) (tool.Result, error) {
 			return tool.Result{}, errors.New("unexpected backend invocation")
 		}),
@@ -96,7 +95,7 @@ func TestRunLazyLifecycle(t *testing.T) {
 			if err != nil || len(messages) < 2 {
 				t.Fatalf("persisted messages: %v %v", messages, err)
 			}
-			if len(in.Sink.(*agenttest.Events).Snapshot()) == 0 {
+			if len(in.Sink.(*events).Snapshot()) == 0 {
 				t.Fatal("no forwarded events")
 			}
 		})

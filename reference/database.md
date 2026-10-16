@@ -114,16 +114,12 @@ wiring dependencies, but do not execute database operations from the factory.
 Operations become available when `Start` opens and checks the owned pool and
 runs migrations. `Serve` calls `Start` and closes the pool during shutdown.
 
-`agenttest.New` invokes the factory before it provisions runtime dependencies,
-then resolves source `db/migrations` from the nearest enclosing Go module,
-starts the agent, validates migrations with an up, down-to-zero, up cycle, and
-returns after sync and `OnStart` hooks. DB-backed tests therefore work from
-subpackages without changing process cwd. The final up leaves the schema ready
-for the test. The SDK build runs packages serially because package test binaries
-sharing one `TEST_DB_URL` must not reset the same schema concurrently. `go tool
-air build` provisions one throwaway pgvector container and supplies its URL to
-that serial test run; direct `go test` calls without `TEST_DB_URL` let each
-`agenttest.New` provision its own container.
+`air build` generates schema/query source and runs deterministic domain tests
+without opening or resetting a database. Runtime integration uses the real
+preview's owned PostgreSQL schema and compiled migrations. SDK platform migration
+lock verification is explicitly tagged `airlockplatformintegration` and requires
+a disposable `AIRLOCK_PLATFORM_TEST_DB_URL`; it does not provision containers or
+borrow the deployed app/platform DSN. Repository mocks do not prove SQL semantics.
 
 Each startup migration pass has a bounded context and holds a PostgreSQL
 advisory lock keyed by agent ID from its first goose operation through its last.

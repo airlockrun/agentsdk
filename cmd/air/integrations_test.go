@@ -66,7 +66,7 @@ func TestResolveIntegrationTargetSelectsNamedRemote(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	const prodID = "11111111-1111-1111-1111-111111111111"
 	const devID = "22222222-2222-2222-2222-222222222222"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/agents/"+devID {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -89,7 +89,7 @@ func TestResolveIntegrationTargetSelectsNamedRemote(t *testing.T) {
 	}
 	t.Chdir(dir)
 
-	target, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{remote: "dev"})
+	target, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{remote: "dev", target: "production"})
 	if err != nil {
 		t.Fatalf("resolveIntegrationTarget: %v", err)
 	}
@@ -114,8 +114,8 @@ func TestResolveIntegrationTargetRejectsRemoteURLChange(t *testing.T) {
 	}
 	t.Chdir(dir)
 
-	_, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{url: "https://dev.example"})
-	if err == nil || !strings.Contains(err.Error(), "different --remote") {
+	_, err := resolveIntegrationTarget(t.Context(), integrationTargetFlags{url: "https://dev.example", target: "production"})
+	if err == nil || !strings.Contains(err.Error(), "is bound to") {
 		t.Fatalf("resolveIntegrationTarget error = %v", err)
 	}
 }

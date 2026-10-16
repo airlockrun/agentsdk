@@ -19,9 +19,9 @@ import (
 )
 
 type deployBuildFlags struct {
-	dir, remote, url, agent, build string
-	limit                          int
-	json, watch, logs              bool
+	dir, remote, url, agent, build, target string
+	limit                                  int
+	json, watch, logs                      bool
 }
 
 func parseDeployBuildFlags(command string, args []string) (deployBuildFlags, error) {
@@ -54,7 +54,7 @@ func parseDeployBuildFlags(command string, args []string) (deployBuildFlags, err
 				f.logs = true
 			}
 			continue
-		case "--remote", "--url", "--agent":
+		case "--remote", "--url", "--agent", "--target":
 		case "--limit":
 			if command != "list" {
 				return f, errors.New("--limit requires deploy list")
@@ -77,6 +77,8 @@ func parseDeployBuildFlags(command string, args []string) (deployBuildFlags, err
 			f.url = args[i]
 		case "--agent":
 			f.agent = args[i]
+		case "--target":
+			f.target = args[i]
 		case "--build":
 			if !deployUUIDRe.MatchString(args[i]) {
 				return f, errors.New("--build must be a UUID")
@@ -104,6 +106,9 @@ func cmdDeployBuilds(command string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := requireTarget(f.target); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	return runDeployBuilds(ctx, command, f, 2*time.Second)
@@ -116,55 +121,18 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" {
 		return errors.New("deploy is unavailable with a codegen integration token")
 	}
-	binding, _, err := loadAgentBinding(f.dir)
+	s, err := resolveDeployment(ctx, targetFlags{dir: f.dir, remote: f.remote, url: f.url, agent: f.agent, target: f.target}, false)
 	if err != nil {
 		return err
 	}
-	remote := f.remote
-	if remote == "" {
-		remote = binding.DefaultRemote
-	}
-	if remote == "" {
-		remote = defaultRemoteName
-	}
-	bound, _ := binding.remote(remote)
-	baseURL := normalizeBaseURL(f.url)
-	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
-		injectedURL := normalizeBaseURL(os.Getenv("AIRLOCK_API_URL"))
-		injectedAgent := strings.TrimSpace(os.Getenv("AIRLOCK_AGENT_ID"))
-		if injectedURL == "" || injectedAgent == "" {
-			return errors.New("developer session requires AIRLOCK_API_URL and AIRLOCK_AGENT_ID")
-		}
-		if baseURL != "" && baseURL != injectedURL {
-			return fmt.Errorf("developer session is restricted to %s", injectedURL)
-		}
-		baseURL = injectedURL
-		if bound.AgentID != "" && bound.AgentID != injectedAgent {
-			return errors.New("workspace binding does not match AIRLOCK_AGENT_ID")
-		}
-		bound.AirlockURL, bound.AgentID = injectedURL, injectedAgent
-	}
-	if baseURL != "" && bound.AirlockURL != "" && baseURL != normalizeBaseURL(bound.AirlockURL) {
-		return fmt.Errorf("remote %q is bound to %s, not %s; choose a different --remote name", remote, bound.AirlockURL, baseURL)
-	}
-	if baseURL == "" {
-		baseURL = bound.AirlockURL
-	}
-	if baseURL == "" {
-		return errors.New("deploy needs an Airlock URL: pass --url or configure an Airlock remote for this workspace")
-	}
-	token, err := accessTokenForURL(ctx, baseURL)
-	if err != nil {
-		return err
-	}
-	target, err := resolveAgentTarget(ctx, baseURL, token, f.agent, remote, bound)
-	if err != nil {
-		return err
-	}
-	path := "/api/v1/agents/" + url.PathEscape(target.AgentID) + "/builds"
-	if command == "status" && f.build == "" && bound.PendingTask != "" {
+	baseURL, token := s.baseURL, s.token
+	fmt.Fprintf(os.Stderr, "Target: remote=%s app=%s target=%s runtime=%s\n", s.remoteName, s.app.AgentID, s.info.Name, s.info.Id)
+	target := agentRemoteBinding{AgentID: s.info.Id, Slug: s.info.Name}
+	path := s.path("/builds")
+	state := s.app.Targets[s.info.Id]
+	if command == "status" && f.build == "" && state.PendingTask != "" {
 		for {
-			task, taskErr := getDeploymentTask(ctx, baseURL, token, bound.PendingTask)
+			task, taskErr := getDeploymentTask(ctx, baseURL, token, state.PendingTask)
 			if taskErr != nil {
 				return fmt.Errorf("get deployment task: %w", taskErr)
 			}
@@ -192,10 +160,9 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 				}
 				continue
 			case "failed", "cancelled":
-				taskID := bound.PendingTask
-				bound.PendingTask, bound.PendingSourceState = "", ""
-				binding.putRemote(remote, bound)
-				if err := writeAgentBinding(f.dir, binding); err != nil {
+				taskID := state.PendingTask
+				state.PendingTask, state.PendingSourceState = "", ""
+				if err := s.saveSource(state); err != nil {
 					return err
 				}
 				if task.Error == "" {
@@ -203,7 +170,7 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 				}
 				return fmt.Errorf("deployment task %s %s: %s", taskID, task.Info.Status, task.Error)
 			case "succeeded":
-				if err := reconcilePendingDeployment(ctx, f.dir, remote, &binding, &bound, baseURL, token); err != nil {
+				if err := s.reconcileTask(ctx, &state, false, pollInterval); err != nil {
 					return err
 				}
 				if !deployUUIDRe.MatchString(task.BuildID) {

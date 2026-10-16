@@ -34,6 +34,57 @@ type AgentDefinition struct {
 	MaxConcurrency         int32                  `json:"maxConcurrency"`
 	MaxSubagentCalls       int32                  `json:"maxSubagentCalls"`
 	MaxConcurrentSubagents int32                  `json:"maxConcurrentSubagents"`
+	Review                 *AgentReviewPolicy     `json:"review,omitempty"`
+}
+
+type AgentReviewPolicy struct {
+	Version        int32  `json:"version"`
+	TimeoutMS      int64  `json:"timeoutMs"`
+	MaxAttempts    int32  `json:"maxAttempts"`
+	MaxConcurrency int32  `json:"maxConcurrency"`
+	MaxCorrections int32  `json:"maxCorrections"`
+	JobName        string `json:"jobName"`
+}
+
+// AgentArtifact is a host-resolved immutable content reference. Model submissions
+// supply only Path and optional ContentID/SHA256 assertions.
+type AgentArtifact struct {
+	Path        string `json:"path"`
+	ID          string `json:"id,omitempty"`
+	ContentID   string `json:"contentId,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	ContentType string `json:"contentType,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+}
+
+type AgentSubmission struct {
+	ID           string               `json:"id"`
+	RunID        string               `json:"runId"`
+	SessionID    string               `json:"sessionId"`
+	ToolCallID   string               `json:"toolCallId"`
+	ContractHash string               `json:"contractHash"`
+	Revision     int64                `json:"revision"`
+	Input        json.RawMessage      `json:"input"`
+	Output       json.RawMessage      `json:"output"`
+	Artifacts    []AgentArtifact      `json:"artifacts,omitempty"`
+	Decision     *AgentReviewDecision `json:"decision,omitempty"`
+}
+
+type AgentReviewDecision struct {
+	Kind     string `json:"kind"`
+	Feedback string `json:"feedback,omitempty"`
+}
+
+type AgentReviewRequest struct {
+	Definition   string          `json:"definition"`
+	ContractHash string          `json:"contractHash"`
+	Submission   AgentSubmission `json:"submission"`
+}
+
+// AgentReviewJobName is the deterministic internal delivery contract name.
+func AgentReviewJobName(slug string) string {
+	sum := sha256.Sum256([]byte(slug))
+	return "review_" + hex.EncodeToString(sum[:8])
 }
 
 type AgentToolDefinition struct {
@@ -46,9 +97,10 @@ type AgentToolDefinition struct {
 }
 
 type AgentReply struct {
-	Kind     string          `json:"kind"`
-	Output   json.RawMessage `json:"output,omitempty"`
-	Question string          `json:"question,omitempty"`
+	Kind      string          `json:"kind"`
+	Output    json.RawMessage `json:"output,omitempty"`
+	Question  string          `json:"question,omitempty"`
+	Artifacts []AgentArtifact `json:"artifacts,omitempty"`
 }
 
 type AgentRunInfo struct {
@@ -171,6 +223,24 @@ func ValidateAgentDefinitions(manifest AgentManifest) error {
 		}
 		if d.MaxAttempts <= 0 || d.MaxConcurrency <= 0 {
 			return fail("maxAttempts and maxConcurrency must be positive")
+		}
+		if r := d.Review; r != nil {
+			if r.Version <= 0 || r.TimeoutMS <= 0 || r.TimeoutMS > int64((24*time.Hour)/time.Millisecond) || r.MaxAttempts <= 0 || r.MaxAttempts > 100 || r.MaxConcurrency <= 0 || r.MaxConcurrency > 1000 || r.MaxCorrections < 0 || r.JobName != AgentReviewJobName(d.Slug) {
+				return fail("invalid review policy")
+			}
+			matches := 0
+			for _, job := range manifest.JobHandlers {
+				if job.Name != r.JobName || job.Version != r.Version {
+					continue
+				}
+				matches++
+				if job.TimeoutMs != r.TimeoutMS || job.MaxAttempts != r.MaxAttempts || job.MaxConcurrency != r.MaxConcurrency {
+					return fail("review job policy mismatch")
+				}
+			}
+			if matches != 1 {
+				return fail("review requires exactly one matching internal job contract")
+			}
 		}
 		b := d.Budget
 		if b.Steps < 0 || b.TimeoutMS < 0 || b.Tokens < 0 || b == (AgentBudget{}) {

@@ -14,8 +14,8 @@ func main() {
 // newAgent defines the complete agent and wires late-bound SDK handles into its
 // dependencies. It must not read runtime environment, query the database, make
 // network calls, or start goroutines: Airlock also invokes this definition
-// offline to obtain the manifest. agenttest.New starts the returned agent before
-// tests use Agent.DB() or Agent.Handler(). Keep this function separate from main.
+// offline to obtain the manifest. Runtime startup, DB and authenticated HTTP
+// integration execute on a real Airlock preview. Keep this separate from main.
 func newAgent() *agentsdk.Agent {
 	agent := agentsdk.New(agentsdk.Config{
 		Description: "New agent — update this description after implementation",

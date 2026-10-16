@@ -2,6 +2,16 @@
 
 ## Asynchronous tools
 
+Foreground Sol steps have 60 seconds total for the model response and the whole
+tool batch, not 60 seconds for each tool. Tools must honor their context. Use
+`RegisterAsyncTool` for reports, imports, builds, or other potentially long work;
+the tool should return its accepted `AsyncTask` rather than wait for job output.
+Use the existing typed `Job` timeout, attempts, concurrency, progress and effect
+deduplication policy. Do not detach a Go goroutine or create a second reasoning
+loop to make a synchronous tool appear asynchronous. A foreground deadline does
+not cancel an independently accepted durable job or undo external effects.
+Unknown interrupted foreground effects require inspection before any retry.
+
 `RegisterAsyncTool` exposes a typed durable job as a tool that returns immediately
 after acceptance. Register the declaration in the agent definition factory:
 
@@ -25,8 +35,10 @@ agentsdk.RegisterAsyncTool(agent, &agentsdk.AsyncTool[ReportInput, ReportOutput]
 The immediate result is an `AsyncTask` with exact `id` and `status` fields; the ID
 has the form `job:<uuid>`. Global task controls expose `tasks.get({id})` and
 `tasks.cancel({id})`. Hosted conversations also expose
-`tasks.subscribe({id, notifyAfterMs?})`, which returns promptly and starts a fresh
-turn on terminal completion. Stateless MCP callers observe work with `tasks.get`
+`tasks.subscribe({id, notifyAfterMs?})`, which returns promptly and queues terminal
+completion into the conversation inbox. Active reasoning reads it after the current
+model/tool batch; an idle conversation starts a response, and a pending permission
+decision retains it. Stateless MCP callers observe work with `tasks.get`
 or `tasks.list`. Task handles identify logical work, not execution attempts.
 Job handlers retain their typed contract, progress, cancellation and idempotency
 requirements. Registering the async tool also registers its job contract; do not
@@ -48,9 +60,9 @@ with its original contract while queued or running jobs require it. A handler
 that rejects work still needs to preserve that contract; ordinary handler errors
 are terminal, regardless of `MaxAttempts`.
 
-`go tool air build` and `agenttest.New` validate local code using a mock Airlock
-and test database, not the target server's historical contracts. A passing local
-build is not a deployment compatibility check. `go tool air deploy` uploads
+`go tool air build` validates deterministic local source/domain tests without a
+host or database. A passing local build is not a deployment compatibility check.
+`go tool air deploy --target <name>` uploads
 source; Airlock checks the built candidate against its persisted history before
 cutover. Offline validation cannot establish compatibility with that history.
 
@@ -58,8 +70,8 @@ Declare jobs and crons in the definition factory. Registration is offline and
 is included in the complete canonical `Agent.Manifest()`; it must not enqueue or
 perform runtime work. Job handles are late-bound: `Enqueue`, `EnqueueAt`, `Get`,
 and `Cancel` are available after `Start`. `Serve` starts and synchronizes the
-runtime before serving deliveries, while `agenttest.New` returns after startup,
-sync, and named `OnStart` hooks. Durable startup work belongs in a job rather
+runtime before serving deliveries. Startup/sync/job integration uses a real
+remote target and its admitted host controller. Durable startup work belongs in a job rather
 than a process-local `OnStart` hook.
 
 Handlers can synchronously persist a progress snapshot for their active delivery:

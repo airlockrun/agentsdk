@@ -13,12 +13,12 @@ import (
 	"github.com/airlockrun/goai/tool"
 )
 
-const instructions = `You are an application-owned task agent. Finish by calling complete, never by prose alone.
-complete accepts either {kind:"output",output:<typed result>} or {kind:"needs_input",question:"..."}; both finish this run. There is no yield state.
-Agent controls are direct model tools, not JavaScript functions. run_js and advertised run_js_file execute synchronously with the same capabilities. Calls in one response execute in order; successful complete stops the batch.
-spawn tools return durable call IDs and session IDs. Use get_calls to inspect, wait_calls to wait for any/all, cancel_calls to cancel, and continue_agent to start a new run in a completed child's session. Resolve active children before complete.
+const instructions = `You are an application-owned task agent. Finish by calling submit, never by prose alone.
+submit accepts either {kind:"output",output:<typed result>,artifacts:[{path:"...",sha256:"...",contentId:"..."}]} or {kind:"needs_input",question:"..."}. Artifacts and their hash/content assertions are optional. Output is submitted for application acceptance; feedback may request a correction on this same run. needs_input completes with a question. There is no yield state.
+Agent controls are direct model tools, not JavaScript functions. run_js and advertised run_js_file execute synchronously with the same capabilities. Calls in one response execute in order; successful submit stops the batch.
+spawn tools return durable call IDs and session IDs. Use get_calls to inspect, wait_calls to wait for any/all, cancel_calls to cancel, and continue_agent to start a new run in a completed child's session. Resolve active children before submit.
 Waiting releases this worker and destroys JavaScript state. Every restart creates a fresh realm. Use returned transcript data, never retained JavaScript heap state, to continue work.
-An interrupted tool outcome marked unknown is not proof of failure. Do not repeat its side effects automatically. Use safe reads or complete with needs_input if a decision requires clarification.
+An interrupted tool outcome marked unknown is not proof of failure. Do not repeat its side effects automatically. Use safe reads or submit with needs_input if a decision requires clarification.
 No human is present for interactive approval. Host capability policy authorizes application-owned work; request_confirmation does not create a human approval flow.`
 
 func tools(in Input, js tool.Tool) (tool.Set, map[string]string, error) {
@@ -97,14 +97,14 @@ func tools(in Input, js tool.Tool) (tool.Set, map[string]string, error) {
 	encoded, err := json.Marshal(map[string]any{
 		"type": "object", "$defs": map[string]any{"agentOutput": output},
 		"oneOf": []any{
-			map[string]any{"type": "object", "properties": map[string]any{"kind": map[string]any{"const": "output"}, "output": map[string]any{"$ref": "#/$defs/agentOutput"}}, "required": []string{"kind", "output"}, "additionalProperties": false},
+			map[string]any{"type": "object", "properties": map[string]any{"kind": map[string]any{"const": "output"}, "output": map[string]any{"$ref": "#/$defs/agentOutput"}, "artifacts": map[string]any{"type": "array", "maxItems": 32, "items": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string", "minLength": 1, "maxLength": 4096}, "sha256": map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$"}, "contentId": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}}, "required": []string{"path"}, "additionalProperties": false}}}, "required": []string{"kind", "output"}, "additionalProperties": false},
 			map[string]any{"type": "object", "properties": map[string]any{"kind": map[string]any{"const": "needs_input"}, "question": map[string]any{"type": "string", "minLength": 1}}, "required": []string{"kind", "question"}, "additionalProperties": false},
 		},
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	set["complete"] = tool.New("complete").Description("Finish this run with a typed output or a question requiring input. Active children can prevent completion. No later calls execute after success.").Schema(encoded).Build()
+	set["submit"] = tool.New("submit").Description("Submit typed output and optional saved artifacts for application acceptance, or complete with a question requiring input. Active children can prevent submission. No later calls execute after success.").Schema(encoded).Build()
 	return set, spawns, nil
 }
 
@@ -187,7 +187,7 @@ func dispatch(ctx context.Context, in Input, set tool.Set, spawns map[string]str
 			case "wait_calls":
 				result, err = in.Controller.Wait(ctx, call.ID, args)
 			}
-		case "complete":
+		case "submit":
 			var reply wire.AgentReply
 			if err := decode(call.Input, &reply); err != nil {
 				return tool.Result{}, nil, err
@@ -198,14 +198,17 @@ func dispatch(ctx context.Context, in Input, set tool.Set, spawns map[string]str
 					return tool.Result{}, nil, errors.New("output reply cannot contain a question")
 				}
 			case "needs_input":
-				if len(reply.Output) != 0 || strings.TrimSpace(reply.Question) == "" {
+				if len(reply.Output) != 0 || len(reply.Artifacts) != 0 || strings.TrimSpace(reply.Question) == "" {
 					return tool.Result{}, nil, errors.New("needs_input requires a question and no output")
 				}
 			default:
-				return tool.Result{}, nil, errors.New("complete kind must be output or needs_input")
+				return tool.Result{}, nil, errors.New("submit kind must be output or needs_input")
 			}
 			if err := in.Controller.Complete(ctx, reply); err != nil {
 				return tool.Result{}, nil, err
+			}
+			if reply.Kind == "output" {
+				return tool.Result{Output: `{"submitted":true}`}, &reply, nil
 			}
 			return tool.Result{Output: `{"completed":true}`}, &reply, nil
 		}

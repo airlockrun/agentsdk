@@ -24,7 +24,6 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
-	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -42,13 +41,11 @@ import (
 	"github.com/airlockrun/agentsdk/buildconfig"
 	"github.com/airlockrun/agentsdk/internal/bootstrap"
 	"github.com/airlockrun/agentsdk/scaffold"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"golang.org/x/mod/modfile"
 )
 
 const (
 	defaultBaseImage     = "ghcr.io/airlockrun/airlock-agent-base:latest"
-	buildTestDatabase    = "pgvector/pgvector:pg17"
 	localToolchainPrefix = ".airlock/toolchain"
 	toolchainMarkerFile  = "air-toolchain.version"
 )
@@ -81,8 +78,12 @@ func run(args []string) error {
 		return cmdToolchain(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "test":
+		return cmdTest(args[1:])
+	case "preview":
+		return cmdPreview(args[1:])
 	case "run":
-		return cmdRun(args[1:])
+		return errors.New("air run is unsupported: use air preview for real Airlock execution")
 	case "stage-runtime-files":
 		return cmdStageRuntimeFiles(args[1:])
 	case "integrations":
@@ -102,7 +103,11 @@ func run(args []string) error {
 	case "deploy":
 		return cmdDeploy(args[1:])
 	case "status":
-		return cmdDeployBuilds("status", args[1:])
+		return cmdTargetStatus(args[1:])
+	case "start", "stop", "suspend":
+		return cmdTargetLifecycle(args[0], args[1:])
+	case "request", "tools", "agent", "logs":
+		return cmdOperation(args[0], args[1:])
 	case "resources":
 		return cmdResources(args[1:])
 	case "pull":
@@ -125,7 +130,17 @@ Usage:
   air update [dir]                update module pins, managed files, and toolchain
   air toolchain install           ensure the pinned build tools and references
   air build [dir]                 run the local build chain
-  air run --local [flags]         run this app with the local v3 runtime
+  air test [dir]                 run deterministic local tests without infrastructure
+  air preview [dir] -m <text>     create/update the saved real preview
+                                   --launch starts the preview after source admission
+  air preview select <target>    explicitly share an existing preview reference
+  air preview configuration <revision> inspect/set pending candidate selections
+  air context delete --remote NAME request deletion of that remote's owned workspace
+  air request METHOD /path       request app HTTP (production by default)
+  air tools list|invoke <name>    inspect or invoke registered app tools
+  air agent start|get|wait|cancel operate a registered agent on the real host
+  air logs <run-UUID>             read a selected target's run log snapshot
+  air start|stop|suspend          operate a selected target's runtime
   air integrations list [flags]   list configured external integrations
   air env list [flags]            list agent environment variable declarations
   air env get <slug> [flags]      print one configured non-secret value
@@ -141,12 +156,14 @@ Usage:
   air deploy [dir] -m <text>      upload source and start a build
   air deploy list [dir] [flags]  list recent builds (newest first)
   air deploy status [dir] [flags] inspect or watch one build
-  air status [dir] [flags]        inspect the accepted deployment task/build
-  air resources request ...       create or select a resource for development
-  air resources list|status|bind|call  inspect, bind, or call development resources
+  air status [dir] [flags]        inspect selected deployment/runtime readiness
+  air resources list|inspect|request|mcp-tools|mcp-call
+                                  direct-user resources on an explicit remote
+  air resources bindings|bind|fixture|unbind
+                                  server-owned app/target binding selections
   air pull [dir] [flags]          fast-forward a local workspace from Airlock
   air clone <agent> <dir> [flags] clone Airlock source without Git
-  air remote default <name>       select the default deployment target
+  air remote default <name>       select the default Airlock instance
   air remote unbind <name>        clear a remote's local agent binding
 
 Init flags:
@@ -180,17 +197,23 @@ Login flags:
   foreground poll loop.
 
 Deploy flags:
+  --target <name>             deployment: production (default), saved preview, or named target
+  --wait                     wait for the build and actual running app
+  --timeout <duration>        bound observation (default 10m)
+  --bind [type:]slot=<UUID>   attach a server-stored candidate resource selection
+  --fixture slot=<name>      attach a source-owned candidate HTTP fixture selection
   --create                   create a draft agent before uploading source
   --slug <slug>              agent slug for --create (derived from --name or dir if omitted)
   --agent <slug-or-id>       existing agent target for a new or matching remote
   --url <url>                Airlock URL for a new or matching remote
-  --remote <name>            named deployment target (default: configured default_remote)
+  --remote <name>            named Airlock instance (default: configured default_remote)
   --name <name>              display name for --create (default dir or slug)
   --description <text>       description for --create
   -m, --message <text>       required build message (single line, 200 bytes max)
   --force                    replace stale Airlock source intentionally
 
 Deploy list/status (dir defaults to "."):
+  --target <name>             production by default; preview requires a saved reference
   --agent <slug-or-id>       existing agent target for a new or matching remote
   --url <url>                Airlock URL for a new or matching remote
   --remote <name>            named target (default: configured default_remote)
@@ -212,32 +235,44 @@ Deploy list/status (dir defaults to "."):
   use ./list or ./status to make a directory target unambiguous.
 
 Pull flags:
+  --target <name>             source deployment (production by default)
   --agent <slug-or-id>       existing agent target for a new or matching remote
   --url <url>                Airlock URL for a new or matching remote
   --remote <name>            named deployment target (default: configured default_remote)
   --force                    discard local source changes
 
 Clone flags:
+  --target <name>             source deployment (production by default)
   --url <url>                Airlock URL; defaults to the sole saved login
-  --remote <name>            name stored as the cloned workspace's target
+  --remote <name>            Airlock instance name stored in the cloned workspace
 
 Integration target flags:
+  --target <name>             app deployment (production by default)
   --agent <slug-or-id>       agent for a new or matching remote
   --url <url>                Airlock URL for a new or matching remote
-  --remote <name>            named deployment target (default: configured default_remote)
+  --remote <name>            named Airlock instance (default: configured default_remote)
 
 Resources:
-  request <need> --name <name> --base-url <url> [--auth-mode none|bearer|api_key]
-                         [--header <name>] [--type connection]
-  request <need> --type connection|mcp_server --resource <UUID>
-  list [--json] [--session <UUID>]
-  status <request-UUID> [--json] [--session <UUID>]
-  bind <request-UUID> [--json] [--session <UUID>]
+  list|inspect <type> <UUID>    --remote <name> or --url <origin>, no app/target
+  request <UUID> --path /path [--method GET] [--data body]
+  mcp-tools <UUID> | mcp-call <UUID> --tool <name> [--data '{}']
+  bindings                    --target preview|production
+  bind <type> <slot>           --resource <UUID> --target <name>
+  fixture <type> <slot>        --fixture <name> --revision <candidate-UUID> --target preview
+  unbind <type> <slot>         --target <name>
 
-  Resource commands also accept the integration target flags above. The CLI
-  never accepts resource secrets; request prints the authenticated setup URL.
+  Bindings use existing app/target rights and independent resource use, with no
+  assign permission or local binding file. Upload selections are stored atomically
+  with the whole source candidate and applied by the host at cutover.
 
-A remote binds one Airlock URL and one stable agent ID. Selecting a remote
+Remote tests:
+  air test --remote <name> --target preview --revision <UUID> --suite integration --wait
+  air test status|cancel --run <UUID> --remote <name> --target preview --revision <UUID>
+  Tests/fixtures are packaged from that exact server-owned source revision; runner
+  credentials are scoped opaque capabilities, not copied laptop secrets.
+  air run is unsupported; no local runtime package or host emulator is shipped.
+
+A remote binds one Airlock URL and one stable logical app ID. Selecting a remote
 does not change default_remote. Use air remote default <name> to change it.
 Unbinding clears only the local agent ID, slug, and source state; it preserves
 the Airlock URL and does not delete or modify an agent in Airlock.
@@ -386,6 +421,8 @@ func cmdRemote(args []string) error {
 		remote.DeveloperSession = ""
 		remote.PendingTask = ""
 		remote.PendingSourceState = ""
+		remote.Targets = nil
+		remote.Previews = nil
 		binding.Remotes[name] = remote
 		if err := writeAgentBinding(".", binding); err != nil {
 			return err
@@ -585,6 +622,9 @@ func runBuild(dir string) error {
 	if _, err := buildconfig.Load(dir); err != nil {
 		return fmt.Errorf("validate runtime files: %w", err)
 	}
+	if err := validateUnitTestImports(dir); err != nil {
+		return err
+	}
 	if err := ensureToolchain(dir, filepath.Join(dir, localToolchainPrefix)); err != nil {
 		return err
 	}
@@ -610,21 +650,7 @@ func runBuild(dir string) error {
 		cmd.Dir = dir
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		var stopTestDatabase func() error
-		if step.sharedTestDatabase && os.Getenv("TEST_DB_URL") == "" {
-			dsn, stop, err := startBuildTestDatabase()
-			if err != nil {
-				return fmt.Errorf("start shared test database: %w", err)
-			}
-			cmd.Env = append(os.Environ(), "TEST_DB_URL="+dsn)
-			stopTestDatabase = stop
-		}
 		runErr := cmd.Run()
-		if stopTestDatabase != nil {
-			if err := stopTestDatabase(); err != nil {
-				runErr = errors.Join(runErr, fmt.Errorf("stop shared test database: %w", err))
-			}
-		}
 		if runErr != nil {
 			return fmt.Errorf("%s: %w", step.name, runErr)
 		}
@@ -646,9 +672,8 @@ func cmdStageRuntimeFiles(args []string) error {
 }
 
 type buildStep struct {
-	name               string
-	cmd                []string
-	sharedTestDatabase bool
+	name string
+	cmd  []string
 }
 
 func buildSteps(sqlcCmd, tailwindCmd, outputPath string, generateSQLC bool) []buildStep {
@@ -659,36 +684,9 @@ func buildSteps(sqlcCmd, tailwindCmd, outputPath string, generateSQLC bool) []bu
 	return append(steps,
 		buildStep{name: "go tool templ generate", cmd: []string{"go", "tool", "templ", "generate"}},
 		buildStep{name: "tailwindcss", cmd: []string{tailwindCmd, "-i", "styles/app.css", "-o", "views/static/app.css", "--minify"}},
-		buildStep{name: "go test -p=1 -count=1 ./...", cmd: []string{"go", "test", "-p=1", "-count=1", "./..."}, sharedTestDatabase: true},
+		buildStep{name: "go test -p=1 -count=1 ./...", cmd: []string{"go", "test", "-p=1", "-count=1", "./..."}},
 		buildStep{name: "go build", cmd: []string{"go", "build", "-buildvcs=false", "-o", outputPath, "."}},
 	)
-}
-
-func startBuildTestDatabase() (string, func() error, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	container, err := postgres.Run(ctx, buildTestDatabase,
-		postgres.WithDatabase("agent_test"),
-		postgres.WithUsername("agent"),
-		postgres.WithPassword("agent"),
-		postgres.BasicWaitStrategies(),
-	)
-	if err != nil {
-		if container != nil {
-			_ = container.Terminate(context.Background())
-		}
-		return "", nil, err
-	}
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
-	if err != nil {
-		_ = container.Terminate(context.Background())
-		return "", nil, err
-	}
-	return dsn, func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		return container.Terminate(ctx)
-	}, nil
 }
 
 func hasSQLQueries(dir string) bool {

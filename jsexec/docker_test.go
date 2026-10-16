@@ -1,3 +1,5 @@
+//go:build airlockplatformintegration
+
 package jsexec
 
 import (
@@ -5,7 +7,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"os"
 	"os/exec"
 	"strings"
 	"sync/atomic"
@@ -14,9 +15,6 @@ import (
 )
 
 func TestDocker(t *testing.T) {
-	if os.Getenv("JSEXEC_DOCKER_TEST") != "1" {
-		t.Skip("set JSEXEC_DOCKER_TEST=1 for production image tests")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	const image = "jsexec-test:permission-isolation"

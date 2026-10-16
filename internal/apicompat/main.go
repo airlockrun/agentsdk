@@ -28,7 +28,8 @@ type publicPackage struct {
 
 var publicPackages = []publicPackage{
 	{Path: "github.com/airlockrun/agentsdk"},
-	{Path: "github.com/airlockrun/agentsdk/agenttest"},
+	{Path: "github.com/airlockrun/agentsdk/remote", Since: "v0.8.1-alpha.12"},
+	{Path: "github.com/airlockrun/agentsdk/testutil", Since: "v0.8.1-alpha.12"},
 	{Path: "github.com/airlockrun/agentsdk/lucide", Since: "v0.5.0-rc.1"},
 	{Path: "github.com/airlockrun/agentsdk/connector", Since: "v0.6.0-rc.1"},
 	{Path: "github.com/airlockrun/agentsdk/connector/protocol", Since: "v0.6.0-rc.1"},

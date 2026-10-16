@@ -6,7 +6,6 @@ import (
 	"math"
 	"math/big"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -80,36 +79,95 @@ func TestAgentTypeSchemaPreservesReferenceRoot(t *testing.T) {
 	if s.Items.Ref != "#/$defs/element" || string(s.Defs["element"]) != `{"type":"integer"}` {
 		t.Fatalf("reference root changed: %s", raw)
 	}
-	if len(s.AllOf) != 1 || s.AllOf[0].MinItems != 2 || s.AllOf[0].MaxItems != 2 || s.AllOf[0].Items["minimum"] != "-128" || s.AllOf[0].Items["maximum"] != "127" {
+	if len(s.AllOf) != 1 || s.AllOf[0].MinItems != 2 || s.AllOf[0].MaxItems != 2 || len(s.AllOf[0].Items) != 0 {
 		t.Fatalf("missing exact constraints: %s", raw)
 	}
 }
 
-func TestAgentTypeSchemaNumericBounds(t *testing.T) {
+func TestAgentTypeSchemaNoInferredNumericBounds(t *testing.T) {
 	for _, tc := range []struct {
-		value    any
-		min, max string
+		value any
+		kind  string
 	}{
-		{int8(0), "-128", "127"}, {int16(0), "-32768", "32767"}, {int32(0), "-2147483648", "2147483647"},
-		{int64(0), "-9223372036854775808", "9223372036854775807"},
-		{uint8(0), "0", "255"}, {uint16(0), "0", "65535"}, {uint32(0), "0", "4294967295"},
-		{uint64(0), "0", "18446744073709551615"},
-		{int(0), strconv.FormatInt(math.MinInt, 10), strconv.FormatInt(math.MaxInt, 10)},
-		{uint(0), "0", strconv.FormatUint(math.MaxUint, 10)},
-		{float32(0), "-3.4028235e+38", "3.4028235e+38"},
+		{int8(0), "integer"}, {int16(0), "integer"}, {int32(0), "integer"}, {int64(0), "integer"}, {int(0), "integer"},
+		{uint8(0), "integer"}, {uint16(0), "integer"}, {uint32(0), "integer"}, {uint64(0), "integer"}, {uint(0), "integer"},
+		{float32(0), "number"}, {float64(0), "number"},
 	} {
 		t.Run(reflect.TypeOf(tc.value).String(), func(t *testing.T) {
 			raw := agentTypeSchema(reflect.TypeOf(tc.value))
-			var s struct {
-				AllOf []map[string]json.Number `json:"allOf"`
-			}
+			var s map[string]any
 			if err := json.Unmarshal(raw, &s); err != nil {
 				t.Fatal(err)
 			}
-			if len(s.AllOf) != 1 || s.AllOf[0]["minimum"].String() != tc.min || s.AllOf[0]["maximum"].String() != tc.max {
+			if len(s) != 1 || s["type"] != tc.kind {
 				t.Fatalf("schema=%s", raw)
 			}
 		})
+	}
+}
+
+func TestAgentTypeSchemaPreservesDeclaredNumericBounds(t *testing.T) {
+	type bounded struct {
+		Count    int  `json:"count" minimum:"0" maximum:"1000000"`
+		Optional *int `json:"optional" minimum:"0" maximum:"1000000"`
+		Byte     int8 `json:"byte" minimum:"-1000" maximum:"1000"`
+	}
+	raw := agentTypeSchema(reflect.TypeFor[bounded]())
+	var root map[string]any
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	if err := d.Decode(&root); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := root["allOf"]; ok {
+		t.Fatalf("inferred bounds remain: %s", raw)
+	}
+	properties := root["properties"].(map[string]any)
+	count := properties["count"].(map[string]any)
+	optional := properties["optional"].(map[string]any)
+	for _, v := range []map[string]any{count, optional} {
+		if v["minimum"] != json.Number("0") || v["maximum"] != json.Number("1000000") {
+			t.Fatalf("wide bound remains: %s", raw)
+		}
+	}
+	byteBounds := properties["byte"].(map[string]any)
+	if byteBounds["minimum"] != json.Number("-1000") || byteBounds["maximum"] != json.Number("1000") {
+		t.Fatalf("declared annotations changed: %s", raw)
+	}
+	if err := validateAgentTypeValue(reflect.TypeFor[bounded](), json.RawMessage(`{"byte":128}`)); err == nil {
+		t.Fatal("native overflow accepted without inferred schema bounds")
+	}
+}
+
+func TestAgentTypeSchemaNumericWidthsAreNativeValidationOnly(t *testing.T) {
+	for _, pair := range [][2]reflect.Type{
+		{reflect.TypeFor[int8](), reflect.TypeFor[int64]()},
+		{reflect.TypeFor[uint8](), reflect.TypeFor[uint64]()},
+		{reflect.TypeFor[float32](), reflect.TypeFor[float64]()},
+	} {
+		if !bytes.Equal(agentTypeSchema(pair[0]), agentTypeSchema(pair[1])) {
+			t.Fatalf("numeric width leaked into schema for %v", pair)
+		}
+	}
+	if err := validateAgentTypeValue(reflect.TypeFor[int8](), json.RawMessage(`128`)); err == nil {
+		t.Fatal("int8 overflow accepted")
+	}
+	if err := validateAgentTypeValue(reflect.TypeFor[int64](), json.RawMessage(`128`)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAgentTypeSchemaStringAndSliceDefaults(t *testing.T) {
+	type plain struct {
+		Text   string   `json:"text"`
+		Values []string `json:"values"`
+		Count  *int     `json:"count,omitempty"`
+	}
+	raw := agentTypeSchema(reflect.TypeFor[plain]())
+	for _, keyword := range []string{`"minimum"`, `"maximum"`, `"minLength"`, `"maxLength"`, `"pattern"`, `"minItems"`, `"maxItems"`, `"uniqueItems"`, `"allOf"`} {
+		if bytes.Contains(raw, []byte(keyword)) {
+			t.Fatalf("inferred validation %s: %s", keyword, raw)
+		}
 	}
 }
 
@@ -128,17 +186,16 @@ func TestAgentTypeSchemaNestedConstraints(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := root["allOf"].([]any)[0].(map[string]any)["properties"].(map[string]any)
-	if len(c) != 3 {
+	if len(c) != 2 {
 		t.Fatalf("constraints=%v", c)
 	}
 	array := c["values"].(map[string]any)["anyOf"].([]any)[1].(map[string]any)
 	inner := array["items"].(map[string]any)
-	number := inner["items"].(map[string]any)
-	if array["minItems"] != json.Number("1") || array["maxItems"] != json.Number("1") || inner["minItems"] != json.Number("2") || inner["maxItems"] != json.Number("2") || number["minimum"] != json.Number("-128") || number["maximum"] != json.Number("127") {
+	if array["minItems"] != json.Number("1") || array["maxItems"] != json.Number("1") || inner["minItems"] != json.Number("2") || inner["maxItems"] != json.Number("2") {
 		t.Fatalf("schema=%s", raw)
 	}
-	if c["slice"].(map[string]any)["items"].(map[string]any)["maximum"] != json.Number("18446744073709551615") {
-		t.Fatal("nested uint64 bound rounded")
+	if _, ok := c["slice"]; ok {
+		t.Fatal("slice has inferred numeric bounds")
 	}
 	zero := c["zero"].(map[string]any)
 	if zero["minItems"] != json.Number("0") || zero["maxItems"] != json.Number("0") {
@@ -189,10 +246,7 @@ func TestValidateAgentTypeValue(t *testing.T) {
 func TestAgentTypeSchemaContractHashes(t *testing.T) {
 	for _, pair := range [][2]reflect.Type{
 		{reflect.TypeFor[[1]string](), reflect.TypeFor[[2]string]()},
-		{reflect.TypeFor[int8](), reflect.TypeFor[int16]()},
-		{reflect.TypeFor[uint32](), reflect.TypeFor[uint64]()},
-		{reflect.TypeFor[float32](), reflect.TypeFor[float64]()},
-		{reflect.TypeFor[*[1][2]int8](), reflect.TypeFor[*[1][2]int16]()},
+		{reflect.TypeFor[*[1][2]int8](), reflect.TypeFor[*[1][3]int8]()},
 	} {
 		t.Run(pair[0].String()+" vs "+pair[1].String(), func(t *testing.T) {
 			for _, input := range []bool{true, false} {
@@ -211,7 +265,7 @@ func TestAgentTypeSchemaContractHashes(t *testing.T) {
 					}
 				}
 				if hashes[0] == hashes[1] {
-					t.Fatalf("input=%v: widths/lengths share hash", input)
+					t.Fatalf("input=%v: fixed array lengths share hash", input)
 				}
 			}
 		})
@@ -219,7 +273,10 @@ func TestAgentTypeSchemaContractHashes(t *testing.T) {
 }
 
 func TestAgentTypeSchemaHashPreservesIntegerPrecision(t *testing.T) {
-	d := wire.AgentDefinition{InputSchema: agentTypeSchema(reflect.TypeFor[int64]()), OutputSchema: agentTypeSchema(reflect.TypeFor[uint64]())}
+	type explicit struct {
+		Value uint64 `json:"value" maximum:"18446744073709551615"`
+	}
+	d := wire.AgentDefinition{InputSchema: agentTypeSchema(reflect.TypeFor[int64]()), OutputSchema: agentTypeSchema(reflect.TypeFor[explicit]())}
 	hash, err := wire.AgentDefinitionHash(d)
 	if err != nil {
 		t.Fatal(err)

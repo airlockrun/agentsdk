@@ -15,8 +15,8 @@ import (
 )
 
 // agentTypeSchema refines generated schemas without moving their reference root.
-// Separate constraints preserve goai metadata, nullability and local $defs while
-// keeping fixed lengths and numeric widths in the task's immutable contract.
+// Separate fixed-array constraints preserve goai metadata, explicit numeric
+// annotations, nullability and local $defs. Numeric widths are checked at decode.
 func agentTypeSchema(t reflect.Type) json.RawMessage {
 	raw := schema.MustFromType(reflect.Zero(t).Interface()).MustJSON()
 	var constraints func(reflect.Type) map[string]any
@@ -52,10 +52,6 @@ func agentTypeSchema(t reflect.Type) json.RawMessage {
 			if child := constraints(t.Elem()); len(child) > 0 {
 				c["items"] = child
 			}
-		default:
-			if min, max := agentNumericBounds(t); min != "" {
-				c["minimum"], c["maximum"] = min, max
-			}
 		}
 		return c
 	}
@@ -78,8 +74,8 @@ func agentTypeSchema(t reflect.Type) json.RawMessage {
 	return raw
 }
 
-// Bounds are JSON numbers, not float64s: rounding MaxInt64 or MaxUint64 would
-// advertise values that encoding/json cannot decode into the declared Go type.
+// Native decoding bounds are JSON numbers, not float64s, so overflow checks are
+// exact. These limits are not advertised as default JSON Schema constraints.
 func agentNumericBounds(t reflect.Type) (json.Number, json.Number) {
 	switch t.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:

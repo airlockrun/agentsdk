@@ -35,7 +35,7 @@ func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "clone")
-	if err := cmdClone([]string{agentID, dst, "--url", srv.URL}); err != nil {
+	if err := cmdClone([]string{agentID, dst, "--url", srv.URL, "--target", "production"}); err != nil {
 		t.Fatalf("cmdClone: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "main.go")); err != nil {
@@ -46,7 +46,7 @@ func TestCmdCloneCreatesBoundWorkspace(t *testing.T) {
 		t.Fatalf("binding = %#v, ok=%v, err=%v", binding, ok, err)
 	}
 	remote, ok := binding.remote(defaultRemoteName)
-	if !ok || remote.AgentID != agentID || remote.SourceState != state || remote.SourceETag == "" || remote.AirlockURL != srv.URL {
+	if !ok || remote.AgentID != agentID || remote.Targets[agentID].SourceState != state || remote.Targets[agentID].SourceETag == "" || remote.AirlockURL != srv.URL {
 		t.Fatalf("remote = %#v, ok=%v", remote, ok)
 	}
 	if _, err := os.Stat(filepath.Join(dst, ".airlock", "local", "agent.toml")); err != nil {
@@ -73,7 +73,7 @@ func TestCmdCloneReplacesBootstrapModule(t *testing.T) {
 	mustWrite(t, filepath.Join(dst, "go.mod"), "module airlock.bootstrap\n\ngo 1.26\n\nrequire github.com/airlockrun/agentsdk v0.4.0-rc.32\n\ntool github.com/airlockrun/agentsdk/cmd/air\n")
 	mustWrite(t, filepath.Join(dst, "go.sum"), "bootstrap sum\n")
 
-	if err := cmdClone([]string{agentID, dst, "--url", srv.URL}); err != nil {
+	if err := cmdClone([]string{agentID, dst, "--url", srv.URL, "--target", "production"}); err != nil {
 		t.Fatalf("cmdClone: %v", err)
 	}
 	body, err := os.ReadFile(filepath.Join(dst, "go.mod"))
@@ -102,7 +102,7 @@ func TestCmdClonePreservesBootstrapModuleOnDownloadFailure(t *testing.T) {
 	bootstrapMod := "module airlock.bootstrap\n\ngo 1.26\n\nrequire github.com/airlockrun/agentsdk v0.4.0-rc.32\n\ntool github.com/airlockrun/agentsdk/cmd/air\n"
 	mustWrite(t, filepath.Join(dst, "go.mod"), bootstrapMod)
 
-	err := cmdClone([]string{agentID, dst, "--url", srv.URL})
+	err := cmdClone([]string{agentID, dst, "--url", srv.URL, "--target", "production"})
 	if err == nil {
 		t.Fatal("cmdClone succeeded with invalid source state")
 	}
@@ -155,7 +155,7 @@ func TestCmdCloneRemovesCreatedDestinationOnInvalidState(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "clone")
-	err := cmdClone([]string{agentID, dst, "--url", srv.URL})
+	err := cmdClone([]string{agentID, dst, "--url", srv.URL, "--target", "production"})
 	if err == nil || !strings.Contains(err.Error(), "response declared sha256:wrong") {
 		t.Fatalf("cmdClone error = %v", err)
 	}
@@ -187,13 +187,13 @@ func TestCmdPullRefusesTwoSidedChange(t *testing.T) {
 	}
 	binding := agentBinding{}
 	binding.putRemote(defaultRemoteName, agentRemoteBinding{
-		AirlockURL: srv.URL, AgentID: agentID, Slug: "agent", SourceState: baseState,
+		AirlockURL: srv.URL, AgentID: agentID, Slug: "agent", Targets: map[string]targetSourceBinding{agentID: {Name: "production", SourceState: baseState}},
 	})
 	if err := writeAgentBinding(dir, binding); err != nil {
 		t.Fatal(err)
 	}
-	err = cmdPull([]string{dir})
-	if err == nil || !strings.Contains(err.Error(), "local and Airlock source both changed") || !strings.Contains(err.Error(), "airlock clone") {
+	err = cmdPull([]string{dir, "--target", "production"})
+	if err == nil || !strings.Contains(err.Error(), "local and remote source both changed") || !strings.Contains(err.Error(), "clone --target") {
 		t.Fatalf("cmdPull error = %v", err)
 	}
 	if body, err := os.ReadFile(filepath.Join(dir, "local.txt")); err != nil || string(body) != "local change" {
@@ -237,7 +237,7 @@ func TestUploadSourceSendsPrecondition(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
-	got, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, version.ETag(), "Add reminders")
+	got, err := uploadSource(context.Background(), srv.URL, "token", "/api/v1/agents/agent/source", dir, version.ETag(), "Add reminders", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestUploadSourceSendsPrecondition(t *testing.T) {
 
 func sourceServer(t *testing.T, agentID, slug, source, state string) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/agents/" + agentID:
 			w.Header().Set("Content-Type", "application/json")

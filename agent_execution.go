@@ -21,6 +21,8 @@ const (
 	AgentRunQueued         AgentRunStatus = "queued"
 	AgentRunRunning        AgentRunStatus = "running"
 	AgentRunWaiting        AgentRunStatus = "waiting"
+	AgentRunSubmitted      AgentRunStatus = "submitted"
+	AgentRunReviewing      AgentRunStatus = "reviewing"
 	AgentRunCompleted      AgentRunStatus = "completed"
 	AgentRunFailed         AgentRunStatus = "failed"
 	AgentRunCancelled      AgentRunStatus = "cancelled"
@@ -45,9 +47,10 @@ const (
 // AgentReply is a completed task's typed output or question. Both kinds finish
 // the run; either completed session can receive a Continue prompt.
 type AgentReply[Out any] struct {
-	Kind     AgentReplyKind
-	Output   *Out
-	Question string
+	Kind      AgentReplyKind
+	Output    *Out
+	Question  string
+	Artifacts []AgentArtifact
 }
 
 type AgentRunInfo[Out any] struct {
@@ -214,7 +217,7 @@ func (h *AgentHandle[In, Out]) request(ctx context.Context, method, suffix strin
 }
 
 func validAgentRunStatus(status AgentRunStatus) bool {
-	return status == AgentRunQueued || status == AgentRunRunning || status == AgentRunWaiting || status.Terminal()
+	return status == AgentRunQueued || status == AgentRunRunning || status == AgentRunWaiting || status == AgentRunSubmitted || status == AgentRunReviewing || status.Terminal()
 }
 
 func agentRunInfo[Out any](d wire.AgentDefinition, r wire.AgentRunInfo, created bool) (AgentRunInfo[Out], error) {
@@ -242,7 +245,7 @@ func agentRunInfo[Out any](d wire.AgentDefinition, r wire.AgentRunInfo, created 
 	if r.Reply == nil {
 		return AgentRunInfo[Out]{}, errors.New("agentsdk: completed agent run has no reply")
 	}
-	reply := &AgentReply[Out]{Kind: AgentReplyKind(r.Reply.Kind), Question: r.Reply.Question}
+	reply := &AgentReply[Out]{Kind: AgentReplyKind(r.Reply.Kind), Question: r.Reply.Question, Artifacts: append([]AgentArtifact(nil), r.Reply.Artifacts...)}
 	switch reply.Kind {
 	case AgentReplyOutput:
 		if len(r.Reply.Output) == 0 || reply.Question != "" {
@@ -259,7 +262,7 @@ func agentRunInfo[Out any](d wire.AgentDefinition, r wire.AgentRunInfo, created 
 		}
 		reply.Output = &output
 	case AgentReplyNeedsInput:
-		if len(r.Reply.Output) != 0 || strings.TrimSpace(reply.Question) == "" {
+		if len(r.Reply.Output) != 0 || len(reply.Artifacts) != 0 || strings.TrimSpace(reply.Question) == "" {
 			return AgentRunInfo[Out]{}, errors.New("agentsdk: invalid needs_input reply")
 		}
 	default:

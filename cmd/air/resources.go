@@ -2,339 +2,218 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
-	"text/tabwriter"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
+	"google.golang.org/protobuf/proto"
 )
 
-type developerSessionResponse struct {
-	Session struct {
-		ID string `json:"id"`
-	} `json:"session"`
-}
-
-type developerResourceRequest struct {
-	ID            string `json:"id"`
-	SessionID     string `json:"sessionId"`
-	Type          string `json:"type"`
-	RequestedSlug string `json:"requestedSlug"`
-	ResourceID    string `json:"resourceId"`
-	Status        string `json:"status"`
-	SetupURL      string `json:"setupUrl"`
-	ErrorMessage  string `json:"errorMessage"`
-}
-
-type developerResourceResponse struct {
-	Request developerResourceRequest `json:"request"`
-}
-
-type developerResourceListResponse struct {
-	Requests []developerResourceRequest `json:"requests"`
-}
-
-type developerResourceCallResponse struct {
-	StatusCode int               `json:"statusCode"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
-}
-
-type resourceFlags struct {
-	target                    integrationTargetFlags
-	session, typ, name        string
-	baseURL, authMode, header string
-	resourceID                string
-	method, path, body        string
-	requestHeaders            []string
-	json                      bool
-}
-
+// Resource inventory/direct use is user+remote scoped. Binding commands also
+// require app+target; neither operation establishes a developer session.
 func cmdResources(args []string) error {
 	if len(args) == 0 {
-		return errors.New("resources requires: request, list, status, bind, or call")
+		return errors.New("resources requires list, inspect, request, mcp-tools, mcp-call, bindings, bind, fixture or unbind")
 	}
 	command := args[0]
-	f, positional, err := parseResourceFlags(args[1:])
-	if err != nil {
-		return err
-	}
-	switch command {
-	case "request":
-		if len(positional) != 1 {
-			return errors.New("resources request requires one need slug")
-		}
-	case "list":
-		if len(positional) != 0 {
-			return errors.New("resources list takes no arguments")
-		}
-	case "status", "bind", "call":
-		if len(positional) != 1 {
-			return fmt.Errorf("resources %s requires one request ID", command)
-		}
-	default:
-		return fmt.Errorf("unknown resources subcommand %q", command)
-	}
-	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" {
-		return errors.New("resources requires developer user authentication, not a codegen integration token")
-	}
-	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx, f.target)
-	if err != nil {
-		return err
-	}
-	sessionID, err := ensureDeveloperSession(ctx, target, f)
-	if err != nil {
-		return err
-	}
-	path := "/api/v1/developer-sessions/" + url.PathEscape(sessionID) + "/resources"
-	switch command {
-	case "request":
-		return requestDeveloperResource(ctx, target, sessionID, path, positional[0], f)
-	case "list", "status":
-		var response developerResourceListResponse
-		if err := doJSON(ctx, target.baseURL, http.MethodGet, path, target.token, nil, &response); err != nil {
-			return err
-		}
-		if command == "status" {
-			id := positional[0]
-			for _, request := range response.Requests {
-				if request.ID == id {
-					response.Requests = []developerResourceRequest{request}
-					return printDeveloperResources(response.Requests, f.json)
-				}
+	resource, fixture, revision, data, method, path, tool := "", "", "", "", "GET", "", ""
+	var targetArgs []string
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--resource", "--fixture", "--revision", "--data", "--method", "--path", "--tool":
+			key := args[i]
+			if i+1 >= len(args) {
+				return fmt.Errorf("%s requires a value", key)
 			}
-			return fmt.Errorf("developer resource request %s not found", id)
-		}
-		return printDeveloperResources(response.Requests, f.json)
-	case "bind":
-		requestID := positional[0]
-		if !deployUUIDRe.MatchString(requestID) {
-			return errors.New("resource request ID must be a UUID")
-		}
-		var response developerResourceResponse
-		if err := doJSON(ctx, target.baseURL, http.MethodPost, path+"/"+url.PathEscape(requestID)+"/bind", target.token, nil, &response); err != nil {
-			return err
-		}
-		return printDeveloperResources([]developerResourceRequest{response.Request}, f.json)
-	case "call":
-		requestID := positional[0]
-		if !deployUUIDRe.MatchString(requestID) {
-			return errors.New("resource request ID must be a UUID")
-		}
-		if f.method == "" || f.path == "" {
-			return errors.New("resources call requires --method and --path")
-		}
-		headers := make(map[string]string, len(f.requestHeaders))
-		for _, raw := range f.requestHeaders {
-			name, value, ok := strings.Cut(raw, ":")
-			if !ok || strings.TrimSpace(name) == "" {
-				return fmt.Errorf("invalid --request-header %q; use 'Name: value'", raw)
+			i++
+			switch key {
+			case "--resource":
+				resource = args[i]
+			case "--fixture":
+				fixture = args[i]
+			case "--revision":
+				revision = args[i]
+			case "--data":
+				data = args[i]
+			case "--method":
+				method = args[i]
+			case "--path":
+				path = args[i]
+			case "--tool":
+				tool = args[i]
 			}
-			headers[strings.TrimSpace(name)] = strings.TrimSpace(value)
+		default:
+			targetArgs = append(targetArgs, args[i])
 		}
-		var response developerResourceCallResponse
-		body := map[string]any{"method": strings.ToUpper(f.method), "path": f.path, "headers": headers, "body": f.body}
-		if err := doJSON(ctx, target.baseURL, http.MethodPost, path+"/"+url.PathEscape(requestID)+"/call", target.token, body, &response); err != nil {
+	}
+	isBinding := command == "bindings" || command == "bind" || command == "fixture" || command == "unbind"
+	if !isBinding {
+		for _, arg := range targetArgs {
+			if arg == "--target" || arg == "--agent" {
+				return errors.New("direct resource commands are user+remote scoped; use resources bindings|bind|fixture|unbind for app targets")
+			}
+		}
+	}
+	f, positional, err := parseSelectionFlags(targetArgs)
+	if err != nil {
+		return err
+	}
+	if f.wait {
+		return errors.New("resource commands do not support --wait")
+	}
+	if isBinding {
+		if err := requireTarget(f.target); err != nil {
 			return err
 		}
-		decoded, err := base64.StdEncoding.DecodeString(response.Body)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), f.timeout)
+	defer cancel()
+	if isBinding {
+		s, err := resolveDeployment(ctx, f, false)
 		if err != nil {
-			return fmt.Errorf("decode resource response body: %w", err)
+			return err
 		}
-		if f.json {
-			encoded, err := json.MarshalIndent(map[string]any{"statusCode": response.StatusCode, "headers": response.Headers, "body": string(decoded)}, "", "  ")
-			if err != nil {
+		fmt.Fprintf(os.Stderr, "Target: remote=%s app=%s target=%s runtime=%s\n", s.remoteName, s.app.AgentID, s.info.Name, s.info.Id)
+		if command == "bindings" {
+			if len(positional) != 0 {
+				return errors.New("resources bindings takes no positional arguments")
+			}
+			var response airlockv1.ListTargetBindingsResponse
+			if err := doProto(ctx, s.baseURL, http.MethodGet, s.path("/bindings"), s.token, nil, &response); err != nil {
 				return err
 			}
-			fmt.Println(string(encoded))
-			return nil
+			return writeProtoJSON(&response)
 		}
-		fmt.Printf("HTTP %d\n", response.StatusCode)
-		for name, value := range response.Headers {
-			fmt.Printf("%s: %s\n", name, value)
+		if len(positional) != 2 {
+			return errors.New("resources bind|fixture|unbind requires <type> <slot>")
 		}
-		if len(decoded) > 0 {
-			fmt.Printf("\n%s\n", decoded)
-		}
-		return nil
-	}
-	panic("unreachable")
-}
-
-func parseResourceFlags(args []string) (resourceFlags, []string, error) {
-	f := resourceFlags{typ: "connection", authMode: "none"}
-	var positional []string
-	for i := 0; i < len(args); i++ {
-		if handled, err := consumeIntegrationTargetFlag(args, &i, &f.target); handled || err != nil {
-			if err != nil {
-				return resourceFlags{}, nil, err
+		var input proto.Message
+		verb := http.MethodPut
+		switch command {
+		case "bind":
+			if !deployUUIDRe.MatchString(resource) || fixture != "" {
+				return errors.New("bind requires --resource <UUID>, without --fixture")
 			}
-			continue
-		}
-		if args[i] == "--json" {
-			f.json = true
-			continue
-		}
-		if !strings.HasPrefix(args[i], "--") {
-			positional = append(positional, args[i])
-			continue
-		}
-		if i+1 >= len(args) {
-			return resourceFlags{}, nil, fmt.Errorf("flag %s needs a value", args[i])
-		}
-		key, value := args[i], args[i+1]
-		i++
-		switch key {
-		case "--session":
-			f.session = value
-		case "--type":
-			f.typ = value
-		case "--name":
-			f.name = value
-		case "--base-url":
-			f.baseURL = value
-		case "--auth-mode":
-			f.authMode = value
-		case "--header":
-			f.header = value
-		case "--resource":
-			f.resourceID = value
-		case "--method":
-			f.method = value
-		case "--path":
-			f.path = value
-		case "--body":
-			f.body = value
-		case "--request-header":
-			f.requestHeaders = append(f.requestHeaders, value)
-		default:
-			return resourceFlags{}, nil, fmt.Errorf("unknown resources flag %q", key)
-		}
-	}
-	return f, positional, nil
-}
-
-func ensureDeveloperSession(ctx context.Context, target integrationTarget, f resourceFlags) (string, error) {
-	hosted := strings.TrimSpace(os.Getenv("AIRLOCK_DEVELOPMENT_SESSION"))
-	if hosted != "" {
-		if f.session != "" && f.session != hosted {
-			return "", errors.New("--session does not match AIRLOCK_DEVELOPMENT_SESSION")
-		}
-		return hosted, nil
-	}
-	if f.session != "" {
-		if !deployUUIDRe.MatchString(f.session) {
-			return "", errors.New("--session must be a UUID")
-		}
-		return f.session, nil
-	}
-	binding, ok, err := loadAgentBinding(".")
-	if err != nil || !ok {
-		if err == nil {
-			err = errors.New("workspace is not bound to Airlock")
-		}
-		return "", err
-	}
-	remoteName := f.target.remote
-	if remoteName == "" {
-		remoteName = binding.DefaultRemote
-	}
-	remote, _ := binding.remote(remoteName)
-	if remote.DeveloperSession != "" {
-		return remote.DeveloperSession, nil
-	}
-	var response developerSessionResponse
-	err = doJSON(ctx, target.baseURL, http.MethodGet, "/api/v1/developer-sessions?app_id="+url.QueryEscape(target.agentID), target.token, nil, &response)
-	if hasHTTPStatus(err, http.StatusNotFound) {
-		err = doJSON(ctx, target.baseURL, http.MethodPost, "/api/v1/developer-sessions", target.token, map[string]any{"appId": target.agentID}, &response)
-	}
-	if err != nil {
-		return "", err
-	}
-	if !deployUUIDRe.MatchString(response.Session.ID) {
-		return "", errors.New("create developer session response omitted its session ID")
-	}
-	remote.DeveloperSession = response.Session.ID
-	binding.putRemote(remoteName, remote)
-	if err := writeAgentBinding(".", binding); err != nil {
-		return "", err
-	}
-	return response.Session.ID, nil
-}
-
-func requestDeveloperResource(ctx context.Context, target integrationTarget, sessionID, path, slug string, f resourceFlags) error {
-	if f.typ != "connection" && f.typ != "mcp_server" {
-		return errors.New("--type must be connection or mcp_server")
-	}
-	resourceID := f.resourceID
-	if resourceID == "" {
-		if f.typ != "connection" {
-			return errors.New("new MCP resources require --resource with an existing discovered MCP server")
-		}
-		if strings.TrimSpace(f.name) == "" || strings.TrimSpace(f.baseURL) == "" {
-			return errors.New("new connections require --name and --base-url")
-		}
-		request := &airlockv1.CreateConnectionResourceRequest{DisplayName: f.name, BaseUrl: f.baseURL}
-		switch f.authMode {
-		case "none":
-			request.AuthMode = "none"
-		case "bearer":
-			request.AuthMode, request.AuthInjectionType = "token", "bearer"
-		case "api_key":
-			if strings.TrimSpace(f.header) == "" {
-				return errors.New("--auth-mode api_key requires --header, for example X-API-Key")
+			input = &airlockv1.SetTargetBindingRequest{ResourceId: resource}
+		case "fixture":
+			if fixture == "" || !deployUUIDRe.MatchString(revision) || resource != "" {
+				return errors.New("fixture requires --fixture <name> --revision <candidate UUID>, without --resource")
 			}
-			request.AuthMode, request.AuthInjectionType, request.AuthInjectionName = "token", "api_key_header", f.header
-		default:
-			return errors.New("--auth-mode must be none, bearer, or api_key")
+			input = &airlockv1.SetTargetBindingRequest{FixtureName: fixture, SourceRevisionId: revision}
+		case "unbind":
+			if resource != "" || fixture != "" {
+				return errors.New("unbind takes no resource/fixture selection")
+			}
+			verb = http.MethodDelete
 		}
-		var created airlockv1.CreateConnectionResourceResponse
-		if err := doProto(ctx, target.baseURL, http.MethodPost, "/api/v1/resources/connections/setup", target.token, request, &created); err != nil {
+		var response airlockv1.ListTargetBindingsResponse
+		if err := doProto(ctx, s.baseURL, verb, s.path("/bindings/"+url.PathEscape(positional[0])+"/"+url.PathEscape(positional[1])), s.token, input, &response); err != nil {
 			return err
 		}
-		resourceID = created.Id
+		if response.RuntimeAgentId != s.info.Id {
+			return errors.New("binding response selected a different runtime")
+		}
+		return writeProtoJSON(&response)
 	}
-	if !deployUUIDRe.MatchString(resourceID) {
-		return errors.New("resource ID must be a UUID")
-	}
-	requestID, err := newUUID()
+	baseURL, token, err := resolveUserRemote(ctx, f)
 	if err != nil {
 		return err
 	}
-	var response developerResourceResponse
-	body := map[string]any{"requestId": requestID, "type": f.typ, "requestedSlug": slug, "resourceId": resourceID}
-	if runID := strings.TrimSpace(os.Getenv("AIRLOCK_DEVELOPER_RUN_ID")); runID != "" {
-		if !deployUUIDRe.MatchString(runID) {
-			return errors.New("AIRLOCK_DEVELOPER_RUN_ID must be a UUID")
+	switch command {
+	case "list":
+		if len(positional) != 0 {
+			return errors.New("resources list takes no positional arguments")
 		}
-		body["developerRunId"] = runID
-	}
-	if err := doJSON(ctx, target.baseURL, http.MethodPost, path, target.token, body, &response); err != nil {
-		return fmt.Errorf("link resource %s to developer session: %w", resourceID, err)
-	}
-	return printDeveloperResources([]developerResourceRequest{response.Request}, f.json)
-}
-
-func printDeveloperResources(requests []developerResourceRequest, asJSON bool) error {
-	if asJSON {
-		encoded, err := json.MarshalIndent(developerResourceListResponse{Requests: requests}, "", "  ")
-		if err != nil {
+		var response airlockv1.ListOwnedResourcesResponse
+		if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/resources", token, nil, &response); err != nil {
 			return err
 		}
-		fmt.Println(string(encoded))
+		return writeProtoJSON(&response)
+	case "inspect":
+		if len(positional) != 2 || !deployUUIDRe.MatchString(positional[1]) {
+			return errors.New("resources inspect requires <type> <resource UUID>")
+		}
+		var response airlockv1.OwnedResourceInfo
+		if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/resources/"+url.PathEscape(positional[0])+"/"+positional[1], token, nil, &response); err != nil {
+			return err
+		}
+		return writeProtoJSON(&response)
+	case "request":
+		if len(positional) != 1 || !deployUUIDRe.MatchString(positional[0]) || path == "" {
+			return errors.New("resources request requires resource UUID --path /path [--method METHOD] [--data body]")
+		}
+		var response airlockv1.InvokeConnectionResponse
+		if err := doProto(ctx, baseURL, http.MethodPost, "/api/v1/resources/connections/"+positional[0]+"/request", token, &airlockv1.InvokeConnectionRequest{Method: method, Path: path, Body: []byte(data)}, &response); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "HTTP %d\n", response.StatusCode)
+		if _, err := os.Stdout.Write(response.Body); err != nil {
+			return err
+		}
+		if response.StatusCode >= 400 {
+			return fmt.Errorf("resource returned HTTP %d", response.StatusCode)
+		}
 		return nil
+	case "mcp-tools", "mcp-call":
+		if len(positional) != 1 || !deployUUIDRe.MatchString(positional[0]) {
+			return errors.New("MCP resource command requires resource UUID")
+		}
+		root := "/api/v1/resources/mcp_servers/" + positional[0]
+		if command == "mcp-tools" {
+			var response airlockv1.ListIntegrationMCPToolsResponse
+			if err := doProto(ctx, baseURL, http.MethodGet, root+"/tools", token, nil, &response); err != nil {
+				return err
+			}
+			return writeProtoJSON(&response)
+		}
+		if tool == "" {
+			return errors.New("mcp-call requires --tool")
+		}
+		if data == "" {
+			data = "{}"
+		}
+		var response airlockv1.InvokeMCPToolResponse
+		if err := doProto(ctx, baseURL, http.MethodPost, root+"/call", token, &airlockv1.InvokeMCPToolRequest{Tool: tool, ArgumentsJson: []byte(data)}, &response); err != nil {
+			return err
+		}
+		if err := writeProtoJSON(&response); err != nil {
+			return err
+		}
+		if response.IsError {
+			return errors.New("MCP resource returned a tool error")
+		}
+		return nil
+	default:
+		return errors.New("unknown resources command")
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "REQUEST ID\tTYPE\tNEED\tSTATUS\tRESOURCE ID\tSETUP URL\tERROR")
-	for _, request := range requests {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", request.ID, request.Type, request.RequestedSlug, request.Status, request.ResourceID, request.SetupURL, safeTableCell(request.ErrorMessage))
+}
+
+func resolveUserRemote(ctx context.Context, f targetFlags) (string, string, error) {
+	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" || os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
+		return "", "", errors.New("direct resources require a user login for an explicitly selected Airlock remote")
 	}
-	return w.Flush()
+	binding, _, err := loadAgentBinding(f.dir)
+	if err != nil {
+		return "", "", err
+	}
+	name := f.remote
+	if name == "" {
+		name = binding.DefaultRemote
+	}
+	remote, _ := binding.remote(name)
+	baseURL := normalizeBaseURL(f.url)
+	if baseURL != "" && remote.AirlockURL != "" && baseURL != normalizeBaseURL(remote.AirlockURL) {
+		return "", "", errors.New("--url conflicts with the selected remote")
+	}
+	if baseURL == "" {
+		baseURL = remote.AirlockURL
+	}
+	if _, err := canonicalAuthOrigin(baseURL); err != nil {
+		return "", "", err
+	}
+	token, err := accessTokenForURL(ctx, baseURL)
+	return baseURL, token, err
 }

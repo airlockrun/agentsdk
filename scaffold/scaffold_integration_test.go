@@ -1,261 +1,77 @@
 package scaffold
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"net"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-// TestScaffoldBuildsAndStarts verifies that the scaffold output compiles
-// and that the resulting binary starts and serves /health.
-func TestScaffoldBuildsAndStarts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-	// Resolve the sibling lib source trees so the scaffolded agent builds
-	// against the agentsdk/goai/sol we're editing (via replace directives),
-	// not a published proxy version — this test validates the scaffold against
-	// the SDK source in this checkout.
+// TestScaffoldBuildsOffline verifies the generated unit suite, compilation and
+// manifest without an app runtime, PostgreSQL, Docker or a provider account.
+func TestScaffoldBuildsOffline(t *testing.T) {
 	wd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentsdkPath := filepath.Dir(wd)     // .../agentsdk (scaffold's parent)
-	hqRoot := filepath.Dir(agentsdkPath) // monorepo root holding sibling libs
-	goaiPath := filepath.Join(hqRoot, "goai")
-	solPath := filepath.Join(hqRoot, "sol")
-	for _, p := range []string{agentsdkPath, goaiPath, solPath} {
-		if _, err := os.Stat(filepath.Join(p, "go.mod")); err != nil {
-			t.Skipf("sibling lib not found at %s; skipping (needs the monorepo layout)", p)
+	sdk := filepath.Dir(wd)
+	root := filepath.Dir(sdk)
+	for _, path := range []string{sdk, filepath.Join(root, "goai"), filepath.Join(root, "sol")} {
+		if _, err := os.Stat(filepath.Join(path, "go.mod")); err != nil {
+			t.Skipf("standalone checkout lacks sibling source %s", path)
 		}
 	}
-
-	// Materialize scaffold.
 	dir := t.TempDir()
-	data := ScaffoldData{
-		AgentID:         "test-agent-build",
-		GoVersion:       "1.26",
-		AgentSDKVersion: "v1.0.0",
-		AgentBaseImage:  "airlock-agent-base",
+	if err := Materialize(dir, ScaffoldData{AgentID: "offline-fixture", AgentSDKVersion: "v0.0.0", AgentBaseImage: "unused-offline"}); err != nil {
+		t.Fatal(err)
 	}
-	if err := Materialize(dir, data); err != nil {
-		t.Fatalf("Materialize: %v", err)
-	}
-
-	// Overwrite go.mod: require the libs + templ, expose templ as a tool,
-	// and replace the owned libs
-	// with local source so their resolution needs no network or published
-	// version. templ and the transitive external deps still resolve via the
-	// module cache / proxy. GoVersion + TemplVersion come from the scaffold's
-	// own consts, so this fixture can't drift from what it ships.
-	goMod := fmt.Sprintf(`module agent
+	module := fmt.Sprintf(`module agent
 
 go %s
 
 require (
-	github.com/a-h/templ %s
-	github.com/airlockrun/agentsdk v0.0.0
-	github.com/airlockrun/goai v0.0.0
-	github.com/airlockrun/sol v0.0.0
+ github.com/a-h/templ %s
+ github.com/airlockrun/agentsdk v0.0.0
+ github.com/airlockrun/goai v0.0.0
+ github.com/airlockrun/sol v0.0.0
 )
-
 replace github.com/airlockrun/agentsdk => %s
 replace github.com/airlockrun/goai => %s
 replace github.com/airlockrun/sol => %s
-
 tool github.com/a-h/templ/cmd/templ
-`, GoVersion, TemplVersion, agentsdkPath, goaiPath, solPath)
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(goMod), 0o644); err != nil {
+`, GoVersion, TemplVersion, sdk, filepath.Join(root, "goai"), filepath.Join(root, "sol"))
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(module), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	writeIntegrationFile(t, filepath.Join(dir, "db", "migrations", "00001_nested_test.sql"), `-- +goose Up
-CREATE TABLE nested_migration_test (id integer PRIMARY KEY);
-
--- +goose Down
-DROP TABLE nested_migration_test;
-`)
-	writeIntegrationFile(t, filepath.Join(dir, "nested", "migration_test.go"), `package nested
-
-import (
-	"testing"
-
-	"github.com/airlockrun/agentsdk"
-	"github.com/airlockrun/agentsdk/agenttest"
-)
-
-func TestAgenttestFindsModuleMigrations(t *testing.T) {
-	env := agenttest.New(t, func() *agentsdk.Agent {
-		return agentsdk.New(agentsdk.Config{Description: "nested migration test"})
-	})
-	var table string
-	if err := env.Agent.DB().QueryRowContext(t.Context(), "SELECT to_regclass('nested_migration_test')").Scan(&table); err != nil {
-		t.Fatal(err)
-	}
-	if table != "nested_migration_test" {
-		t.Fatalf("table = %q, want nested_migration_test", table)
-	}
-}
-`)
-
-	// Disable any ambient go.work (the hq monorepo has one) so resolution
-	// goes purely through go.mod + the proxy. CI doesn't have a workspace
-	// either, this keeps the two paths identical.
-	env := append(os.Environ(), "GOWORK=off")
-
-	// `go build` won't auto-populate go.sum; tidy first.
-	tidy := exec.Command("go", "mod", "tidy")
-	tidy.Dir = dir
-	tidy.Env = env
-	if out, err := tidy.CombinedOutput(); err != nil {
-		t.Fatalf("go mod tidy failed:\n%s", out)
-	}
-
-	// --- Step 1: Generate templ + Tailwind + Build ---
-	templGen := exec.Command("go", "tool", "templ", "generate")
-	templGen.Dir = dir
-	templGen.Env = env
-	if out, err := templGen.CombinedOutput(); err != nil {
-		t.Fatalf("templ generate failed:\n%s", out)
-	}
-
-	// tailwindcss is optional in CI / dev — the scaffold ships a
-	// placeholder views/static/app.css the //go:embed reads, so the
-	// agent compiles without it. When the repo-local binary exists, we run
-	// it so the test exercises the same chain as the prod Docker build.
-	tailwindPath := filepath.Join(dir, ".airlock", "toolchain", "bin", "tailwindcss")
-	if _, err := os.Stat(tailwindPath); err == nil {
-		tw := exec.Command(tailwindPath,
-			"-i", "styles/app.css",
-			"-o", "views/static/app.css",
-			"--minify")
-		tw.Dir = dir
-		tw.Env = env
-		if out, err := tw.CombinedOutput(); err != nil {
-			t.Fatalf("tailwindcss compile failed:\n%s", out)
-		}
-	} else {
-		t.Log("repo-local tailwindcss not installed; using scaffold placeholder views/static/app.css")
-	}
-
-	binPath := filepath.Join(dir, "agent")
-	build := exec.Command("go", "build", "-o", binPath, ".")
-	build.Dir = dir
-	build.Env = env
-	out, err := build.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go build failed:\n%s", out)
-	}
-
-	// --- Step 2: Start with mock Airlock ---
-	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		// Sync endpoint must return a valid SyncResponse: agentsdk's
-		// applySyncResponse panics at boot on an empty
-		// PromptData.AgentRouteURL (the "airlock newer than agentsdk"
-		// guard), which would crash the agent before it binds /health.
-		// Other endpoints just need a 200 with parseable JSON.
-		if r.URL.Path == "/api/agent/sync" {
-			_ = json.NewEncoder(w).Encode(wire.SyncResponse{RuntimeProtocol: wire.AppRuntimeProtocol, PromptData: wire.PromptData{AgentDashboardURL: "http://airlock.test/agents/test-agent", AgentRouteURL: "http://agent.test"}})
-		} else {
-			w.Write([]byte(`{}`))
-		}
-	}))
-	defer mock.Close()
-
-	dsn := os.Getenv("TEST_DB_URL")
-	if dsn == "" {
-		testcontainers.SkipIfProviderIsNotHealthy(t)
-		ctr, err := postgres.Run(context.Background(), "pgvector/pgvector:pg17",
-			postgres.WithDatabase("agent_test"),
-			postgres.WithUsername("agent"),
-			postgres.WithPassword("agent"),
-			postgres.BasicWaitStrategies(),
-		)
-		if err != nil {
-			t.Fatalf("start PostgreSQL container: %v", err)
-		}
-		defer ctr.Terminate(context.Background())
-		dsn, err = ctr.ConnectionString(context.Background(), "sslmode=disable")
-		if err != nil {
-			t.Fatalf("PostgreSQL connection string: %v", err)
+	env := append(os.Environ(), "GOWORK=off", "DOCKER_HOST=unix:///nonexistent", "AIRLOCK_API_URL=", "AIRLOCK_AGENT_ID=", "AIRLOCK_AGENT_TOKEN=", "AIRLOCK_DB_URL=", "TEST_DB_URL=")
+	binary := filepath.Join(dir, "app")
+	for _, args := range [][]string{
+		{"mod", "tidy"}, {"tool", "templ", "generate"}, {"test", "-count=1", "./..."}, {"build", "-buildvcs=false", "-o", binary, "."},
+	} {
+		command := exec.Command("go", args...)
+		command.Dir, command.Env = dir, env
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("go %v: %v\n%s", args, err, output)
 		}
 	}
-
-	generatedTests := exec.Command("go", "test", "-p=1", "-count=1", "./...")
-	generatedTests.Dir = dir
-	generatedTests.Env = append(env, "TEST_DB_URL="+dsn)
-	if out, err := generatedTests.CombinedOutput(); err != nil {
-		t.Fatalf("generated agent tests failed:\n%s", out)
-	}
-
-	port := freePort(t)
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-
-	cmd := exec.Command(binPath)
-	cmd.Dir = dir
-	cmd.Env = []string{
-		"AIRLOCK_AGENT_ID=test-agent",
-		"AIRLOCK_API_URL=" + mock.URL,
-		"AIRLOCK_AGENT_TOKEN=test-token",
-		"AIRLOCK_DB_URL=" + dsn,
-		"AIRLOCK_ADDR=" + addr,
-		"AGENTSDK_TEST_MIGRATIONS=1",
-	}
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start agent: %v", err)
-	}
-	defer cmd.Process.Kill()
-
-	// Poll /health until it responds or times out.
-	healthURL := fmt.Sprintf("http://%s/health", addr)
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		resp, err := http.Get(healthURL)
-		if err != nil {
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
-		var body struct {
-			Status string `json:"status"`
-		}
-		json.NewDecoder(resp.Body).Decode(&body)
-		resp.Body.Close()
-		if body.Status != "ok" {
-			t.Fatalf("expected status ok, got %q", body.Status)
-		}
-		return // success
-	}
-	t.Fatal("agent did not start within 5 seconds")
-}
-
-func writeIntegrationFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func freePort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	command := exec.Command(binary)
+	command.Env = append(env, "AIRLOCK_AGENT_MODE=manifest")
+	output, err := command.Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port
+	var manifest wire.AgentManifest
+	if err := json.Unmarshal(output, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := wire.CheckAppRuntimeProtocol(manifest.RuntimeProtocol); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Routes) == 0 || len(manifest.StaticAssets) == 0 {
+		t.Fatal("offline scaffold omitted app declarations")
+	}
 }

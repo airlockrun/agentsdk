@@ -1,3 +1,5 @@
+//go:build airlockplatformintegration
+
 package buildconfig
 
 import (
@@ -15,14 +17,11 @@ import (
 )
 
 func TestRuntimeFilesDockerRecipe(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping Docker integration test in short mode")
-	}
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skip("docker is unavailable")
+		t.Fatal("explicit platform image verification requires Docker")
 	}
 	if err := exec.Command("docker", "info").Run(); err != nil {
-		t.Skip("docker daemon is unavailable")
+		t.Fatal("explicit platform image verification requires a Docker daemon")
 	}
 
 	contextDir := t.TempDir()

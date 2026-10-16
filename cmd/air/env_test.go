@@ -28,7 +28,7 @@ func TestCmdEnvList(t *testing.T) {
 	})
 	defer server.Close()
 
-	output := captureCommandStdout(t, func() error { return cmdEnv([]string{"list"}) })
+	output := captureCommandStdout(t, func() error { return cmdEnv([]string{"list", "--target", "production"}) })
 	for _, want := range []string{"SLUG", "DEFAULT", "PATTERN", "VALUE", "API_TOKEN", "Private token", "GREETING", "hello wide world", "Greeting text"} {
 		if !strings.Contains(output, want) {
 			t.Errorf("env list output missing %q:\n%s", want, output)
@@ -73,7 +73,7 @@ func TestCmdEnvGet(t *testing.T) {
 		})
 		defer server.Close()
 
-		output := captureCommandStdout(t, func() error { return cmdEnv([]string{"get", "GREETING"}) })
+		output := captureCommandStdout(t, func() error { return cmdEnv([]string{"get", "GREETING", "--target", "production"}) })
 		if output != "hello wide world\n" {
 			t.Fatalf("env get output = %q", output)
 		}
@@ -85,7 +85,7 @@ func TestCmdEnvGet(t *testing.T) {
 		})
 		defer server.Close()
 
-		output, err := captureCommandStdoutResult(t, func() error { return cmdEnv([]string{"get", "API_TOKEN"}) })
+		output, err := captureCommandStdoutResult(t, func() error { return cmdEnv([]string{"get", "API_TOKEN", "--target", "production"}) })
 		if err == nil || !strings.Contains(err.Error(), "is secret") {
 			t.Fatalf("env get error = %v", err)
 		}
@@ -100,7 +100,7 @@ func TestCmdEnvGet(t *testing.T) {
 		})
 		defer server.Close()
 
-		output := captureCommandStdout(t, func() error { return cmdEnv([]string{"get", "GREETING"}) })
+		output := captureCommandStdout(t, func() error { return cmdEnv([]string{"get", "GREETING", "--target", "production"}) })
 		if output != "hello\n" {
 			t.Fatalf("env get default output = %q", output)
 		}
@@ -126,7 +126,7 @@ func TestCmdEnvSetValueBeginningWithDashes(t *testing.T) {
 	defer server.Close()
 
 	output := captureCommandStdout(t, func() error {
-		return cmdEnv([]string{"set", "OPTIONS", "--", "--verbose"})
+		return cmdEnv([]string{"set", "OPTIONS", "--target", "production", "--", "--verbose"})
 	})
 	if output != "Set OPTIONS\n" {
 		t.Fatalf("env set output = %q", output)
@@ -161,12 +161,12 @@ func TestCmdEnvSetAndClear(t *testing.T) {
 	defer server.Close()
 
 	output := captureCommandStdout(t, func() error {
-		return cmdEnv([]string{"set", "GREETING", "hello wide world"})
+		return cmdEnv([]string{"set", "GREETING", "hello wide world", "--target", "production"})
 	})
 	if output != "Set GREETING\n" || strings.Contains(output, "hello wide world") {
 		t.Fatalf("env set output = %q", output)
 	}
-	output = captureCommandStdout(t, func() error { return cmdEnv([]string{"clear", "GREETING"}) })
+	output = captureCommandStdout(t, func() error { return cmdEnv([]string{"clear", "GREETING", "--target", "production"}) })
 	if output != "Cleared GREETING\n" {
 		t.Fatalf("env clear output = %q", output)
 	}
@@ -200,7 +200,7 @@ func TestCmdEnvValidatesDeclarationBeforeMutation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := cmdEnv(tt.args)
+			err := cmdEnv(append(tt.args, "--target", "production"))
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("cmdEnv error = %v, want %q", err, tt.want)
 			}
@@ -227,7 +227,7 @@ func setupEnvCommand(t *testing.T, envHandler http.HandlerFunc) *httptest.Server
 	t.Setenv("AIRLOCK_AGENT_ID", "")
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/agents/"+envTestAgentID {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"agent":{"id":"` + envTestAgentID + `","slug":"test-agent"}}`))

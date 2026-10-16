@@ -12,7 +12,6 @@ import (
 
 	"github.com/airlockrun/agentsdk"
 	"github.com/airlockrun/agentsdk/scaffold"
-	"github.com/airlockrun/agentsdk/wire"
 )
 
 func TestDeployUpdateAgentBaseImage(t *testing.T) {
@@ -70,60 +69,37 @@ func TestDeployValidatesRuntimeFilesBeforeUpload(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
 	mustWrite(t, filepath.Join(dir, "airlock.toml"), "[build]\nruntime_files = [\"missing\"]\n")
-	err := cmdDeploy([]string{dir, "-m", "test invalid manifest"})
+	err := cmdDeploy([]string{dir, "--target", "preview", "-m", "test invalid manifest"})
 	if err == nil || !strings.Contains(err.Error(), "runtime files") || !strings.Contains(err.Error(), "does not exist") {
 		t.Fatalf("cmdDeploy() error = %v", err)
 	}
 }
 
-func TestHostedDeployRequiresExactApprovalEnvironment(t *testing.T) {
-	t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", "11111111-1111-1111-1111-111111111111")
-	t.Setenv("AIRLOCK_DEPLOY_APPROVED", "")
-	err := cmdDeploy([]string{"-m", "Deploy"})
-	if err == nil || !strings.Contains(err.Error(), "request_permission=true") {
-		t.Fatalf("cmdDeploy() error = %v", err)
-	}
-
-	t.Setenv("AIRLOCK_DEPLOY_APPROVED", "1")
-	err = cmdDeploy([]string{"-m", "Deploy"})
-	if err == nil || strings.Contains(err.Error(), "request_permission=true") {
-		t.Fatalf("approved cmdDeploy() error = %v", err)
-	}
-}
-
-func TestHydrateDeveloperSource(t *testing.T) {
-	version := wire.SourceVersion{Revision: "11111111-1111-1111-1111-111111111111", Generation: 3}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodHead || r.URL.Path != "/api/v1/agents/22222222-2222-2222-2222-222222222222/source" {
-			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
-		}
-		w.Header().Set("ETag", quoteETag(version.ETag()))
-		w.Header().Set(wire.SourceStateHeader, "sha256:source")
-	}))
-	defer server.Close()
-	remote := agentRemoteBinding{
-		AgentID:     "22222222-2222-2222-2222-222222222222",
-		SourceState: "sha256:source-from-agent",
-	}
-
-	if err := hydrateDeveloperSource(t.Context(), server.URL, "token", &remote); err != nil {
-		t.Fatal(err)
-	}
-	if remote.SourceState != "sha256:source" || remote.SourceETag != version.ETag() {
-		t.Fatalf("remote = %+v", remote)
-	}
-}
-
-func TestHydrateDeveloperSourceAllowsDraft(t *testing.T) {
-	server := httptest.NewServer(http.NotFoundHandler())
-	defer server.Close()
-	remote := agentRemoteBinding{AgentID: "22222222-2222-2222-2222-222222222222"}
-
-	if err := hydrateDeveloperSource(t.Context(), server.URL, "token", &remote); err != nil {
-		t.Fatal(err)
-	}
-	if remote.SourceState != "" || remote.SourceETag != "" {
-		t.Fatalf("remote = %+v", remote)
+func TestHostedDeployRequiresLogicalTargetAdmission(t *testing.T) {
+	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
+	t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", previewWorkspaceID)
+	t.Setenv("AIRLOCK_APP_ID", "")
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "go.mod"), "module test\n")
+	for _, tc := range []struct {
+		name string
+		run  func([]string) error
+	}{
+		{name: "deploy", run: cmdDeploy},
+		{name: "preview", run: cmdPreview},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AIRLOCK_DEPLOY_APPROVED", "")
+			err := tc.run([]string{dir, "-m", "Deploy"})
+			if err == nil || !strings.Contains(err.Error(), "hosted developer deployment requires approval") {
+				t.Fatalf("unapproved command error = %v", err)
+			}
+			t.Setenv("AIRLOCK_DEPLOY_APPROVED", "1")
+			err = tc.run([]string{dir, "-m", "Deploy"})
+			if err == nil || !strings.Contains(err.Error(), "hosted deployment requires exact app/runtime/target/developer-session coordinates") {
+				t.Fatalf("approved command must validate hosted coordinates: %v", err)
+			}
+		})
 	}
 }
 
@@ -144,45 +120,6 @@ func TestSetDeveloperDeploymentHeadersRequiresExactRun(t *testing.T) {
 	t.Setenv("AIRLOCK_DEVELOPER_RUN_ID", "")
 	if err := setDeveloperDeploymentHeaders(httptest.NewRequest(http.MethodPut, "/", nil)); err == nil {
 		t.Fatal("missing developer run ID was accepted")
-	}
-}
-
-func TestReconcilePendingDeploymentRefreshesCanonicalBinding(t *testing.T) {
-	const (
-		agentID = "11111111-1111-1111-1111-111111111111"
-		taskID  = "22222222-2222-2222-2222-222222222222"
-		state   = "sha256:candidate"
-		etag    = "airlock-source-v1:33333333-3333-3333-3333-333333333333:7"
-	)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/tasks/" + taskID:
-			fmt.Fprintf(w, `{"id":"task:%s","kind":"upgrade","status":"succeeded"}`, taskID)
-		case "/api/v1/agents/" + agentID + "/source":
-			w.Header().Set("ETag", `"`+etag+`"`)
-			w.Header().Set("X-Airlock-Source-State", state)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-	dir := t.TempDir()
-	binding := agentBinding{}
-	remote := agentRemoteBinding{AirlockURL: srv.URL, AgentID: agentID, SourceETag: "old", SourceState: "sha256:old", PendingTask: taskID, PendingSourceState: state}
-	binding.putRemote("prod", remote)
-	if err := writeAgentBinding(dir, binding); err != nil {
-		t.Fatal(err)
-	}
-	if err := reconcilePendingDeployment(t.Context(), dir, "prod", &binding, &remote, srv.URL, "token"); err != nil {
-		t.Fatal(err)
-	}
-	got, _, err := loadAgentBinding(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	updated, _ := got.remote("prod")
-	if updated.SourceState != state || updated.SourceETag != etag || updated.PendingTask != "" || updated.PendingSourceState != "" {
-		t.Fatalf("binding = %+v", updated)
 	}
 }
 
@@ -265,7 +202,7 @@ func TestCmdDeployExplainsUnavailableBoundAgent(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			err := cmdDeploy([]string{dir, "--remote", "prod", "-m", "Deploy changes"})
+			err := cmdDeploy([]string{dir, "--target", "production", "--remote", "prod", "-m", "Deploy changes"})
 			if err == nil {
 				t.Fatal("cmdDeploy returned nil error")
 			}
@@ -381,7 +318,7 @@ func TestUploadSourcePreservesDeployStatus(t *testing.T) {
 				_, _ = w.Write([]byte(`{"error":"deployment refused"}`))
 			}))
 			defer srv.Close()
-			_, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, "", "Deploy")
+			_, err := uploadSource(context.Background(), srv.URL, "token", "/api/v1/agents/agent/source", dir, "", "Deploy", "")
 			if !hasHTTPStatus(err, code) {
 				t.Fatalf("uploadSource error = %v, want HTTP %d", err, code)
 			}
@@ -398,7 +335,7 @@ func TestUploadSourceDistinguishesPreconditionStatus(t *testing.T) {
 				w.WriteHeader(code)
 			}))
 			defer srv.Close()
-			_, err := uploadSource(context.Background(), srv.URL, "token", "agent", dir, "", "Deploy")
+			_, err := uploadSource(context.Background(), srv.URL, "token", "/api/v1/agents/agent/source", dir, "", "Deploy", "")
 			stale, ok := err.(*staleSourceError)
 			if !ok {
 				t.Fatalf("uploadSource error = %T %v", err, err)

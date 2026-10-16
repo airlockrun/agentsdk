@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -91,7 +90,7 @@ func TestDeployBuildCommands(t *testing.T) {
 			t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
 			var paths []string
 			prefix := "/api/v1/agents/" + testBuildAgentID
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.URL.RequestURI())
 				if r.Method != "GET" || r.Header.Get("Authorization") != "Bearer "+testAccessToken {
 					t.Errorf("request: %s %s auth=%s", r.Method, r.URL, r.Header.Get("Authorization"))
@@ -132,7 +131,7 @@ func TestDeployBuildCommands(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			args := append([]string{tt.command, dir, "--remote", "prod"}, tt.flags...)
+			args := append([]string{tt.command, dir, "--remote", "prod", "--target", "production"}, tt.flags...)
 			output, err := captureCommandStdoutResult(t, func() error { return cmdDeploy(args) })
 			if tt.wantErr == "" {
 				if err != nil {
@@ -198,7 +197,7 @@ func TestDeployStatusClearsFailedPendingTask(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
 	const taskID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.Header.Get("Authorization") != "Bearer "+testAccessToken {
 			t.Errorf("request: %s %s auth=%s", r.Method, r.URL, r.Header.Get("Authorization"))
 		}
@@ -221,12 +220,12 @@ func TestDeployStatusClearsFailedPendingTask(t *testing.T) {
 	binding := agentBinding{}
 	binding.putRemote("prod", agentRemoteBinding{
 		AirlockURL: srv.URL, AgentID: testBuildAgentID, Slug: "todo",
-		SourceState: "sha256:old", SourceETag: "old", PendingTask: taskID, PendingSourceState: "sha256:new",
+		Targets: map[string]targetSourceBinding{testBuildAgentID: {Name: "production", SourceState: "sha256:old", SourceETag: "old", PendingTask: taskID, PendingSourceState: "sha256:new"}},
 	})
 	if err := writeAgentBinding(dir, binding); err != nil {
 		t.Fatal(err)
 	}
-	_, err := captureCommandStdoutResult(t, func() error { return cmdDeploy([]string{"status", dir, "--remote", "prod"}) })
+	_, err := captureCommandStdoutResult(t, func() error { return cmdDeploy([]string{"status", dir, "--remote", "prod", "--target", "production"}) })
 	if err == nil || !strings.Contains(err.Error(), taskID+" failed: compile failed") {
 		t.Fatalf("error = %v", err)
 	}
@@ -235,7 +234,8 @@ func TestDeployStatusClearsFailedPendingTask(t *testing.T) {
 		t.Fatalf("load binding: ok=%v err=%v", ok, err)
 	}
 	remote, _ := updated.remote("prod")
-	if remote.PendingTask != "" || remote.PendingSourceState != "" || remote.SourceState != "sha256:old" || remote.SourceETag != "old" {
+	state := remote.Targets[testBuildAgentID]
+	if state.PendingTask != "" || state.PendingSourceState != "" || state.SourceState != "sha256:old" || state.SourceETag != "old" {
 		t.Fatalf("unexpected binding after failed task: %+v", remote)
 	}
 }
@@ -248,7 +248,7 @@ func TestDeployBuildWatch(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			lists, details := 0, 0
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Header.Get("Authorization") != "Bearer "+testAccessToken || r.Method != "GET" {
 					t.Errorf("bad request %s", r.URL)
 				}
@@ -282,7 +282,7 @@ func TestDeployBuildWatch(t *testing.T) {
 				t.Fatal(err)
 			}
 			output, err := captureCommandStdoutResult(t, func() error {
-				return runDeployBuilds(ctx, "status", deployBuildFlags{dir: t.TempDir(), url: srv.URL, agent: "todo", watch: true, logs: true, limit: 10}, time.Millisecond)
+				return runDeployBuilds(ctx, "status", deployBuildFlags{dir: t.TempDir(), url: srv.URL, agent: "todo", target: "production", watch: true, logs: true, limit: 10}, time.Millisecond)
 			})
 			if terminal == "cancel" {
 				if !errors.Is(err, context.Canceled) {
@@ -317,7 +317,7 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 	}{
 		{name: "bound default"},
 		{name: "matching slug", agent: "todo"},
-		{name: "conflicting slug", agent: "other", wantErr: "is bound to agent"},
+		{name: "explicit other app", agent: "other"},
 		{name: "conflicting URL", wantErr: "is bound to"},
 		{name: "missing login", wantErr: "not logged in"},
 		{name: "integration token", wantErr: "integration token"},
@@ -333,7 +333,7 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 			t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
 			var paths []string
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			srv := newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				paths = append(paths, r.URL.Path)
 				if r.URL.Path == "/auth/refresh" {
 					if tt.name != "refresh" || r.Method != "POST" {
@@ -362,7 +362,7 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 					fmt.Fprintf(w, `{"agent":{"id":%q,"slug":"todo"}}`, testBuildAgentID)
 				case "/api/v1/agents":
 					fmt.Fprintf(w, `{"agents":[{"id":%q,"slug":"todo"},{"id":%q,"slug":"other"}]}`, testBuildAgentID, otherID)
-				case "/api/v1/agents/" + testBuildAgentID + "/builds/" + testBuildID:
+				case "/api/v1/agents/" + testBuildAgentID + "/builds/" + testBuildID, "/api/v1/agents/" + otherID + "/builds/" + testBuildID:
 					if tt.code != 0 {
 						w.WriteHeader(tt.code)
 						fmt.Fprint(w, `{"error":"denied"}`)
@@ -373,6 +373,9 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 						return
 					}
 					buildID, agentID := testBuildID, testBuildAgentID
+					if tt.name == "explicit other app" {
+						agentID = otherID
+					}
 					if tt.name == "wrong build" {
 						buildID = otherID
 					}
@@ -405,7 +408,7 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 			if err := writeAgentBinding(dir, binding); err != nil {
 				t.Fatal(err)
 			}
-			args := []string{"status", dir, "--build", testBuildID, "--watch"}
+			args := []string{"status", dir, "--target", "production", "--build", testBuildID, "--watch"}
 			if tt.agent != "" {
 				args = append(args, "--agent", tt.agent)
 			}
@@ -431,8 +434,11 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 					t.Fatalf("unexpected requests: %v", paths)
 				}
 			}
-			if tt.name == "conflicting slug" && !reflect.DeepEqual(paths, []string{"/api/v1/agents"}) {
-				t.Fatalf("conflict made build requests: %v", paths)
+			if tt.name == "explicit other app" {
+				actual, _, err := loadAgentBinding(dir)
+				if err != nil || actual.Remotes["prod"].AgentID != testBuildAgentID {
+					t.Fatal("explicit app selection rebound default logical app")
+				}
 			}
 			if tt.name == "refresh" {
 				creds, err := loadCredentials()
@@ -452,7 +458,7 @@ func TestDeploySubcommandRoutingPreservesUploads(t *testing.T) {
 		{"-m", "list", "repo"}, {"repo", "--message", "status"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			err := cmdDeploy(args)
+			err := cmdDeploy(append(args, "--target", "production"))
 			if err == nil || !strings.Contains(err.Error(), "deploy requires an agent repo with go.mod") {
 				t.Fatalf("not routed to upload: %v", err)
 			}
@@ -480,7 +486,7 @@ func TestPrintBuildLogSnapshots(t *testing.T) {
 func TestDeployBuildWatchCancelsPollWait(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newProductionTargetServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/agents/" + testBuildAgentID:
 			fmt.Fprintf(w, `{"agent":{"id":%q,"slug":"todo"}}`, testBuildAgentID)
@@ -498,7 +504,7 @@ func TestDeployBuildWatchCancelsPollWait(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 	out, err := captureCommandStdoutResult(t, func() error {
-		return runDeployBuilds(ctx, "status", deployBuildFlags{dir: t.TempDir(), url: srv.URL, agent: testBuildAgentID, build: testBuildID, watch: true}, time.Hour)
+		return runDeployBuilds(ctx, "status", deployBuildFlags{dir: t.TempDir(), url: srv.URL, target: "production", agent: testBuildAgentID, build: testBuildID, watch: true}, time.Hour)
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v", err)

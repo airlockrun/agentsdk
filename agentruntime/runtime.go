@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/airlockrun/agentsdk/chatruntime"
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai"
 	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/stream"
@@ -16,7 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Run advances a durable task until typed completion, parking, or failure. A
+// Run advances a durable task until submission, a completed question, parking, or failure. A
 // resumed batch never asks the model to regenerate already captured calls.
 func Run(ctx context.Context, in Input) (result *Result, err error) {
 	if in.Model == nil || in.Store == nil || in.Backend == nil || in.ExecutorFactory == nil || in.Controller == nil || in.Sink == nil || in.Redactor == nil {
@@ -83,7 +84,7 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 		if strings.TrimSpace(in.Message) == "" {
 			return nil, errors.New("agentruntime: a fresh run requires Message")
 		}
-		cp = &Checkpoint{Version: 1, ContractHash: in.Definition.ContractHash}
+		cp = &Checkpoint{Version: 2, ContractHash: in.Definition.ContractHash}
 		if err := save(PhaseReady, session.Message{Role: "user", Content: in.Redactor(in.Message)}); err != nil {
 			return nil, err
 		}
@@ -94,6 +95,9 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 		cp.Append = nil
 		if cp.Phase == PhaseCompleted {
 			return &Result{Reply: cp.Reply}, nil
+		}
+		if cp.Phase == PhaseSubmitted {
+			return &Result{Reply: cp.Reply, Submitted: true}, nil
 		}
 		if in.RecoveryNotice != "" {
 			// Keep tool-call/result messages contiguous. Host notices are delivered
@@ -108,7 +112,7 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 		if cp.Phase == PhaseDispatch {
 			call := cp.Calls[cp.Next]
 			_, spawn := spawns[call.Name]
-			if !spawn && call.Name != "continue_agent" && call.Name != "wait_calls" && call.Name != "complete" {
+			if !spawn && call.Name != "continue_agent" && call.Name != "wait_calls" && call.Name != "submit" {
 				out := message.ErrorTextOutput{Value: "Recovery notice: interrupted tool " + call.Name + " (" + call.ID + ") has an unknown outcome. Its side effects may have occurred. It was not retried. JavaScript state is empty; do not automatically repeat this effect."}
 				msg := session.FromGoAIMessage(message.NewToolMessage(call.ID, call.Name, out))
 				msg.ID = uuid.NewString()
@@ -148,9 +152,17 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 			if err := in.Controller.BeforeModel(ctx); err != nil {
 				return nil, err
 			}
+			model := &modelCapture{
+				Model: in.Model, before: in.Controller.BeforeModel, backoff: modelStreamBackoff,
+				firstReserved: true,
+				failed: func(ctx context.Context, failure ModelStreamFailure) error {
+					cp.ModelStreamFailures = append(cp.ModelStreamFailures, failure)
+					return save(PhaseModel)
+				},
+			}
 			var response []session.Message
 			generated, err := goai.StreamText(ctx, stream.Input{
-				Model: in.Model, Messages: session.MessagesToGoAI(redactMessages(history, in.Redactor)), Instructions: prompt,
+				Model: model, Messages: session.MessagesToGoAI(redactMessages(history, in.Redactor)), Instructions: prompt,
 				Tools: capture, ToolChoice: "required", MaxSteps: 1, MaxRetries: 0, MaxRetriesSet: true,
 				OnStepEnd: func(step stream.StepResultData) {
 					response = session.FromGoAIMessages(step.(*goai.StepResult).Response.Messages)
@@ -255,13 +267,15 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 			phase := PhaseTools
 			if reply != nil {
 				cp.Reply, phase = reply, PhaseCompleted
-				for cp.Next < len(cp.Calls) {
-					skipped := cp.Calls[cp.Next]
-					m := session.FromGoAIMessage(message.NewToolMessage(skipped.ID, skipped.Name, message.ExecutionDeniedOutput{Reason: "Not executed: the run completed earlier in this batch."}))
+				if reply.Kind == "output" {
+					phase = PhaseSubmitted
+				}
+				for i := cp.Next; i < len(cp.Calls); i++ {
+					skipped := cp.Calls[i]
+					m := session.FromGoAIMessage(message.NewToolMessage(skipped.ID, skipped.Name, message.ExecutionDeniedOutput{Reason: "Not executed: the run submitted earlier in this batch."}))
 					m.ID = uuid.NewString()
-					cp.Calls[cp.Next].Result = &m
+					cp.Calls[i].Result = &m
 					pending = append(pending, m)
-					cp.Next++
 				}
 			}
 			if err := save(phase, pending...); err != nil {
@@ -269,12 +283,12 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 			}
 			in.Sink.OnToolResult(stream.ToolResultEvent{ToolCallID: call.ID, ToolName: call.Name, Input: redactJSON(call.Input, in.Redactor), Output: output})
 			if reply != nil {
-				return &Result{Reply: reply}, nil
+				return &Result{Reply: reply, Submitted: phase == PhaseSubmitted}, nil
 			}
 		}
 		var reminder []session.Message
 		if len(cp.Calls) == 0 {
-			reminder = []session.Message{{Role: "user", Content: "The run is not complete. Call complete with a typed output or a needs_input question."}}
+			reminder = []session.Message{{Role: "user", Content: "Call submit with a typed output or a needs_input question."}}
 		}
 		if err := save(PhaseReady, reminder...); err != nil {
 			return nil, err
@@ -283,7 +297,7 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 }
 
 func validateCheckpoint(cp *Checkpoint, hash string) error {
-	if cp.Version != 1 || cp.Revision < 1 || cp.ContractHash != hash || cp.Next < 0 || cp.Next > len(cp.Calls) {
+	if (cp.Version != 2 && !(cp.Version == 1 && cp.Phase == PhaseCompleted)) || cp.Revision < 1 || cp.ContractHash != hash || cp.Next < 0 || cp.Next > len(cp.Calls) {
 		return errors.New("agentruntime: invalid or incompatible checkpoint")
 	}
 	switch cp.Phase {
@@ -302,8 +316,19 @@ func validateCheckpoint(cp *Checkpoint, hash string) error {
 			return errors.New("agentruntime: waiting checkpoint is not a wait call")
 		}
 	case PhaseCompleted:
-		if cp.Reply == nil || cp.Next != len(cp.Calls) {
+		if cp.Reply == nil || cp.Next == 0 || (cp.Version == 2 && cp.Reply.Kind != "needs_input") {
 			return errors.New("agentruntime: incomplete completion checkpoint")
+		}
+	case PhaseSubmitted:
+		if cp.Reply == nil || cp.Reply.Kind != "output" || cp.Next == 0 || cp.Calls[cp.Next-1].Name != "submit" {
+			return errors.New("agentruntime: invalid submission checkpoint")
+		}
+		if err := validateJSON(json.RawMessage(`{"type":"object"}`), cp.Calls[cp.Next-1].Input); err != nil {
+			return err
+		}
+		var draft wire.AgentReply
+		if err := decode(cp.Calls[cp.Next-1].Input, &draft); err != nil || draft.Kind != "output" || string(draft.Output) != string(cp.Reply.Output) {
+			return errors.New("agentruntime: submission does not match its captured call")
 		}
 	default:
 		return fmt.Errorf("agentruntime: unknown checkpoint phase %q", cp.Phase)
@@ -317,7 +342,8 @@ func validateCheckpoint(cp *Checkpoint, hash string) error {
 	}
 	batch := map[string]bool{}
 	for i, call := range cp.Calls {
-		if !seen[call.ID] || batch[call.ID] || !json.Valid(call.Input) || (i < cp.Next) != (call.Result != nil) {
+		settled := cp.Phase == PhaseSubmitted || cp.Phase == PhaseCompleted
+		if !seen[call.ID] || batch[call.ID] || !json.Valid(call.Input) || (settled || i < cp.Next) != (call.Result != nil) {
 			return errors.New("agentruntime: invalid checkpoint call journal")
 		}
 		batch[call.ID] = true

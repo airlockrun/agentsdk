@@ -31,7 +31,7 @@ func TestHostedTaskLifecycleRequiresRunAgent(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != http.StatusNotImplemented || !strings.Contains(string(body), "agenttest.RunAgent") {
+			if resp.StatusCode != http.StatusNotImplemented || !strings.Contains(string(body), "real Airlock") {
 				t.Fatalf("response = %d %s", resp.StatusCode, body)
 			}
 		})

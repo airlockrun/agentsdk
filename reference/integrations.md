@@ -26,7 +26,7 @@ still returns the auth assessment with an empty tool list.
 The other commands resolve a deployment target through
 `.airlock/local/agent.toml` for local development or the build-bound environment
 in hosted codegen. A named remote binds one Airlock URL and one stable agent ID,
-so one workspace can address production and development agents on the same or
+so one checkout can address production and development agents on the same or
 different instances:
 
 ```bash
@@ -42,6 +42,10 @@ can use `--remote dev` without repeating the URL or agent. Run
 default. An existing remote cannot be rebound to another URL or agent; use a
 different remote name so source synchronization state stays attached to one
 deployment target.
+
+User-authenticated app commands default to production. Add `--target preview` to
+use the saved preview for the selected app/remote. Hosted development commands
+default to the injected preview; `--target production` reaches existing host authorization.
 
 Airlock injects credentials for authenticated connection and MCP declarations.
 No-auth declarations use their fixed manifest endpoint directly and require no

@@ -97,25 +97,13 @@ compatible SDK. There is no mixed v1/v2 runtime compatibility mode.
 
 ## HTTP Tests
 
-`agenttest.New` installs `test-token` as the app credential. Send it explicitly
-for every non-health HTTP request, including public routes and assets:
+Direct handler/domain tests use `testutil.WithCaller(ctx, wire.Caller{...})` to
+inject validated in-process metadata. This is not authentication and does not
+cross a network boundary. Calling a handler directly is a unit test, not host
+HTTP admission verification.
 
-```go
-user := agentsdk.User{ID: "00000000-0000-0000-0000-000000000001"}
-req := httptest.NewRequest(http.MethodGet, "/", nil)
-req.Header.Set("Authorization", "Bearer test-token")
-req = req.WithContext(agenttest.WithUser(req.Context(), user))
-agenttest.SetCallerHeader(req)
-env.Agent.Handler().ServeHTTP(httptest.NewRecorder(), req)
-```
-
-`WithUser` and `WithCaller(ctx, user, access)` supply in-process human test
-attribution. Use `agenttest.WithCallerInfo` with an explicit `agenttest.CallerInfo`
-for anonymous/application tests; a plain context is not an anonymous fixture and
-caller lookup panics on missing state. See [Caller identity](caller.md) for helper
-examples. These helpers are not a bypass for delivery authentication.
-`agenttest.SetCallerHeader(req)` encodes the injected snapshot for SDK HTTP
-dispatch, including requests over an `httptest.NewServer` network boundary.
-Runtime invocation tests supply their scoped protocol body. Standalone listeners
-require their configured app token as well. Calling
-an application handler function directly is a unit test, not SDK HTTP ingress.
+Full HTTP integration uses `remote.TestClientFromEnvironment()` in a packaged
+real-host suite. Its opaque runner credential is accepted only on its exact test
+namespace; host admission supplies the real runtime credential, caller snapshot,
+receipt and revision ceiling. Tests never manufacture app tokens/caller headers.
+Standalone SDK listeners retain their normal required runtime credentials.

@@ -261,7 +261,7 @@ func batch(calls ...stream.Event) []stream.Event {
 	return append(calls, stream.Event{Type: stream.EventFinish, Data: stream.FinishEvent{FinishReason: stream.FinishReasonToolCalls, Usage: testutil.MockUsage(10, 10)}})
 }
 func complete(id string) stream.Event {
-	return call(id, "complete", `{"kind":"output","output":{"answer":42}}`)
+	return call(id, "submit", `{"kind":"output","output":{"answer":42}}`)
 }
 func js(id string) stream.Event {
 	return call(id, "run_js", `{"code":"return 42;","description":"Calculate"}`)
@@ -276,7 +276,7 @@ func TestRunCompletionAndOrderedTail(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			finish := complete("done")
 			if kind == "needs_input" {
-				finish = call("done", "complete", `{"kind":"needs_input","question":"Which account?"}`)
+				finish = call("done", "submit", `{"kind":"needs_input","question":"Which account?"}`)
 			}
 			in, model := input(batch(call("inspect", "get_calls", `{"ids":["child"]}`), finish, js("never")))
 			result, err := Run(t.Context(), in)
@@ -288,7 +288,11 @@ func TestRunCompletionAndOrderedTail(t *testing.T) {
 				t.Fatal(c.log)
 			}
 			cp, _ := store.LoadCheckpoint(t.Context())
-			if cp.Phase != PhaseCompleted || cp.Next != 3 || len(cp.Response) == 0 || cp.Calls[2].Result.Parts[0].Tool.Outcome != "denied" {
+			phase := PhaseCompleted
+			if kind == "output" {
+				phase = PhaseSubmitted
+			}
+			if cp.Phase != phase || cp.Next != 2 || result.Submitted != (kind == "output") || len(cp.Response) == 0 || cp.Calls[2].Result.Parts[0].Tool.Outcome != "denied" {
 				t.Fatalf("checkpoint=%+v", cp)
 			}
 			for _, msg := range store.messages {
@@ -300,6 +304,38 @@ func TestRunCompletionAndOrderedTail(t *testing.T) {
 			result, err = Run(t.Context(), in)
 			if err != nil || result.Reply.Kind != kind || len(model.Requests()) != 1 || len(store.messages) != count || c.completeCalls != 1 {
 				t.Fatalf("completed replay=%+v %v", result, err)
+			}
+		})
+	}
+}
+
+func TestSubmittedArtifactDraftRecovery(t *testing.T) {
+	in, model := input(batch(call("submission", "submit", `{"kind":"output","output":{"answer":42},"artifacts":[{"path":"reports/result.json","contentId":"expected"}]}`), js("denied")))
+	store := in.Store.(*memoryStore)
+	store.fail = func(cp *Checkpoint) bool { return cp.Phase == PhaseSubmitted }
+	store.failAfter = true
+	if _, err := Run(t.Context(), in); !errors.Is(err, errCrash) {
+		t.Fatalf("lost ack error=%v", err)
+	}
+	result, err := Run(t.Context(), in)
+	cp, _ := store.LoadCheckpoint(t.Context())
+	if err != nil || !result.Submitted || cp.Version != 2 || cp.Next != 1 || cp.Calls[cp.Next-1].ID != "submission" || result.Reply.Artifacts[0].ContentID != "expected" || len(model.Requests()) != 1 || in.Controller.(*controller).completeCalls != 1 || cp.Calls[1].Result.Parts[0].Tool.Outcome != "denied" {
+		t.Fatalf("result=%+v cp=%+v err=%v", result, cp, err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*Checkpoint)
+	}{
+		{"no submit", func(cp *Checkpoint) { cp.Calls[0].Name = "run_js" }},
+		{"no cursor", func(cp *Checkpoint) { cp.Next = 0 }},
+		{"changed output", func(cp *Checkpoint) { cp.Reply.Output = json.RawMessage(`{"answer":99}`) }},
+		{"missing denied tail", func(cp *Checkpoint) { cp.Calls[1].Result = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bad := clone(cp)
+			tc.edit(bad)
+			if err := validateCheckpoint(bad, in.Definition.ContractHash); err == nil {
+				t.Fatal("corrupt submitted journal accepted")
 			}
 		})
 	}
@@ -317,7 +353,7 @@ func TestRunCleanupFailurePreservesExecutionOutcome(t *testing.T) {
 		completed  bool
 	}{
 		{name: "completed output", last: complete("done"), completed: true},
-		{name: "completed needs input", last: call("done", "complete", `{"kind":"needs_input","question":"Which account?"}`), completed: true},
+		{name: "completed needs input", last: call("done", "submit", `{"kind":"needs_input","question":"Which account?"}`), completed: true},
 		{name: "waiting", last: call("wait", "wait_calls", `{"ids":["child"],"mode":"all"}`), waiting: true},
 		{name: "execution failure", last: complete("done"), failure: fatalError{errCrash}},
 		{name: "completion commit rejected", last: complete("done"), failCommit: true},
@@ -328,7 +364,7 @@ func TestRunCleanupFailurePreservesExecutionOutcome(t *testing.T) {
 			store, control := in.Store.(*memoryStore), in.Controller.(*controller)
 			control.waiting, control.completeErr = tc.waiting, tc.failure
 			if tc.failCommit {
-				store.fail = func(cp *Checkpoint) bool { return cp.Phase == PhaseCompleted }
+				store.fail = func(cp *Checkpoint) bool { return cp.Phase == PhaseCompleted || cp.Phase == PhaseSubmitted }
 				store.failAfter = tc.commitAck
 			}
 			e := &executor{closeErr: cleanupErr}
@@ -338,7 +374,7 @@ func TestRunCleanupFailurePreservesExecutionOutcome(t *testing.T) {
 				t.Fatalf("executor=%+v model calls=%d", e, len(model.Requests()))
 			}
 			cp, loadErr := store.LoadCheckpoint(t.Context())
-			if loadErr != nil || (cp.Phase == PhaseCompleted) != tc.completed {
+			if loadErr != nil || (cp.Phase == PhaseCompleted || cp.Phase == PhaseSubmitted) != tc.completed {
 				t.Fatalf("checkpoint=%+v error=%v", cp, loadErr)
 			}
 			switch {
@@ -501,8 +537,8 @@ func TestRunCrashBoundaries(t *testing.T) {
 		{"predispatch committed", PhaseDispatch, 0, true, 0, true},
 		{"postresult uncommitted", PhaseTools, 1, false, 1, true},
 		{"postresult committed", PhaseTools, 1, true, 1, false},
-		{"completion uncommitted", PhaseCompleted, 2, false, 1, false},
-		{"completion committed", PhaseCompleted, 2, true, 1, false},
+		{"submission uncommitted", PhaseSubmitted, 2, false, 1, false},
+		{"submission committed", PhaseSubmitted, 2, true, 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, model := input(batch(js("effect"), complete("done")))
@@ -613,7 +649,7 @@ func TestRunDeterministicAdmissionRecovery(t *testing.T) {
 }
 
 func TestRunKnownToolErrorAndCompletionRejection(t *testing.T) {
-	in, model := input(batch(call("early", "complete", `{"kind":"output","output":{"answer":"bad"}}`), call("active", "complete", `{"kind":"output","output":{"answer":42}}`), call("cancel", "cancel_calls", `{"ids":["child"]}`), complete("done")))
+	in, model := input(batch(call("early", "submit", `{"kind":"output","output":{"answer":"bad"}}`), call("active", "submit", `{"kind":"output","output":{"answer":42}}`), call("cancel", "cancel_calls", `{"ids":["child"]}`), complete("done")))
 	c := in.Controller.(*controller)
 	c.completeErr = errors.New("active children remain")
 	c.check = func(name string) {
@@ -713,7 +749,7 @@ func TestRunJavaScriptControlIsolation(t *testing.T) {
 		return tool.Result{Output: `{"ok":true}`, Attachments: []tool.Attachment{{Data: "s3ref:/image.png", MimeType: "image/png"}}}, nil
 	})
 	e := &executor{execute: func(ctx context.Context, _ string, inv jsexec.Invoker) (jsexec.Result, error) {
-		for _, control := range []string{"complete", "spawn_research", "continue_agent", "get_calls", "wait_calls", "cancel_calls"} {
+		for _, control := range []string{"submit", "spawn_research", "continue_agent", "get_calls", "wait_calls", "cancel_calls"} {
 			if _, err := inv.Invoke(ctx, control, json.RawMessage(`[{}]`)); err == nil {
 				t.Errorf("control %s exposed to JS", control)
 			}
@@ -804,20 +840,32 @@ func TestCheckpointRejectsIncompatibleOrCorruptState(t *testing.T) {
 		name   string
 		mutate func(*Checkpoint)
 	}{
-		{"version", func(cp *Checkpoint) { cp.Version = 2 }}, {"contract", func(cp *Checkpoint) { cp.ContractHash = "different" }},
+		{"version", func(cp *Checkpoint) { cp.Version = 1 }}, {"contract", func(cp *Checkpoint) { cp.ContractHash = "different" }},
 		{"revision", func(cp *Checkpoint) { cp.Revision = 0 }}, {"phase", func(cp *Checkpoint) { cp.Phase = "yield" }},
 		{"missing pending", func(cp *Checkpoint) { cp.Phase = PhaseDispatch }}, {"missing reply", func(cp *Checkpoint) { cp.Phase = PhaseCompleted }},
 		{"cursor", func(cp *Checkpoint) { cp.Next = -1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, model := input(batch(complete("done")))
-			cp := &Checkpoint{Version: 1, Revision: 1, ContractHash: in.Definition.ContractHash, Phase: PhaseReady}
+			cp := &Checkpoint{Version: 2, Revision: 1, ContractHash: in.Definition.ContractHash, Phase: PhaseReady}
 			tc.mutate(cp)
 			in.Store.(*memoryStore).cp, _ = json.Marshal(cp)
 			if _, err := Run(t.Context(), in); err == nil || len(model.Requests()) != 0 {
 				t.Fatalf("error=%v calls=%d", err, len(model.Requests()))
 			}
 		})
+	}
+}
+
+func TestVersionOneCompletedCheckpointPreservesReply(t *testing.T) {
+	in, model := input()
+	cp := &Checkpoint{Version: 1, Revision: 5, ContractHash: in.Definition.ContractHash, Phase: PhaseCompleted, Next: 1, CallIDs: []string{"done"}, Reply: &wire.AgentReply{Kind: "output", Output: json.RawMessage(`{"answer":42}`)}}
+	result := session.Message{ID: "result", Role: "tool"}
+	cp.Calls = []Call{{ID: "done", Name: "complete", Input: json.RawMessage(`{"kind":"output","output":{"answer":42}}`), Result: &result}}
+	in.Store.(*memoryStore).cp, _ = json.Marshal(cp)
+	out, err := Run(t.Context(), in)
+	if err != nil || out == nil || out.Submitted || !reflect.DeepEqual(out.Reply, cp.Reply) || len(model.Requests()) != 0 || in.Controller.(*controller).completeCalls != 0 {
+		t.Fatalf("result=%+v err=%v", out, err)
 	}
 }
 
