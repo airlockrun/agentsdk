@@ -363,8 +363,13 @@ func (s *selectedDeployment) waitRunning(ctx context.Context, interval time.Dura
 }
 
 func (s selectedDeployment) print() error {
+	info := s.info
+	if info.EnvConfigurationState == "" {
+		info = proto.Clone(info).(*airlockv1.DeploymentInfo)
+		info.EnvConfigurationState = "unknown"
+	}
 	if s.flags.json {
-		raw, err := protoMarshal.Marshal(s.info)
+		raw, err := protoMarshal.Marshal(info)
 		if err != nil {
 			return err
 		}
@@ -378,11 +383,25 @@ func (s selectedDeployment) print() error {
 	if s.info.Running != nil {
 		running = fmt.Sprint(s.info.GetRunning())
 	}
-	fmt.Printf("Remote: %s (%s)\nApp: %s\nTarget: %s\nRuntime: %s\nOwner: %s\nStatus: %s\nRunning: %s\nRevision: %s\nURL: %s\n", s.remoteName, s.baseURL, s.app.AgentID, s.info.Name, s.info.Id, s.info.OwnerUserId, s.info.Status, running, s.info.SourceRevisionId, s.info.RouteBaseUrl)
+	fmt.Printf("Remote: %s (%s)\nApp: %s\nTarget: %s\nRuntime: %s\nOwner: %s\nStatus: %s\nRunning: %s\nRevision: %s\n", s.remoteName, s.baseURL, s.app.AgentID, s.info.Name, s.info.Id, s.info.OwnerUserId, s.info.Status, running, s.info.SourceRevisionId)
+	s.printAppURL()
+	restart := fmt.Sprint(info.RestartRequired)
+	if info.EnvConfigurationState == "unknown" {
+		restart = "unknown"
+	}
+	fmt.Printf("Environment configuration: %s\nRestart required: %s\n", safeTableCell(info.EnvConfigurationState), restart)
 	if s.info.OwnerWorkspaceId != "" {
 		fmt.Printf("Owner hosted workspace: %s\n", s.info.OwnerWorkspaceId)
 	}
 	return nil
+}
+
+func (s selectedDeployment) printAppURL() {
+	if s.info.RouteBaseUrl != "" {
+		fmt.Printf("App URL: %s\n", s.info.RouteBaseUrl)
+	} else {
+		fmt.Println("App URL: unavailable (server returned no route URL for this target)")
+	}
 }
 
 func cmdTargetLifecycle(action string, args []string) error {

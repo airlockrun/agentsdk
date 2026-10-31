@@ -3,8 +3,10 @@ package main
 import (
 	"agent/handlers"
 	"agent/views"
+	"agent/welcome"
 
 	"github.com/airlockrun/agentsdk"
+	"github.com/airlockrun/goai/tool"
 )
 
 func main() {
@@ -19,8 +21,12 @@ func main() {
 func newAgent() *agentsdk.Agent {
 	agent := agentsdk.New(agentsdk.Config{
 		Description: "New agent — update this description after implementation",
+		Icon:        "📦", // Choose an emoji that represents this app.
 	})
-	pages := handlers.New()
+	words := welcome.New(agent.DB(), agent.RegisterUIChangeTopic("welcome"))
+	pages := handlers.New(words)
+	agent.RegisterTool(tool.Typed[welcome.SetWordInput, welcome.WordOutput]("set_welcome_word").
+		Description("Set your welcome word").Execute(words.SetWordTool).Build(), agentsdk.AccessUser)
 
 	agent.RegisterRoute(&agentsdk.Route{
 		Method:      "GET",
@@ -29,6 +35,10 @@ func newAgent() *agentsdk.Agent {
 		Access:      agentsdk.AccessUser,
 		Description: "Default placeholder homepage — replace this once the agent has real routes",
 	})
+	agent.RegisterRoute(&agentsdk.Route{Method: "GET", Path: "/welcome/word", Handler: pages.Word,
+		Access: agentsdk.AccessUser, Description: "Welcome word fragment"})
+	agent.RegisterRoute(&agentsdk.Route{Method: "POST", Path: "/welcome/word", Handler: pages.SetWord,
+		Access: agentsdk.AccessUser, Description: "Set your welcome word"})
 
 	agent.RegisterStaticAsset(&agentsdk.StaticAsset{
 		Name:        views.AppCSSName,

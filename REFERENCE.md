@@ -39,7 +39,12 @@ triggers (webhooks/crons/bridges), and the per-agent Postgres schema.
 
 Read the relevant companion at its build-container path:
 
-- **[Local execution](reference/local-development.md)** (`/libs/agentsdk/reference/local-development.md`) — local runner and shared test runtime.
+- **[Suggested prompts](reference/suggested-prompts.md)** (`/libs/agentsdk/reference/suggested-prompts.md`) — add
+  **1–3 useful app-specific prompts** with `RegisterSuggestedPrompt(SuggestedPrompt{Title: ..., Prompt: ...})`.
+  Supported workflows in the app's language; editable copy, no automatic send.
+
+- **[Local development](reference/local-development.md)** (`/libs/agentsdk/reference/local-development.md`) — offline builds, generated files, deterministic tests and non-Go service packaging.
+- **[Environment configuration](reference/environment.md)** (`/libs/agentsdk/reference/environment.md`) — declared environment slots, immutable startup snapshots, and explicit target restarts.
 
 - **[Runtime ingress](reference/ingress.md)** (`/libs/agentsdk/reference/ingress.md`) - host delivery authentication, attribution, health/manifest exceptions, and HTTP tests.
 - **[Caller identity](reference/caller.md)** (`/libs/agentsdk/reference/caller.md`) - snapshots, origin, and test callers.
@@ -52,6 +57,7 @@ Read the relevant companion at its build-container path:
   connections and MCP servers without retrieving credentials.
 - **[Interactive authentication](reference/auth-web.md)** (`/libs/agentsdk/reference/auth-web.md`) — login flows (one-time
   code / password / click) driven from an admin web page, ending in `Seal`.
+- **[HTML UI](reference/html-ui.md)** (`/libs/agentsdk/reference/html-ui.md`) — `WebUI(WebUIOptions{})`, transactional `RegisterUIChangeTopic` invalidations, tiny live fragments, assets, themes, icons, and templ routes.
 - **[Database](reference/database.md)** (`/libs/agentsdk/reference/database.md`) — Postgres: goose migrations, sqlc
   queries, database-only Go migrations, build-time validation, and when to use jobs instead.
 - **[Connectors](reference/connectors.md)** (`/libs/agentsdk/reference/connectors.md`) — typed remote-machine
@@ -231,7 +237,7 @@ func (t *Tools) SearchTracks(ctx context.Context, in SearchIn) (SearchOut, error
 ```go
 agent := agentsdk.New(agentsdk.Config{
     Description: "What this agent does — shown to users in the UI", // required, panics if empty
-    Emoji:       "🎧",                                              // optional decorative glyph next to the agent in the UI; "" = none
+    Icon:        "🎧", // Choose an emoji that represents this app.
 })
 agent.Serve() // starts HTTP server, blocks until shutdown
 ```
@@ -245,7 +251,14 @@ execution in the hook context; use jobs for durable work.
 `AIRLOCK_AGENT_MODE=manifest` emits it offline; normally `Serve` freezes,
 starts, migrates, syncs, runs hooks, and serves.
 
-**Choosing `Emoji`:** every product on this platform is an agent, so the
+`Config.Icon` accepts one emoji today, including multi-codepoint sequences;
+image URLs, HTML, and icon-library names are not supported. Its generic name
+describes app identity independently of the supported representation. The
+canonical SDK manifest carries it as JSON `"icon"`. Empty or invalid declarations
+preserve the stored value during sync; apps without a stored value use the UI's
+generic app icon.
+
+**Choosing `Icon`:** every product on this platform is an agent, so the
 emoji must distinguish *this* agent from all the others — pick one that
 evokes its specific domain, never the generic "agent/AI" concept. Do
 **not** use 🤖 ⚙️ 🧠 🦾 💬 or similar "it's a bot" glyphs; they're
@@ -415,7 +428,7 @@ agent.RegisterRoute(&agentsdk.Route{
 
 **Always provide a Description.**
 
-Optional `Route.Tool`: see `reference/html-ui.md`.
+Route `Logging` policies and lazy run attribution: see `reference/html-ui.md`.
 
 Return `agentsdk.NewHTTPError(status, publicMessage, cause)` for an intentional
 4xx/5xx. The SDK sends only the public message and records the internal cause.
@@ -530,7 +543,7 @@ their MCP inventory through `MCPHandle` values. See
 
 **`AuthMode`:** `MCPAuthOAuthDiscovery` (RFC 9728/8414 plus advertised RFC 7591
 DCR), `MCPAuthOAuth` (manual URLs/client), `MCPAuthToken`, `MCPAuthNone`. Run
-`go tool air mcp probe <url>` first. Use discovery only when DCR is `advertised`;
+`go tool air resources mcp-probe <url>` first. Use discovery only when DCR is `advertised`;
 without DCR, manual OAuth with the reported endpoints is likely. `unknown` does
 not mean no auth. See **`/libs/agentsdk/reference/integrations.md`**.
 
@@ -572,8 +585,8 @@ region := agent.RegisterEnvVar(&agentsdk.EnvVar{
     Pattern:     `^[a-z]{2}-[a-z]+-\d$`, // optional regex; rejected on save if no match
 })
 
-// Secret — write-only in the UI (rotate, no read-back). Auto-redacted on first
-// Get(). Default is forbidden for secrets (the SDK panics).
+// Secret — write-only in the UI (rotate, no read-back). Added to the redact set
+// before startup hooks. Default is forbidden for secrets (the SDK panics).
 accessKey := agent.RegisterEnvVar(&agentsdk.EnvVar{
     Slug: "aws_access_key_id", Description: "AWS IAM access key id",
     Secret: true, Pattern: `^AKIA[0-9A-Z]{16}$`,
@@ -583,14 +596,17 @@ accessKey := agent.RegisterEnvVar(&agentsdk.EnvVar{
 Use the credential by reading it inside a tool and passing it to the subprocess
 environment (`cmd.Env = append(os.Environ(), "AWS_ACCESS_KEY_ID="+ak, ...)`).
 
-**`Get`'s contract**: returns the stored value (or `Default`, or `""` if
-neither). The error is non-nil on transport/decrypt failure **and** when the
-fetched value doesn't match the declared `Pattern` — including the empty
+**`Get`'s contract**: reads the immutable process-start snapshot, using the stored
+value (or `Default`, or `""` if neither). It performs no network I/O. Errors
+report unavailable runtime/configuration or a value that doesn't match the declared `Pattern` — including the empty
 string. So if you declare `Pattern: "^.+$"` (or any tighter regex), `err != nil`
 is exactly your "operator hasn't configured this yet" signal; no separate
 `if v == ""` guard is needed. With no `Pattern`, `("", nil)` is a valid return
 and your code decides what to do with it. Surface the slug in the error so the
-operator knows what to set in the Environment tab.
+operator knows what to set in the Environment settings subcategory. Saving a
+value does not refresh or restart a running app; explicitly restart the target
+to load it. See [environment configuration](reference/environment.md) for
+snapshot compatibility, presence counts and CLI status.
 
 ## Seal / Unseal — persist secrets the agent generates at runtime
 
@@ -702,8 +718,12 @@ agent.RegisterTool(importTool, agentsdk.AccessUser,
 `WithFileInputs` materializes all `FilePath` inputs into that directory. Trusted
 Go methods require registered paths but bypass caller policy. Resolve untrusted
 paths with `ResolveFilePath`; use `AccessInternal` for native-only storage.
+App directories and all descendants are nonshareable through recipient grants.
+For collaboration, explicitly copy readable files to an authorized writable
+Home/shared Home location and use Home sharing; do not copy or share automatically.
+Human and resolved-runtime access retains exact user/conversation/run scopes.
 
-→ Full directory ACL model, the complete file API, untrusted-path gating,
+→ Directory access declarations, the complete file API, untrusted-path gating,
 shelling out to a CLI over storage, and presigned URLs:
 **`/libs/agentsdk/reference/files.md`**.
 
@@ -907,52 +927,9 @@ if d.GoodForJog {
 out, _ := a.GenerateText(ctx, stream.Input{Messages: []message.Message{message.NewUserMessage(prompt)}})
 ```
 
-**Web search — search, then feed the results into the prompt.** Run the search
-in Go with `agent.WebSearch(ctx, slug, req)` and put the results in the message.
-Prefer this over handing the model a search *tool*: it's a single round-trip
-(no model→Airlock→model detour), the search always runs (a tool the model may
-decline to call doesn't), and you control exactly what enters the context. If
-you really need the model to decide whether to search mid-conversation, wrap
-`agent.WebSearch` in your own `RegisterTool`.
-
-```go
-import (
-    "github.com/airlockrun/goai/message"
-    "github.com/airlockrun/goai/stream"
-    "github.com/airlockrun/sol/websearch"
-)
-
-// once, before Serve():
-agent.RegisterModel(&agentsdk.ModelSlot{
-    Slug: "research", Capability: agentsdk.CapSearch,
-    Description: "Web search for the weekly digest",
-})
-
-func Digest(ctx context.Context, in DigestIn) (DigestOut, error) {
-    a := agentsdk.AgentFromContext(ctx)
-
-    found, err := a.WebSearch(ctx, "research", websearch.Request{Query: in.Topic, Count: 5})
-    if err != nil {
-        return DigestOut{}, err
-    }
-
-    result, err := a.GenerateText(ctx, stream.Input{
-        Model: a.LLM(ctx, "assistant"),
-        Messages: []message.Message{
-            message.NewUserMessage("Using these search results:\n" + found.Text() +
-                "\nWrite a short digest of: " + in.Topic),
-        },
-    })
-    if err != nil {
-        return DigestOut{}, err
-    }
-    return DigestOut{Summary: result.Text}, nil
-}
-```
-
-`found.Text()` returns the provider's synthesized answer when available
-(Grok/Gemini/Kimi) and otherwise a bulleted list of the results — so you don't
-have to branch on `found.Synthesis` or format `found.Results` by hand.
+**Web search:** call `agent.WebSearch(ctx, slug, req)` and feed results into the
+prompt. See **[Web search](reference/web-search.md)**
+(`/libs/agentsdk/reference/web-search.md`) for slot registration and a complete example.
 
 ## Capability namespaces
 
@@ -963,7 +940,7 @@ surface. Only names present in the generated declarations are callable:
 |---|---|
 | `platform.*` | discovery and enabled platform operations |
 | `apps.<alias>.tools.*` | `RegisterTool` operations on an inspected app |
-| `apps.<alias>.files.*` / `apps.<alias>.db.query` | inspected app file and database operations |
+| `apps.<alias>.files.*` | inspected app file operations |
 | `resources.<alias>.*` | independently authorized shared resources |
 | `conversation.files.*` | conversation file operations |
 | `tasks.get/wait/cancel` | durable host-owned work |
@@ -997,7 +974,6 @@ matching capability:
 | `air.attachToContext` | attach a file to the conversation | authed |
 | `air.httpRequest` `air.webSearch` | web | authed |
 | `air.log` `console.log/warn/error` | logging | all |
-| `air.queryDB` | read-only SQL | admin |
 | `air.requestUpgrade` | self-rebuild | admin |
 
 **Public-caller surface is much narrower.** A run triggered by an

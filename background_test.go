@@ -38,21 +38,21 @@ func TestAppRunReceiptPropagatesToDetachedCompletion(t *testing.T) {
 	}
 }
 
-func TestAppRunCreationDoesNotSendCallerAuthority(t *testing.T) {
+func TestRouteMaterializationRetainsVerifiedCaller(t *testing.T) {
 	a, mock := testAgent(t)
 	a.RegisterRoute(&Route{Method: http.MethodGet, Path: "/work", Access: AccessPublic, Description: "Run app work", Handler: func(w http.ResponseWriter, r *http.Request) error {
 		active := a.runForCall(r.Context())
-		if active.userID != "" || active.conversationID != "" || active.callerAccess != AccessPublic {
+		if active.userID != "test-user" || active.conversationID != "" || active.callerAccess != AccessAdmin {
 			t.Fatalf("app-created run borrowed caller authority: %+v", active)
 		}
 		caller := CallerFromContext(active.ctx)
-		if caller.Kind() != CallerApplication {
+		if caller.Kind() != CallerUser {
 			t.Fatal("native run is not application-owned")
 		}
-		if _, ok := caller.User(); ok {
+		if _, ok := caller.User(); !ok {
 			t.Fatal("native run inherited a user")
 		}
-		if _, ok := caller.Initiator(); ok {
+		if _, ok := caller.Initiator(); !ok {
 			t.Fatal("native run inherited an initiator")
 		}
 		if CallerFromContext(r.Context()).Kind() != CallerUser {
@@ -73,7 +73,7 @@ func TestAppRunCreationDoesNotSendCallerAuthority(t *testing.T) {
 	}
 	created := 0
 	for _, req := range mock.Requests() {
-		if req.Path != "/api/agent/run/create" {
+		if req.Path != "/api/agent/run/materialize-route" {
 			continue
 		}
 		created++
@@ -81,7 +81,7 @@ func TestAppRunCreationDoesNotSendCallerAuthority(t *testing.T) {
 		if err := json.Unmarshal(req.Body, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if len(payload) != 2 || payload["triggerType"] == nil || payload["triggerRef"] == nil {
+		if len(payload) != 1 || payload["proof"] == nil {
 			t.Fatalf("run creation carries unexpected fields: %s", req.Body)
 		}
 		if req.Header.Get("Authorization") != "Bearer test-token" {

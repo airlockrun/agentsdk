@@ -113,8 +113,7 @@ func (a *Agent) runForCall(ctx context.Context) *run {
 }
 
 // newRunFromAirlock asks Airlock for a fresh run ID and returns a run struct.
-// Used by both lazyRun (trigger_type="code") and backgroundRunFor
-// (trigger_type="background").
+// Startup hooks use trigger_type="code" and backgroundRunFor uses "background".
 func (a *Agent) newRunFromAirlock(ctx context.Context, triggerType, triggerRef string) *run {
 	var resp wire.CreateRunResponse
 	req := wire.CreateRunRequest{
@@ -122,7 +121,7 @@ func (a *Agent) newRunFromAirlock(ctx context.Context, triggerType, triggerRef s
 		TriggerRef:  triggerRef,
 	}
 	if err := a.client.doJSON(ctx, "POST", "/api/agent/run/create", req, &resp); err != nil {
-		// Fail loud: background/lazy runs are observability; if we can't
+		// Fail loud: native runs carry explicit application authority; if we can't
 		// create one, returning a disconnected run would silently lose
 		// audits. Prefer a panic the operator sees.
 		panic("agentsdk: /api/agent/run/create failed: " + err.Error())

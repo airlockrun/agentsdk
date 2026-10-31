@@ -65,6 +65,30 @@ observation, not the server deployment task. Build status and runtime status are
 separate: inspect `air deploy status` for a particular build, `air status` for
 the selected deployed runtime.
 
+## Inspect builds without uploading source
+
+`air deploy list [dir] --target preview --limit 10` returns newest-first build
+IDs (`--limit` accepts 1–50). `air deploy status [dir] --target preview` selects
+the latest build; `--build UUID` pins another. Both accept `--remote`, `--url`
+and `--agent`. Use `./list` or `./status` for directory names matching subcommands.
+
+Status `--watch --logs` pins the selected build, polls every two seconds and
+prints persisted Docker/Sol log additions until complete, failed or interrupted.
+Replaced/truncated log snapshots are marked and reprinted. Build phase describes
+that build, not the currently deployed image. These observation commands do not
+upload source or require SDK compatibility; they use saved operator credentials
+(refresh can update the external login store), not codegen integration tokens.
+
+`--json` emits typed API response fields, including `routeBaseUrl` and
+`workspaceUrl`; status includes persisted logs. It cannot combine with `--watch`.
+Failed builds emit the snapshot before returning a nonzero exit and stderr error,
+including in JSON mode. An unfinished snapshot without watch succeeds immediately;
+no builds is an error. Status JSON's `deployment.routeBaseUrl` and build JSON's
+`routeBaseUrl` are exact human-navigation URLs from the selected target. Share
+them unchanged; `workspaceUrl` is a separate dashboard conversation link and can
+be empty for laptop previews. Verify through authenticated app/tool operations,
+not an unauthenticated GET or a token in a human link.
+
 ## Operate the real app
 
 ```sh
@@ -73,8 +97,10 @@ go tool air tools list --target preview
 go tool air tools invoke report --input '{"period":"week"}' --target preview
 go tool air agent start summarize --input '{"path":"/input.csv"}' --target preview
 go tool air agent get summarize <run-id> --target preview
+go tool air agent list summarize --target preview
 go tool air agent wait summarize <run-id> --target preview --timeout 120s
 go tool air agent cancel summarize <run-id> --target preview
+go tool air agent continue summarize <session-id> --prompt 'Summarize the next input' --target preview
 go tool air logs <run-id> --target preview
 go tool air stop --target preview
 go tool air start --target preview --wait
@@ -87,15 +113,18 @@ the CLI neither claims deletion nor prevents expiry by having a local config.
 
 HTTP requests use origin-relative paths, retain query/body and return redirects
 without following them. Tool calls use registered handlers without a chat loop.
-Agent starts print their request ID before admission; supply `--request-id UUID`
-to retry an uncertain start safely. Wait cancels observation only; cancel is an
-explicit durable-controller operation. Logs are a plain-text snapshot. Operator
-agent list/continue and log following are not supplied by this checkpoint.
+Agent starts and continuations print their request ID before admission; supply
+`--request-id UUID` to retry an uncertain admission safely. Wait cancels observation
+only; cancel is an explicit durable-controller operation. Wait prints the terminal
+run and returns a nonzero exit for failed/cancelled work. Hosted execution lists
+and controls only tasks admitted from its workspace. Logs are a plain-text snapshot;
+log following is not supported.
 
 The public `agentsdk/remote` client offers explicit Config URL/AppID/Target/Revision,
 token callback and HTTP client; Get/CreatePreview/SetPolicy/Lifecycle, Request,
-InvokeTool, Start/Get/Wait/CancelAgent and binding operations. Revision checks
-validate the observed deployment; HTTP/tool/agent-start require a nonempty revision.
+InvokeTool, Start/Get/List/Wait/Cancel/ContinueAgent and binding operations. Revision
+checks validate the observed deployment; HTTP/tool/agent admission requires a
+nonempty revision.
 The CLI uses the observed target revision unless `--revision` explicitly pins it.
 The client sends `X-Airlock-Expected-Source-Revision`; host admission applies its
 revision ceiling before execution. Scoped suite callbacks are also bound to the
@@ -126,18 +155,29 @@ browser automation is not a hosted developer capability.
 
 ```sh
 go tool air resources list --remote corp
-go tool air resources inspect connection <resource-id> --remote corp
-go tool air resources request <resource-id> --path /v1/items --remote corp
-go tool air resources mcp-tools <resource-id> --remote corp
-go tool air resources mcp-call <resource-id> --tool list --data '{}' --remote corp
+go tool air resources inspect /personal_api --remote corp
+go tool air resources request /personal_api --path /v1/items --remote corp
+go tool air resources mcp-tools /personal_mcp --remote corp
+go tool air resources mcp-call /personal_mcp --tool list --data '{}' --remote corp
 go tool air resources bindings --target preview
-go tool air resources bind connection crm --resource <resource-id> --target preview
-go tool air resources fixture connection crm --fixture canned-crm --revision <candidate-revision> --target preview
-go tool air resources unbind connection crm --target preview
+go tool air resources bind preview/crm --resource /personal_api
+go tool air resources fixture preview/crm --fixture canned-crm --revision <candidate-revision>
+go tool air resources unbind preview/crm
 ```
 
 Direct-resource commands select only user+remote; an app/target is neither needed
-nor accepted. Target binding separately checks app/target rights and resource
+nor accepted. Hosted development uses the injected execution credential and
+admitted host without another login. Direct calls use your live resource grants
+and source conversation/bridge/MCP restrictions, independently of app membership
+or bindings. An explicitly selected hosted remote must match that host.
+`resources list` discovers global resource slugs and stable UUIDs. Use `/slug` or
+`/UUID` for global resources, and `preview/slot` or `production/slot` for app
+bindings. Bare selectors are rejected. `resources list <target>` discovers slots;
+ambiguous slot types require `--type`. A target in an address must agree with
+`--target`. Named targets must exist in the backend. App-bound production calls
+retain production execution approval. Live production binding edits remain
+protected configuration: prepare their selections with `deploy --bind` in the
+immutable candidate and follow its deployment approval. Target binding separately checks app/target rights and resource
 `use`, without an assign capability. All bindings are stored on the server; no
 local binding file or secret argument is used. `air preview --bind [type:]slot=UUID`
 and `--fixture slot=name` attach `X-Airlock-Candidate-Config` to source admission.

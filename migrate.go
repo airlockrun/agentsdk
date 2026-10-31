@@ -61,9 +61,26 @@ const (
 	migrationUpOnly
 )
 
+func configuredMigrationMode() (migrationMode, int64, error) {
+	if isValidatingMigrations() {
+		return migrationValidate, 0, nil
+	}
+	if downStr := os.Getenv("AGENT_MIGRATE_DOWN_TO"); downStr != "" {
+		version, err := strconv.ParseInt(downStr, 10, 64)
+		if err != nil {
+			return migrationUp, 0, errors.New("agentsdk: invalid AGENT_MIGRATE_DOWN_TO: " + err.Error())
+		}
+		return migrationDownTo, version, nil
+	}
+	if os.Getenv("AGENT_MIGRATE_UP_ONLY") == "1" {
+		return migrationUpOnly, 0, nil
+	}
+	return migrationUp, 0, nil
+}
+
 // autoMigrate applies the real app's runtime-image migrations or the explicitly
 // configured absolute AIRLOCK_MIGRATIONS_DIR.
-func (a *Agent) autoMigrate() {
+func (a *Agent) autoMigrate(mode migrationMode, downTo int64) {
 	dir := runtimeMigrationsPath
 	if configured := os.Getenv("AIRLOCK_MIGRATIONS_DIR"); configured != "" {
 		if !filepath.IsAbs(configured) {
@@ -71,22 +88,6 @@ func (a *Agent) autoMigrate() {
 		}
 		dir = configured
 	}
-	mode := migrationUp
-	var downTo int64
-
-	if isValidatingMigrations() {
-		mode = migrationValidate
-	} else if downStr := os.Getenv("AGENT_MIGRATE_DOWN_TO"); downStr != "" {
-		v, err := strconv.ParseInt(downStr, 10, 64)
-		if err != nil {
-			panic("agentsdk: invalid AGENT_MIGRATE_DOWN_TO: " + err.Error())
-		}
-		mode = migrationDownTo
-		downTo = v
-	} else if os.Getenv("AGENT_MIGRATE_UP_ONLY") == "1" {
-		mode = migrationUpOnly
-	}
-
 	hasFiles, err := hasMigrationFiles(dir)
 	if err != nil {
 		panic("agentsdk: read migrations directory " + dir + ": " + err.Error())

@@ -198,8 +198,8 @@ func TestOrdinaryCommandsResolveProductionWithoutTarget(t *testing.T) {
 		{"status", "--dir", dir}, {"start", "--dir", dir}, {"stop", "--dir", dir}, {"suspend", "--dir", dir},
 		{"request", "GET", "/", "--dir", dir}, {"tools", "list", "--dir", dir},
 		{"agent", "start", "task", "--dir", dir}, {"logs", previewTaskID, "--dir", dir},
-		{"resources", "bindings", "--dir", dir}, {"resources", "bind", "connection", "crm", "--resource", previewTaskID, "--dir", dir},
-		{"resources", "unbind", "connection", "crm", "--dir", dir}, {"pull", dir},
+		{"resources", "bindings", "--dir", dir}, {"resources", "bind", "production/crm", "--resource", "/" + previewTaskID, "--dir", dir},
+		{"resources", "unbind", "production/crm", "--dir", dir}, {"pull", dir},
 	} {
 		t.Run(strings.Join(args[:2], "-"), func(t *testing.T) {
 			before := resolved

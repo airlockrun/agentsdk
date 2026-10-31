@@ -1,0 +1,8 @@
+-- +goose Up
+CREATE TABLE welcome_words (
+    user_id uuid PRIMARY KEY,
+    word text NOT NULL CHECK (char_length(word) BETWEEN 1 AND 40)
+);
+
+-- +goose Down
+DROP TABLE welcome_words;

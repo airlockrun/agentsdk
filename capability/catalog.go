@@ -67,7 +67,6 @@ func Fixed() []Definition {
 		{"file_decode_text", App, wire.AccessUser, "Decode a named charset into UTF-8 text.", TransformInput{}},
 		{"file_edit_lines", App, wire.AccessUser, "Apply streaming line edits. Pass src as dst for in-place editing.", FileEditLinesInput{}},
 		{"file_sed", App, wire.AccessUser, "Apply a streaming sed-subset script.", FileSedInput{}},
-		{"query_db", App, wire.AccessAdmin, "Query the app database inside a read-only transaction; returns row objects.", QueryDBInput{}},
 		{"output", Platform, wire.AccessPublic, "Share media with the bound conversation. Prose belongs in the normal reply.", OutputInput{}},
 		{"file_share_url", Platform, wire.AccessPublic, "Mint a presigned, unauthenticated file URL, capped at 24 hours.", FileShareURLInput{}},
 		{"http_request", Platform, wire.AccessUser, "Request a URL through the platform egress proxy.", HTTPRequestInput{}},
@@ -86,6 +85,22 @@ func Fixed() []Definition {
 		case "file_read", "file_grep", "file_head", "file_tail", "file_lines":
 			d.TextOutput = true
 			d.OutputSchema = json.RawMessage(`{"type":"string"}`)
+		case "file_read_bytes", "file_read_range_bytes":
+			d.OutputSchema = schema.MustFromType(FileReadBytesOutput{}).MustJSON()
+		case "file_stat", "file_write":
+			d.OutputSchema = fileInfoOutputSchema().MustJSON()
+		case "file_exists":
+			d.OutputSchema = schema.MustFromType(FileExistsOutput{}).MustJSON()
+		case "file_delete":
+			d.OutputSchema = schema.MustFromType(FileDeleteOutput{}).MustJSON()
+		case "file_list":
+			d.OutputSchema = schema.Nullable(schema.Array(fileInfoOutputSchema())).MustJSON()
+		case "file_encode", "file_decode", "file_decode_text", "file_edit_lines", "file_sed":
+			inline := schema.MustFromType(FileTransformInlineOutput{})
+			inline.Properties["inline"] = &schema.Schema{Enum: []any{true}}
+			saved := schema.MustFromType(FileTransformSavedOutput{})
+			saved.Properties["inline"] = &schema.Schema{Enum: []any{false}}
+			d.OutputSchema = (&schema.Schema{AnyOf: []*schema.Schema{inline, saved}}).MustJSON()
 		}
 		defs = append(defs, d)
 	}

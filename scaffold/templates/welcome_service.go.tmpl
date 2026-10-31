@@ -1,0 +1,65 @@
+// Package welcome owns the small editable welcome word shared by UI and tools.
+// Replace this example with the app's domain when implementing real workflows.
+package welcome
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strings"
+	"unicode/utf8"
+
+	"agent/internal/db"
+	"github.com/airlockrun/agentsdk"
+	"github.com/google/uuid"
+)
+
+type Service struct {
+	database *agentsdk.AgentDB
+	changes *agentsdk.UIChangeTopic
+}
+
+func New(database *agentsdk.AgentDB, changes *agentsdk.UIChangeTopic) *Service {
+	if database == nil || changes == nil {
+		panic("welcome: database and change topic are required")
+	}
+	return &Service{database: database, changes: changes}
+}
+
+func human(ctx context.Context) (uuid.UUID, error) {
+	user, ok := agentsdk.CallerFromContext(ctx).User()
+	if !ok {
+		return uuid.Nil, &agentsdk.HTTPError{Status: 401, Message: "A human user is required"}
+	}
+	return uuid.Parse(user.ID)
+}
+
+func (s *Service) Word(ctx context.Context) (string, error) {
+	user, err := human(ctx)
+	if err != nil { return "", err }
+	word, err := db.New(s.database).GetWelcomeWord(ctx, user)
+	if errors.Is(err, sql.ErrNoRows) { return "Hello", nil }
+	return word, err
+}
+
+func (s *Service) SetWord(ctx context.Context, word string) error {
+	user, err := human(ctx)
+	if err != nil { return err }
+	word = strings.TrimSpace(word)
+	if word == "" || utf8.RuneCountInString(word) > 40 || strings.ContainsAny(word, "\r\n\t") {
+		return &agentsdk.HTTPError{Status: 400, Message: "Enter 1–40 characters on one line"}
+	}
+	return s.database.Transaction(ctx, nil, func(tx agentsdk.DBTX) error {
+		if err := db.New(tx).SetWelcomeWord(ctx, db.SetWelcomeWordParams{UserID: user, Word: word}); err != nil { return err }
+		return s.changes.Publish(ctx, tx, user.String())
+	})
+}
+
+type SetWordInput struct { Word string `json:"word" jsonschema:"description=The welcome word (1–40 characters)"` }
+type WordOutput struct { Word string `json:"word"` }
+
+func (s *Service) SetWordTool(ctx context.Context, input SetWordInput) (WordOutput, error) {
+	if err := s.SetWord(ctx, input.Word); err != nil { return WordOutput{}, err }
+	word, err := s.Word(ctx)
+	return WordOutput{Word: word}, err
+}

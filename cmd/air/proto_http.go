@@ -19,7 +19,7 @@ import (
 var (
 	protoMarshal   = protojson.MarshalOptions{UseProtoNames: false, EmitUnpopulated: true}
 	protoUnmarshal = protojson.UnmarshalOptions{DiscardUnknown: true}
-	apiClient      = &http.Client{Timeout: 11 * time.Minute}
+	apiClient      = &http.Client{Timeout: 11 * time.Minute, Transport: approvalTransport{next: http.DefaultTransport}}
 )
 
 type httpStatusError struct {

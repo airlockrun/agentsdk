@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestLinkedRouteRunsHandlerWithoutInvokingTool(t *testing.T) {
+func TestRouteRunsHandlerWithoutInvokingTool(t *testing.T) {
 	a, mock := testAgent(t)
 	toolCalls, handlerCalls := 0, 0
 	linked := tool.New("save").Description("Admin save").Execute(func(context.Context, json.RawMessage, tool.CallOptions) (tool.Result, error) {
@@ -30,12 +30,11 @@ func TestLinkedRouteRunsHandlerWithoutInvokingTool(t *testing.T) {
 		return tool.Result{}, nil
 	}).Build()
 	a.RegisterTool(linked, AccessAdmin)
-	runID := uuid.NewString()
-	a.RegisterRoute(&Route{Method: http.MethodPost, Path: "/save", Access: AccessUser, Description: "HTTP save", Tool: linked,
+	a.RegisterRoute(&Route{Method: http.MethodPost, Path: "/save", Access: AccessUser, Description: "HTTP save",
 		Handler: func(w http.ResponseWriter, r *http.Request) error {
 			handlerCalls++
-			if CallerFromContext(r.Context()).Access() != AccessUser || runFromContext(r.Context()).id != runID {
-				t.Error("correspondence changed caller access or route run")
+			if CallerFromContext(r.Context()).Access() != AccessUser || runFromContext(r.Context()) != nil {
+				t.Error("caller read changed access or eagerly materialized a run")
 			}
 			body, err := io.ReadAll(r.Body)
 			if err != nil || string(body) != "form input" {
@@ -48,7 +47,6 @@ func TestLinkedRouteRunsHandlerWithoutInvokingTool(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/save", strings.NewReader("form input"))
 	req.Header.Set("Authorization", "Bearer "+a.token)
-	req.Header.Set("X-Run-ID", runID)
 	req.Header.Set(wire.InvocationTokenHeader, strings.Repeat("45", 32))
 	setTestCallerHeader(t, req, testWireCaller("user", wire.AccessUser))
 	w := httptest.NewRecorder()
@@ -56,8 +54,8 @@ func TestLinkedRouteRunsHandlerWithoutInvokingTool(t *testing.T) {
 	if w.Code != http.StatusAccepted || w.Body.String() != "HTTP response" || handlerCalls != 1 || toolCalls != 0 {
 		t.Fatalf("route response=%d %q handler calls=%d tool calls=%d", w.Code, w.Body.String(), handlerCalls, toolCalls)
 	}
-	if requests := mock.RequestsByPath("/api/agent/run/complete"); len(requests) != 1 {
-		t.Fatalf("expected one route completion, got %d", len(requests))
+	if requests := mock.Requests(); len(requests) != 0 {
+		t.Fatalf("expected no route materialization for caller reads, got %d requests", len(requests))
 	}
 }
 
@@ -80,7 +78,7 @@ func TestHandlerHostDelivery(t *testing.T) {
 					if r.Header.Get("Authorization") != "Bearer "+a.token || r.Header.Get("X-Custom-Auth") != "application-value" {
 						t.Error("delivery verification rewrote application headers")
 					}
-					if family == "route" && (runFromContext(r.Context()).id != runID || runFromContext(r.Context()).invocationToken != invocationToken) {
+					if runFromContext(r.Context()) != nil {
 						t.Error("lost ingress run")
 					}
 					body, err := io.ReadAll(r.Body)
@@ -130,7 +128,7 @@ func TestHandlerHostDelivery(t *testing.T) {
 			wantExecuted, wantRequests, wantStatus := int32(1), 0, http.StatusOK
 			switch family {
 			case "route":
-				wantRequests = 1
+				wantRequests = 0
 			case "webhook":
 				path, wantRequests = "/webhook/event", 1
 			case "job":
@@ -481,6 +479,7 @@ func TestRouteContextPropagatesCallerAndAgent(t *testing.T) {
 				},
 				Access:      AccessPublic,
 				Description: "Inspect the request context",
+				Logging:     LoggingNormal,
 			})
 
 			w := httptest.NewRecorder()
@@ -502,8 +501,8 @@ func TestRouteContextPropagatesCallerAndAgent(t *testing.T) {
 			if gotCaller.Access != tt.wantAccess {
 				t.Errorf("callScopeFromContext().Access = %q, want %q", gotCaller.Access, tt.wantAccess)
 			}
-			if gotRunAccess != AccessPublic {
-				t.Errorf("app-owned run access = %q, want %q", gotRunAccess, AccessPublic)
+			if gotRunAccess != tt.wantAccess {
+				t.Errorf("route run access = %q, want %q", gotRunAccess, tt.wantAccess)
 			}
 			if got := completedRun(t, mock); got.Status != "success" {
 				t.Errorf("completion status = %q, want success", got.Status)
@@ -560,7 +559,7 @@ func TestRouteMaterializedRunCompletion(t *testing.T) {
 				w.WriteHeader(http.StatusBadRequest)
 				return nil
 			},
-			wantCode: http.StatusBadRequest, wantStatus: "success",
+			wantCode: http.StatusBadRequest, wantStatus: "error",
 		},
 	}
 
@@ -575,6 +574,7 @@ func TestRouteMaterializedRunCompletion(t *testing.T) {
 				},
 				Access:      AccessPublic,
 				Description: "Exercise route completion",
+				Logging:     LoggingNormal,
 			})
 
 			w := httptest.NewRecorder()
@@ -647,7 +647,7 @@ func TestHTTPRunCompletionFailureLogged(t *testing.T) {
 		wantStatus  string
 	}{
 		{"success", http.StatusOK, nil, "success"},
-		{"quiet client error", http.StatusBadRequest, nil, "success"},
+		{"quiet client error", http.StatusBadRequest, nil, "error"},
 		{"server error", http.StatusInternalServerError, nil, "error"},
 		{"handler error", http.StatusOK, errors.New("handler failed"), "error"},
 	} {
@@ -675,6 +675,10 @@ func TestRouteCompletionAfterContentLengthEOF(t *testing.T) {
 	completed := make(chan wire.RunCompleteRequest, 1)
 	deliveryClosed := make(chan struct{})
 	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/agent/run/materialize-route" {
+			_ = json.NewEncoder(w).Encode(wire.MaterializeRouteResponse{Runtime: wire.RuntimeContext{RunID: "early-run", InvocationToken: strings.Repeat("ab", 32), Caller: testWireCaller("anonymous", wire.AccessPublic)}, Deadline: time.Now().Add(time.Minute), Logging: wire.LoggingNormal})
+			return
+		}
 		if r.URL.Path != "/api/agent/run/complete" || r.Header.Get(wire.InvocationTokenHeader) != strings.Repeat("ab", 32) {
 			t.Errorf("unexpected completion request: %s", r.URL.Path)
 			w.WriteHeader(http.StatusBadRequest)
@@ -695,7 +699,7 @@ func TestRouteCompletionAfterContentLengthEOF(t *testing.T) {
 	a.client = newAirlockClient(host.URL, a.token, host.Client())
 	release := make(chan struct{})
 	a.RegisterRoute(&Route{
-		Method: http.MethodGet, Path: "/early", Access: AccessPublic, Description: "Complete after delivery",
+		Method: http.MethodGet, Path: "/early", Access: AccessPublic, Description: "Complete after delivery", Logging: LoggingNormal,
 		Handler: func(w http.ResponseWriter, r *http.Request) error {
 			w.Header().Set("Content-Length", "2")
 			if _, err := io.WriteString(w, "ok"); err != nil {
@@ -749,6 +753,12 @@ func TestRouteCompletionAfterContentLengthEOF(t *testing.T) {
 }
 
 func setTestCallerHeader(t *testing.T, r *http.Request, c wire.Caller) {
+	proof, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Header.Set(wire.RouteDispatchHeader, string(proof))
+	r.Header.Set(wire.RouteDeadlineHeader, time.Now().Add(30*time.Minute).Format(time.RFC3339Nano))
 	t.Helper()
 	value, err := wire.EncodeCallerHeader(c)
 	if err != nil {

@@ -40,8 +40,13 @@ func TestMCPOutputSchemaDescribesResponseEnvelope(t *testing.T) {
 }
 
 func TestCatalog(t *testing.T) {
-	if len(Fixed()) != 30 {
-		t.Fatalf("fixed inventory = %d, want 30", len(Fixed()))
+	for _, d := range Fixed() {
+		if d.Path.CanonicalOperation() == "query_db" {
+			t.Fatal("generic SQL is not a runtime capability")
+		}
+	}
+	if len(Fixed()) != 29 {
+		t.Fatalf("fixed inventory = %d, want 29", len(Fixed()))
 	}
 	manifest := wire.AgentManifest{
 		Tools:       []wire.ToolDef{{Name: "output", Access: wire.AccessAdmin, InputSchema: []byte(`{"type":"object"}`)}},
@@ -175,7 +180,7 @@ func TestDefinitionCapabilitySelection(t *testing.T) {
 		policy *wire.AgentCapabilityPolicy
 		want   []string
 	}{
-		{"unset", nil, []string{"air//query_db", "air//file_read", "conn/source/request", "topic/events/subscribe"}},
+		{"unset", nil, []string{"air//file_read", "conn/source/request", "topic/events/subscribe"}},
 		{"empty", &wire.AgentCapabilityPolicy{}, nil},
 		{"files and images", &wire.AgentCapabilityPolicy{Allow: []wire.AgentCapability{wire.CapabilityFileRead, wire.CapabilityFileStat, wire.CapabilityAttachToContext}}, []string{"air//file_read", "air//file_stat", "air//attach_to_context"}},
 		{"one connection operation", &wire.AgentCapabilityPolicy{Allow: []wire.AgentCapability{"conn/source/request"}}, []string{"conn/source/request"}},

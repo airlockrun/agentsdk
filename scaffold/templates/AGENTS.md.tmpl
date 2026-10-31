@@ -1,608 +1,154 @@
-# AGENTS.md — how this agent is built
-
-This file describes how this agent is structured: the file layout, the
-MVC split, the build chain, and the high-level UI conventions. It is the
-authoritative reference for *this* repo's shape.
-
-> **Managed by the scaffold — do not edit.** It is regenerated from the
-> scaffold template (airlock does this on every build; `go tool air update`
-> does it in a standalone checkout), so edits here are overwritten. Put
-> agent-specific decisions in `NOTES.md`, which the tooling never touches.
-
-Two other documents complete the picture:
-
-- **The agentsdk API reference** — every `Register*` function,
-  the LLM-calling APIs, seal/unseal, built-in JS bindings, the full surface;
-  deep-dive companions (`reference/`) cover storage, remote exec, live integration
-  validation, interactive-login pages, and the database. In a plain checkout,
-  read `.airlock/toolchain/skills/agentsdk/SKILL.md`; the airlock toolserver
-  mounts the same version-matched source at `/libs/agentsdk/REFERENCE.md`.
-  Read it for "what does the SDK give me?" — read this file for "how do I wire
-  it together?".
-- **`NOTES.md`** — the agent-specific design log. Decisions made for
-  *this* agent (chosen integrations, non-obvious trade-offs, the
-  styling palette, anything a future upgrade needs to know about).
-  Keep it short and current as you go.
-
-## Developing with a real preview
-
-`go tool air build` generates assets, runs deterministic domain tests and compiles
-without provisioning Docker, PostgreSQL, Deno or a model. `go tool air test` runs
-the local deterministic tests. SDK simulator/testcontainers imports are rejected
-in the default app build/test selection. Inject typed repository/model/HTTP
-fixtures directly into domain code; do not start an SDK host in local tests.
-
-`go tool air preview -m "Describe the candidate" --wait` uploads the complete
-source tree and test fixtures to the selected Airlock remote and starts your
-personal real app. First bind/create the logical app with `--agent <app>` or
-`--create --name <name>`. No preview ID or local resource-binding file is required.
-Named instances live in `.airlock/local/agent.toml`; `--remote` selects an instance,
-and `--target` independently selects its deployment. General commands default to
-production. `air preview` creates or updates the saved preview per app/remote and
-never changes later defaults. Explicit `--target preview` requires a saved reference.
-Copied/moved checkouts may retain that reference; server authorization decides access.
-Inside real hosted development workspaces, the injected preview is the default;
-explicit production is subject to existing host permissions.
-
-Use `air request GET / --target preview`, `air tools invoke <name> --input <json>
---target preview`, `air agent start <definition> --target preview`, and
-`air agent get|wait|cancel <definition> <run-id> --target preview`. Registered
-agents execute through the real host controller. Wait cancellation only stops
-observation. Native application work does not acquire the developer's identity.
-Bindings are explicit server-side selections through `air resources bind` or
-`air resources fixture`; fixture bodies belong in the whole source candidate.
-Read the SDK testing/remote-development reference for current host-runner support.
-
-## Inspecting remote builds
-
-After `go tool air preview -m "Describe this deployment"`, inspect the build
-without uploading or changing this workspace:
-
-```sh
-go tool air deploy list --target preview --limit 10
-go tool air deploy status --target preview --watch --logs
-go tool air deploy status --target preview --build <UUID> --json
-go tool air status --target preview --json
-```
-
-Both commands take an optional repo directory and the deploy target flags
-`--remote`, `--url`, and `--agent <slug-or-id>`. They use saved operator login
-credentials (refresh may update the external login store), enforce remote
-binding conflicts, and do not require SDK version compatibility. Codegen
-integration tokens cannot use these commands.
-
-List returns newest-first builds with full IDs; `--limit` accepts 1-50 and
-defaults to 10. Status selects the latest build unless `--build` is supplied.
-Watch polls every two seconds, pins that ID, and stops on complete, failed, or
-Ctrl-C. `--logs` shows persisted Docker and Sol logs, printing additions during
-watch; replaced or truncated snapshots are marked and reprinted. Build status
-and deployment phase describe that build, not the agent's current runtime or
-which image is currently deployed.
-
-`--json` prints the typed API response; status JSON includes persisted logs.
-It cannot be combined with `--watch`. A failed build prints its snapshot before
-returning a nonzero exit with an error on stderr, also in JSON mode. A building
-snapshot without watch succeeds immediately. No builds is an explicit error.
-Use `./list` or `./status` for directory names that match these subcommands;
-valid directory/message deploy invocations are source uploads.
-
-## What "an app" usually means
-
-Requests are often a single line — "build me a Spotify app", "a kanban
-board", or just "I want an app". Unless the user clearly asks for something
-narrower (one chat tool, a webhook, a recurring job), read "app" as **a web app
-plus the tools that drive it**, not one or the other:
-
-- A **web UI** — templ + htmx pages (see the HTML UI section) the user opens
-  in a browser to see and manipulate their data.
-- **LLM-callable tools** (`RegisterTool`) over the *same* domain, so the agent
-  can do the same things conversationally (Telegram / Discord / web chat).
-- The **state, connections, and jobs** that domain needs behind both.
-
-The UI and the tools are two faces of one domain layer (`service.go`) — build
-both against it. A bare tool with no UI, or a UI the agent can't operate over
-chat, is usually half of what the user pictured. When the request is vague,
-pick a concrete domain, build the full web-app-plus-tools shape, and record the
-assumption in `NOTES.md`.
-
-For HTTP connections, use `ConnectionHandle.Request` or `RequestJSON` only for
-small JSON-like API responses; both buffer at most 20 MiB total. Choose
-`RequestStream` up front for downloads, file processing, large responses, or
-unknown response sizes regardless of `Content-Length`. Never retry a buffered
-request as a stream because a second request can duplicate a mutation or observe
-different data. Close the streaming body and process it incrementally, or copy
-it to a local `os.CreateTemp` file with deferred cleanup. Seek before reading the
-temporary file in-process, and close it before an external program opens its
-path. Read `reference/integrations.md` for the complete pattern and limits.
-
-## Workspace structure
-
-```
-{agent-repo}/
-├── main.go            # newAgent() defines declarations and wires late-bound handles
-├── main_test.go       # Composition smoke test via agent.Handler()
-├── handlers/          # CONTROLLERS — HTTP handlers; import domain + views
-│   ├── home.go
-│   └── home_test.go
-├── views/             # VIEW — templ templates + view-model types
-│   ├── layout.templ
-│   ├── index.templ
-│   ├── icons.templ    # Lucide idle icon + DaisyUI request spinner slot
-│   ├── viewmodel.go   # HomeView (and any other view-model types)
-│   ├── assets.go      # //go:embed compiled Tailwind + AppCSSPath
-│   └── static/        # Tailwind build output (gitignored)
-├── styles/
-│   └── app.css        # Tailwind v4 + DaisyUI source
-├── db/
-│   ├── migrations/    # goose migrations (you create; doc.go pre-scaffolded)
-│   └── queries/       # sqlc query files (you create)
-├── internal/db/       # sqlc-generated code
-├── connectors/        # optional immediate connector main packages
-├── <contract>/        # shared typed connector definitions
-├── Dockerfile         # Generated — do not edit
-├── airlock.toml       # (optional) runtime file packaging
-├── setup.sh           # (optional) system setup — runs as root at image build
-├── go.mod
-├── sqlc.yaml
-└── NOTES.md           # Agent-specific design log
-```
-
-**Keep `main.go` thin.** `newAgent()` is the definition-only composition root:
-register SDK handles, construct services, inject those values directly into
-each consuming package's constructor, and register bound handler and tool
-methods. It must not read runtime environment, execute database operations,
-make network calls, or start goroutines. `agentsdk.New` performs none of that
-runtime work, and Airlock invokes the same factory offline to obtain the
-canonical manifest. Business logic lives in domain packages, never inline in
-main. `main()` only calls `newAgent().Serve()`; `Serve` freezes declarations,
-starts runtime dependencies and migrations, syncs with Airlock, runs named
-process-local `OnStart` hooks, and then serves.
-
-`Agent.DB()` and registration APIs return late-bound handles that are safe to
-pass into constructors in `newAgent`. Operations on runtime-backed handles are
-unavailable until startup. Use `OnStart(name, hook)` for disposable
-process-local initialization that needs the started and synchronized runtime;
-durable work belongs in a registered job. `Agent.Manifest()` freezes and returns
-the complete canonical declaration, and `AIRLOCK_AGENT_MODE=manifest` emits it
-without runtime environment, database, migrations, or network.
-
-If the user specifically asks to import an existing non-Go app, such as a
-FastAPI service, keep the normal Go SDK shape and make `main.go` a thin wrapper:
-
-- Keep application and domain logic in its original language. Register Go HTTP
-  routes and tools that delegate to the service; route access and
-  `CallerFromContext` handling remain in the host-facing Go wrapper.
-- List service source and runtime assets in root `airlock.toml`; Airlock copies
-  exact files and recursive directories with their repository-relative layout
-  under `/app`. Use `setup.sh` for the language runtime and dependencies. It can
-  read selected dependency files such as `/app/python-app/requirements.txt`.
-  Go embedding remains suitable for tiny immutable helper files, but is not
-  required for packaging an external service.
-- Keep the SDK listener on `:8080` and bind the imported service to localhost on
-  a separate internal port. The thin Go wrapper owns all SDK registrations and
-  starts the subprocess from a named `OnStart` hook with its working directory
-  under `/app`. Supervise it, use a bounded readiness check, fail startup on
-  error, and stop the process when the hook context is canceled.
-
-Example packaging manifest:
-
-```toml
-[build]
-runtime_files = ["python-app/", "templates/", "static/"]
-```
-
-The manifest affects build packaging only. It does not declare capabilities,
-languages, ports, or entrypoints; Go registrations remain authoritative.
-
-Handlers read `agentsdk.CallerFromContext(ctx)` (routes use `r.Context()`). Its
-private snapshot exposes `Kind()`, `Access()`, `User()`, `Initiator()`, and
-`Origin()`. Use `user, ok := agentsdk.CallerFromContext(ctx).User()` for human
-data and handle absence; app-owned work has no human user or initiator, and the
-app owner is not a substitute. User jobs preserve their user initiator. Every
-admitted human has `User.PlatformMember = true`, even with public app access;
-identity, platform membership, and app access are separate concepts. Missing
-caller state panics. Reading it never materializes a run or performs network I/O.
-`OnStart` hooks receive application/startup caller state. Direct app background
-API calls create their own execution context without mutating the input context,
-so arbitrary contexts do not acquire caller state. Read `reference/caller.md`
-for identity, origin, and test helpers. JavaScript's `user` binding is separate;
-there is no JS caller or external identity-provider API.
-
-Connected-machine integrations put each executable in `connectors/<slug>` and
-shared typed definitions in an importable non-`main` contract package. Declare
-a distinctive reverse-domain contract ID and explicit targets; support Linux
-on amd64, arm64, and ARMv7 plus macOS and Windows on amd64 and arm64 unless the
-integration is inherently platform-specific. Airlock-built connectors must be pure Go and compile with
-`CGO_ENABLED=0`. Use direct Go APIs or typed process arguments, never shell
-interpolation. Expose only narrow commands and selected roots through
-`connector.LocalDirectory`; settings, credentials, machine paths, and
-installation tokens remain local and never enter source or artifacts. Every
-connector must explicitly select `connector.ServiceUser` or
-`connector.ServiceSystem`; system-mode configuration and self-test run as the
-eventual service identity before activation. macOS targets require
-`connector.ServiceUser`; macOS system services are unsupported. Runtime
-manifests and heartbeats
-report the actual executable SHA-256. Upgrades retain a local binary/state
-rollback, migrate compatible settings through candidate-typed flags, and
-validate staged settings under the service identity before replacement. Never
-write a candidate schema with `configure` before `upgrade`; noninteractive
-upgrades must provide every reported required flag. The retained state is
-exposed through the connector's `rollback` lifecycle command. Read
-`reference/connectors.md` before adding a connector.
-
-macOS artifacts produced by this build are unsigned and not notarized. Publish
-their SHA-256 values and instruct users to verify the exact artifact before any
-narrow `xattr -d com.apple.quarantine <file>` operation; never recommend a
-recursive quarantine removal. Use `ServiceUser` for TCC-sensitive desktop
-integrations. A user LaunchAgent can request permissions in the graphical user
-session, subject to macOS privacy approval for the installed executable.
-
-## MVC: handlers are the integration point
-
-The scaffold uses an MVC split for the HTML UI. As the agent grows, you'll
-add domain packages and HTTP handlers; the rule below keeps the package
-graph cycle-free.
-
-```
-main.go      →   <domain> (model)
-                 handlers (controller) → <domain> + views
-                 views (view)
-```
-
-- **Model** — domain packages (`spotify/`, `kanban/`, `weather/`). Pure
-  Go: types, business logic, API calls. Never imports `views/` or
-  `handlers/`.
-- **View** — `views/` holds templ templates plus view-model types
-  (`views.HomeView`, `views.BoardView`). Templates take view-model
-  types only; `views/` never imports a domain package.
-- **Controller** — `handlers/` holds a constructed receiver with HTTP methods
-  (`pages.Home`, `pages.BoardPage`). It imports domain packages and `views/`,
-  does the model→view-model conversion, and renders. Nothing imports
-  `handlers/` back.
-
-**If you find yourself wanting to import `views` from a domain
-package, the handler is in the wrong place — move it to `handlers/`.**
-That single rule prevents the cycle that would otherwise form:
-domain → views → domain.
-
-## Domain package shape
-
-Dependencies are values, not a shared package. Use direct constructor parameters
-for one or two dependencies and a package-local `Deps` struct for larger sets.
-`main.go` constructs each service or SDK handle once and passes it directly to
-consumers. Omitted wiring fails when `newAgent` compiles; nil required values
-panic immediately in constructors.
-
-**A domain package must never import a package that imports that domain.** In
-particular, domain packages never import `handlers/`; handlers may import the
-domain and adapt its types for views. Do not move shared dependencies into a
-package imported by both sides if that package imports either consumer.
-
-Each domain package has two layers:
-
-1. **Pure Go** — business logic, API calls. Accepts handles, returns
-   plain types.
-2. **Tool receiver** — a `Tools` type constructed with the domain service, with
-   `func (t *Tools) Name(ctx, In) (Out, error)` methods that call the pure
-   layer. Register those bound methods with `RegisterTool`.
-
-A typical domain package:
-
-```
-spotify/
-├── service.go  # NewService(...) + methods returning plain types
-└── tools.go    # NewTools(service) + bound RegisterTool targets
-```
-
-LLM-callable tools live in `tools.go`. HTTP routes live in `handlers/`.
-Both consume the pure layer in `service.go`; neither imports the other.
-
-```go
-// feature/tools.go
-type Tools struct{ service *Service }
-
-func NewTools(service *Service) *Tools {
-    if service == nil {
-        panic("feature: service is required")
-    }
-    return &Tools{service: service}
-}
-
-func (t *Tools) List(ctx context.Context, in ListIn) (ListOut, error) {
-    return t.service.List(ctx, in)
-}
-
-// main.go
-featureService := feature.NewService(featureHandle)
-featureTools := feature.NewTools(featureService)
-pages := handlers.New(handlers.Deps{Feature: featureService})
-agent.RegisterTool(tool.Typed[ListIn, ListOut]("list").
-    Description("List items.").Execute(featureTools.List).Build(), agentsdk.AccessUser)
-```
-
-Use relative paths (`/auth`, `/settings`) for links within the same agent UI.
-`agentsdk.AgentURL()` / `agentsdk.AgentURLFromContext(ctx)` return the agent's
-public origin for absolute URLs that leave the request context, such as emails,
-third-party callbacks, or chat messages. These accessors are unavailable during
-definition and offline manifest inspection. Render pages so they can omit
-absolute links when the URL is unavailable in direct unit tests. Real preview
-startup supplies the synchronized target origin.
-
-## Build chain
-
-Every time you change a query, `.templ`, `styles/app.css`, or Go source, run the
-local build before declaring the build done:
-
-```bash
-go tool air build
-```
-
-That runs the chain end-to-end:
-
-```bash
-remove prior sqlc-generated files from internal/db
-.airlock/toolchain/bin/sqlc generate
-go mod tidy
-.airlock/toolchain/bin/sqlc generate # only when db/queries/*.sql exists
-go tool templ generate
-.airlock/toolchain/bin/tailwindcss -i styles/app.css -o views/static/app.css --minify
-go test -p=1 -count=1 ./...
-go build -buildvcs=false -o <temporary-path> .
-discover immediate connectors/<slug>, validate each native manifest, and cross-compile declared targets with CGO_ENABLED=0
-```
-
-The temporary binary is removed after compilation, so the source tree stays
-clean.
-
-`go mod tidy` runs FIRST. Airlock bumps `agentsdk`'s required version in
-`go.mod` before each build (so the build resolves against the current
-SDK), but it doesn't touch `go.sum` — so the chain has to reconcile the
-sums before `go tool templ generate` can resolve the templ tool
-dependency. Putting tidy first turns the trial-and-error you'd
-otherwise hit ("missing go.sum entry…") into a single clean pass.
-
-Not committed (local and Docker builds regenerate them):
-- `*_templ.go` — regenerated from `.templ`
-- `views/static/app.css` — regenerated by tailwindcss
-- `internal/db/*` except `internal/db/doc.go` — regenerated by sqlc when query
-  inputs exist
-- `/agent` and `/agent.exe` — root binaries from ad-hoc local builds
-- `.airlock/toolchain/` — installed locally by `go tool air toolchain install`
-
-Commit `.templ`, `styles/app.css`, `db/queries/*.sql`, and
-`internal/db/doc.go`. A fresh clone + `docker build .` regenerates sqlc,
-templ, and Tailwind output before compiling.
-
-## Testing
-
-Write Go tests for what you add. The build runs
-`go test -p=1 -count=1 ./...` so cached successes cannot hide a regression.
-No database or host runtime is provisioned for that step. A failing
-test means the build isn't done. Keep the suite focused: test
-complex logic, regressions, and important route behavior, not every function or
-handler by default.
-
-Tests must not load secrets, connection credentials, or MCP credentials from
-`.env` or the developer's environment. Secrets stay in Airlock. Local tests
-exercise domain logic and explicit mocks; integration uses real remote targets.
-
-- **Unit tests** sit next to the code they cover, one `_test.go` per source
-  file: `<domain>/service_test.go` for business logic, `handlers/home_test.go`
-  for handler rendering. Construct the receiver with typed test dependencies
-  and invoke the method directly. Use table-driven subtests with `t.Run`.
-- **Offline composition** in `main_test.go` calls `newAgent().Manifest()` and
-  checks declarations/schema. It never calls Start, Serve or Handler.
-- **Caller fixtures** for direct handler/domain tests use
-  `testutil.WithCaller(ctx, wire.Caller{...})` with explicit validated actor,
-  access and origin. This context is metadata, not remote authorization.
-- **Model fixtures** use `goai/testutil.NewMockModel` with explicit scripted
-  responses injected into the domain service's model dependency. No automatic
-  model-slot fallback, live account resolution or local agent scheduler.
-- **Integration packages** use `//go:build airlockintegration` and a real remote
-  scoped runner client with explicit app/deployment/revision/runtime generation.
-  Keep testdata in the source candidate. `air test --remote NAME --target preview
-  --revision UUID --suite integration --wait` admits the packaged real-host suite;
-  missing capability is an error, never a skipped or simulated pass.
-- **DB/startup/HTTP/agent integration** executes on the real host with isolated
-  target credentials, migrations, manifest sync, OnStart and durable workers.
-- `go test` can exceed the default bash timeout on a cold cache — pass a larger
-  `timeout` when you run it.
-
-## Database
-
-Migrations live under `db/migrations/`. Use SQL for schema changes and Go
-migrations only for bounded PostgreSQL work that requires Go logic. Storage,
-HTTP, credential, and other external data changes belong in observable durable
-jobs over an expand/migrate/contract layout; never perform them from goose or
-`OnStart`. Use sequential goose names
-(`NNN_short_description.sql` or `.go`). Query files under `db/queries/` are sqlc
-input; each `-- name: FuncName :one|:many|:exec` block becomes a typed Go
-function in `internal/db/`.
-
-`go tool air build` verifies source/schema generation without a database. Airlock
-runs actual compiled migrations and its host validation gates remotely. Query
-correctness, migration locking and startup are real-host integration assertions,
-not properties proved by a domain repository mock.
-
-## Dockerfile & system setup
-
-**Never modify `Dockerfile`** — Airlock regenerates it. System packages,
-language runtimes, and binary tools the agent needs at runtime go in
-`setup.sh`, which runs as root at image build time and is baked into
-the runtime image. Files selected by `airlock.toml` are available under `/app`
-before this script runs. Example:
-
-```bash
-# setup.sh
-apt-get update && apt-get install -y --no-install-recommends ffmpeg
-# Drop tool binaries under /var/agent/bin/ — already on PATH at runtime.
-```
-
-After editing `setup.sh`, verify the tools it installs actually run before
-relying on them. In the airlock toolserver:
-
-```bash
-sudo run-setup && <new-binary> --version
-```
-
-## HTML UI — short
-
-Stack: `templ` (type-safe HTML) + `htmx` (interactivity) + Tailwind v4 +
-DaisyUI (styling and busy indicators) + Lucide (icons). htmx is served same-origin by the framework under
-`agentsdk.Assets.HTMX`; the compiled Tailwind stylesheet is served from
-the agent's own `/static/app.{hash}.css` URL after `newAgent` passes its embedded
-bytes to `agentsdk.RegisterStaticAsset`.
-
-**Read the version-matched `agentsdk`, `templ`, `htmx`, `daisyui`, and `lucide` skill
-references before writing code** — each carries its API or language/library
-reference. In a plain checkout, `go tool air update` refreshes their entry
-  points at `.airlock/toolchain/skills/{agentsdk,templ,htmx,daisyui,lucide}/SKILL.md`;
-`go tool air toolchain install` installs them directly. In the airlock
-toolserver, load the UI references through the `skill` tool and read the SDK at
-`/libs/agentsdk/REFERENCE.md`. The gotchas below are the high-frequency traps;
-the skills have the full rules. templ markup is not a Go function body and an
-`hx-*` swap is not a free-form DOM write — when in doubt, read the skill, don't
-guess.
-
-Design principles:
-
-- **Pick a tone before writing markup.** Music dashboard, weather
-  agent, admin console — each earns a distinct aesthetic. Decide
-  first; build to it. A centered title + three buttons is the stock-
-  demo trap.
-- **Mobile-first.** Design for narrow viewports, then add `sm:` /
-  `md:` / `lg:` variants for wider screens. Test at ~375px before
-  declaring done.
-- **Brand through DaisyUI's theme**, not per-element overrides.
-  Set the theme in `styles/app.css` (see **Theming** below). Don't
-  sprinkle `bg-[#...]` or inline `style=` colours through templates.
-- **Show the domain.** Render real data prominently — album art,
-  weather illustrations, charts. Emoji-as-title-decoration is a
-  placeholder you replaced.
-- **Give action buttons an idle icon.** Use the complete Lucide catalog through
-  `github.com/airlockrun/agentsdk/lucide`; do not paste SVG paths, load an icon
-  CDN, or use emoji as interface icons. Labeled buttons keep their text. Icon-only
-  buttons need an `sr-only` label on the button.
-- **A loading slot is never empty at rest.** For htmx action buttons, render
-  `@ActionIcon("domain-appropriate-name")` before the label and add
-  `hx-disable="this"`. The component overlays the Lucide idle icon and
-  DaisyUI spinner at identical dimensions. Leave the request indicator on the
-  requesting element so its `htmx-request` class switches the two; do not point
-  `hx-indicator` at a remote element. If `views/icons.templ` is absent, create
-  it from the version-matched Lucide skill.
-- **The web app IS the product — don't explain it, build it.** The web UI
-  is the user's web-side control surface over the same domain they also
-  drive from chat. They already know both exist and that changes sync, so
-  don't narrate that relationship or the mechanics: no "Chat controls"
-  panel, no "ask the agent in chat to do X", no "this page refreshes so
-  chat-side changes appear here", no meta tagline describing what the agent
-  is. Skip filler stat badges that just restate what's already on screen.
-  Never surface the agent's plumbing — tool inventory, model/SDK names,
-  internal IDs. Just build the genuinely useful, operable product and make
-  the web side as capable for the domain as chat is. If a line only makes
-  sense to someone who knows this is an LLM agent, it doesn't belong in the
-  UI.
-- **templ control flow is only `if` / `else` / `switch` / `for` — there is
-  no early `return`.** A bare `return` inside a templ block is not an exit;
-  templ writes it to the page as the literal text "return" and the
-  surrounding markup still renders. To show one of several states, use a
-  single `if / else if / else` chain — never `if cond { …markup… return }`,
-  which renders every matching block plus stray "return" text.
-- **Don't double-wrap htmx swap targets.** Either the page owns the
-  card and the partial swaps inner content, or the partial owns the
-  card and the page renders only an empty target. Picking both
-  produces two stacked headers and a card-in-a-card border.
-- **Inheritance is explicit.** An htmx attribute on a parent applies to
-  descendant request elements only when its name carries `:inherited`, such as
-  `hx-target:inherited="#results"`. Add it only where descendants rely on the
-  parent value.
-- **HTTP errors swap by default.** Use `hx-status` for status-specific targets
-  or swaps. Use `hx-swap="none"`, a no-swap status, or `htmx.config.noSwap`
-  when the response body must not replace the target. htmx events use
-  colon-separated names and expose request state under `event.detail.ctx`.
-- **`hx-disable` disables controls during a request.** Use `hx-ignore` only to
-  prevent htmx from processing an element and its descendants.
-- **Static JS handlers are quoted literals, not `{ }` expressions.**
-  Write `onclick="my_modal.showModal()"` — templ emits it verbatim. The
-  `onclick={ "…" }` brace form types the value as `templ.ComponentScript`,
-  so a plain string won't compile and you'd be pushed to
-  `templ.JSUnsafeFuncCall`. Prefer htmx for behavior; reserve inline JS
-  for trivial DOM calls like opening a `<dialog>`.
-- **Record styling decisions in `NOTES.md`** — chosen theme name (or
-  custom palette tokens), font family + where it's loaded from,
-  layout conventions you committed to. The next rebuild should see
-  what you decided.
-
-### Theming
-
-DaisyUI ships ~35 built-in themes. **Pick the one that fits the app's tone
-and use it — don't hand-author a palette.** The installed `daisyui-config`
-skill lists the version-matched built-in themes. Set the chosen themes in
-`styles/app.css` and on the page:
-
-```css
-@plugin "../.airlock/toolchain/lib/tailwind/daisyui.mjs" {
-  themes: winter --default, night --prefersdark;
-}
-```
-```html
-<html data-theme="winter">   <!-- or omit and rely on --default -->
-```
-
-Plugins load from the repo-local toolchain path — don't `npm i daisyui` or use
-the bare `@plugin "daisyui"` name (it doesn't resolve here); the daisyUI
-skills' bare-name examples need this path translation.
-
-For light branding you may retint a built-in theme by reusing its name
-and overriding a token or two — `@plugin
-"../.airlock/toolchain/lib/tailwind/daisyui-theme.mjs" { name: "winter"; --color-primary: …; }`
-inherits the rest. (A native Tailwind `@theme {}` block does *not*
-retint daisyUI components.) Authoring a full theme from scratch is
-rarely worth it.
-
-## Updating the UI
-
-The web UI is action-driven first: a user's POST swaps its own response, so the
-page reflects what they just did. That covers most updates and disrupts nobody.
-
-State also changes from outside the page — the other surface (the user told the
-bot "add a card" in chat) or live data (now-playing, a feed). To pick that up,
-**poll, but never re-swap unchanged content.** A periodic swap that replaces a
-region resets scroll, focus, and in-progress drags — the classic "it scrolled me
-back to the top every few seconds" bug.
-
-Make the poll conditional: give the data an updated-at (or version), have the
-polling request carry what it last saw (a query param or header you set — htmx
-does not send `If-Modified-Since` for you), and in the handler **return `204 No
-Content` when nothing changed.** htmx treats both 204 and 304 as no-swap
-statuses. Use 204 for an application-level "nothing changed" response; reserve
-304 for standard HTTP conditional-request semantics. Return `200` with the
-fragment only on a real change.
-
-```
-<div id="np" hx-get="/now-playing?since=0" hx-trigger="every 5s" hx-swap="outerHTML">…</div>
-```
-```go
-// nothing new since the client's last-seen version → tell htmx to do nothing
-if r.URL.Query().Get("since") == currentVersion {
-    w.WriteHeader(http.StatusNoContent) // 204
-    return
-}
-// changed → render the replacement div carrying the current version; outerHTML
-// swaps it in, so the next poll sends since=<current> and idles on 204 again
-```
-
-When a real change does swap, don't yank the user around: swap the smallest
-region that changed (or out-of-band swaps of just the changed items), not the
-whole scroll container. Mark an element that must survive untouched with
-`hx-preserve` (a media player, a focused input); to refresh a region in place
-while keeping scroll and selection, use a morph swap (idiomorph) rather than
-replacing it.
-
-For a page that isn't live and only needs to catch cross-surface edits (which
-happen while the user is away in chat), refresh-on-focus is a fine, lighter
-alternative to polling:
-
-```
-hx-trigger="visibilitychange[document.visibilityState === 'visible'] from:document"
-```
+# App development rules
+
+> **Managed by the scaffold — do not edit.** Airlock builds and `go tool air
+> update` regenerate this file. Put app-specific decisions in `NOTES.md`; tooling
+> never overwrites it. Keep that log short and current.
+
+## Deliver the app, including chat tools
+
+- Unless the user explicitly asks for a narrower deliverable, build **a web UI
+  plus typed chat tools over the same domain service**. A UI alone is not enough.
+- MUST register `RegisterTool` declarations for the core user workflows: the
+  useful reads and domain actions users can perform in the UI. HTTP routes do
+  not become chat tools automatically. Use typed input/output structs and
+  explicit access tiers; do not expose arbitrary SQL or unrestricted writes.
+- Share domain logic between HTTP handlers and tools; neither surface calls or
+  imports the other. Apply the same caller authorization and data scoping in
+  the service, not only in the UI.
+- Before declaring completion, check the canonical manifest for the intended
+  tools and schemas. `go tool air build` warns when no tools are registered;
+  zero tools is acceptable only when the requested app is intentionally UI-only
+  or otherwise has no chat operations. Never add a dummy tool to silence it.
+- Register 1–3 useful app-specific suggested prompts for supported workflows.
+- Set `agentsdk.Config.Icon` in `newAgent()` to one emoji for the app's domain;
+  customize the scaffold's `📦` placeholder and Description during creation.
+  Preserve an explicitly chosen icon on updates. Use Lucide for UI controls.
+- Record assumptions about vague requests and product/styling decisions in
+  `NOTES.md`.
+
+## Read the matching reference for the task
+
+Use the SDK version installed for this app, not guessed APIs or online examples.
+Manifests, sync and invocation require `airlock.app-runtime.v4`; rebuild with a
+compatible SDK rather than bypassing protocol checks or fabricating declarations.
+In a checkout, start at `.airlock/toolchain/skills/agentsdk/SKILL.md`; its
+`reference/` companions contain the guides below. `go tool air update` refreshes
+the entry points; `go tool air toolchain install` installs the toolchain directly.
+In the Airlock toolserver, read `/libs/agentsdk/REFERENCE.md` and its sibling
+`reference/` guides; load UI skills through the `skill` tool.
+
+| Task | Read before implementing |
+| --- | --- |
+| SDK declarations, typed tools, dependency wiring, system setup | SDK reference |
+| Local build, generated files, importing a non-Go app | `reference/local-development.md` |
+| Preview selection, CLI operations, build logs, resource bindings | `reference/remote-development.md` and `go tool air help` |
+| Deterministic tests and real-host integration | `reference/testing.md` |
+| Caller identity, access, origin, caller test fixtures | `reference/caller.md` |
+| Pages, MVC, assets, themes, embedded UI, live updates | `reference/html-ui.md` |
+| SQL, migrations and durable jobs | `reference/database.md`, `reference/jobs.md` |
+| Direct HTTP/MCP resource discovery, app-slot verification, streaming downloads, interactive login | `reference/integrations.md`, `reference/auth-web.md` |
+| Connected-machine executables and lifecycle | `reference/connectors.md` |
+
+Discover required slots for both preview and production and the user's authorized
+global resources before reporting the app ready. Proactively prepare/apply every
+required unbound slot using only a compatible, unambiguous authorized resource.
+Use the pending candidate configuration for initial/setup-blocked builds, and
+the immutable candidate/deployment approval flow for production configuration.
+Do not guess between resources, borrow another user's binding, create credentials,
+or bypass an approval. Missing configuration does not block source deployment;
+report warnings and the target's existing settings link, and distinguish deployed
+source from operational readiness. Ask the user when a compatible selection or
+authority is missing; report unresolved slots explicitly. See `reference/integrations.md` for
+`/resource` versus `target/slot` commands and candidate selection details.
+
+Before editing UI code, read the relevant version-matched `templ`, `htmx`,
+`daisyui` (including config/colors), and `lucide` skills under
+`.airlock/toolchain/skills/`. The bundled htmx is **v4**, not v2; use its actual
+attribute and event APIs. Procedural examples belong in those references, not here.
+
+## Keep definition, domain and runtime separate
+
+- `newAgent()` is the definition-only composition root: register handles,
+  construct services, inject dependencies and register bound methods. No runtime
+  environment reads, database operations, network calls or goroutines there.
+- `Agent.DB()` and registration APIs return late-bound handles. Pass them into
+  constructors, but do not operate on runtime-backed handles before startup.
+  Required dependencies must fail immediately when omitted, not silently fall back.
+- `main()` only calls `newAgent().Serve()`. `Agent.Manifest()` freezes the
+  complete declaration; `AIRLOCK_AGENT_MODE=manifest` emits it offline without
+  starting the app, migrations, a database or network services.
+- Use named `OnStart` hooks only for disposable process-local initialization.
+  Durable work belongs in registered jobs, not startup hooks or migrations.
+- Keep `<domain>/service.go` for business logic and `<domain>/tools.go` for typed
+  tool receivers. Inject the same service into both tools and `handlers/`.
+- `handlers/` converts domain types into `views/` view-model types and renders
+  templ pages. Domain packages never import handlers or views; views never import
+  domain packages. No shared dependency container that creates import cycles.
+- Use `agentsdk.CallerFromContext(ctx)` and handle the bool from `User()`.
+  App-owned work has no human user or initiator; **never substitute the owner**.
+  Authentication, app access and data ownership are separate checks. Do not
+  infer authorization from request fields, user UUIDs or display metadata.
+
+## Build and verify
+
+- Run `go tool air build` after changes to Go, queries, `.templ` or CSS, and
+  before declaring completion. It generates code/assets, runs deterministic
+  tests, compiles app/connectors and inspects the offline app manifest.
+- No database or host runtime is provisioned locally. Do not import SDK
+  simulators/testcontainers in the default build/test selection, start an SDK
+  host in local tests, or read secrets from `.env`/developer credentials.
+- Test domain logic and important handler behavior with injected typed
+  repository/HTTP/model fixtures. Keep tests next to their source, using
+  table-driven `t.Run` cases where appropriate.
+- Offline composition tests call `newAgent().Manifest()`, never Start, Serve
+  or Handler. Use explicit caller fixtures for SDK-aware direct calls.
+- Validate migrations, SQL behavior, startup, credentials, jobs and integration
+  against a real authorized remote target; domain mocks do not prove them.
+  Keep real-host tests behind `airlockintegration` and follow the testing guide.
+- Never modify `Dockerfile`; it is generated. Use `setup.sh` for runtime system
+  dependencies and `airlock.toml` for runtime files; verify installed tools run.
+- Commit source inputs, not generated `*_templ.go`, `views/static/app.css`,
+  sqlc output under `internal/db/` (except `doc.go`), root binaries or
+  `.airlock/toolchain/`. Follow the local-development guide for generation.
+
+## Remote targets and human links
+
+- `--remote` selects an Airlock instance; `--target` selects its deployment.
+  General commands default to production; `air preview` does not change later
+  defaults. Hosted workspaces can inject a preview default. Select explicitly.
+- Preview uploads/builds and remote integration can change real state. Use the
+  requested app/target and permissions; keep fixtures in the whole candidate.
+- Share the exact server-returned `App URL` (`deployment.routeBaseUrl` in status
+  JSON, `routeBaseUrl` in build JSON). Never invent a hostname or replace a
+  preview URL with production. `workspaceUrl` is a separate dashboard link.
+- Verify with authenticated `air request`, `air tools invoke` and agent commands
+  against the selected target, not an unauthenticated browser GET or tokens in
+  links. Use relative links inside the app; absolute app origins are runtime-only.
+
+## Build an operable, responsive UI
+
+- Use templ + htmx + Tailwind v4 + DaisyUI + Lucide. Serve bundled htmx and
+  registered embedded app assets, not CDN replacements.
+- Prefer htmx partial-page updates for filters, search, pagination and in-app
+  actions; use `hx-boost` for ordinary internal page navigation where compatible
+  with page initialization. Both preserve the document and avoid full-page reloads.
+- Include `@agentsdk.WebUI(agentsdk.WebUIOptions{})` once in full-page layout
+  heads, not partials. Do not duplicate its authentication recovery listener.
+- Internal tools open on useful data and primary actions, not marketing heroes,
+  agent plumbing, tool inventories or explanations of chat/UI synchronization.
+- Wrap the complete compact identity block in `<header data-airlock-standalone-only>`;
+  WebUI hides that entire element after the trusted Airlock iframe handshake.
+  Keep identity-only decoration and spacing inside it, and functional navigation,
+  filters, search, and actions outside it. Check that embedded view leaves no empty header shell.
+- The iframe width changes during split-pane resizing: use fluid widths,
+  `min-width: 0`, wrapping layouts and live CSS queries. Check standalone and
+  embedded at 375px, then widen/narrow the same pane without reloading.
+- Choose built-in light/dark DaisyUI themes in `styles/app.css`, using local
+  toolchain plugins and semantic colors. Do not pin root `data-theme`, force
+  `color-scheme`, or add theme-sync JavaScript. Verify both modes.
+- Give action buttons an idle Lucide icon, accessible labels and a request
+  spinner without layout shifts; use the scaffold's `views.ActionIcon` pattern.
+- Publish user-scoped UI changes in the domain mutation's app DB transaction;
+  subscribe read-only fragments with `data-airlock-topic` and `airlock:change`.
+  Do not poll for domain changes. Keep forms/focus/scroll outside swap targets;
+  follow the HTML UI guide for tiny fields, lists and active filters.

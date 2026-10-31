@@ -26,7 +26,7 @@ const (
 	Host
 	AppTool
 	AppFile
-	AppDatabase
+	_ // Kind values participate in stable external binding hashes.
 	ResourceTool
 	ResourceConnection
 )
@@ -55,7 +55,7 @@ func Local(kind Kind, namespace, operation string) Path {
 // Only host-facing namespaces accept this constructor; app-local capabilities
 // retain their manifest identities when delivered to an app runtime.
 func Qualified(kind Kind, target, alias, operation string) Path {
-	if kind < Host || kind > ResourceConnection || operation == "" || (kind != Host && (target == "" || alias == "")) {
+	if (kind != Host && kind != AppTool && kind != AppFile && kind != ResourceTool && kind != ResourceConnection) || operation == "" || (kind != Host && (target == "" || alias == "")) {
 		panic("binding: qualified capability requires a supported kind, target, alias and operation")
 	}
 	return Path{kind: kind, canonicalNamespace: target, namespaceAlias: alias, canonicalOperation: operation, operationAlias: operation}
@@ -134,8 +134,6 @@ func (p Path) JSParts() []string {
 		return []string{"apps", p.namespaceAlias, "tools", p.operationAlias}
 	case AppFile:
 		return []string{"apps", p.namespaceAlias, "files", builtinJSName(strings.TrimPrefix(p.operationAlias, "file_"))}
-	case AppDatabase:
-		return []string{"apps", p.namespaceAlias, "db", "query"}
 	case ResourceTool:
 		return []string{"resources", p.namespaceAlias, p.operationAlias}
 	case ResourceConnection:
@@ -249,8 +247,6 @@ func kindName(kind Kind) string {
 		return "app_tool"
 	case AppFile:
 		return "app_file"
-	case AppDatabase:
-		return "app_db"
 	case ResourceTool:
 		return "resource_mcp"
 	case ResourceConnection:

@@ -3,7 +3,6 @@ package agentsdk
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,34 +29,6 @@ func readCappedFile(rc io.ReadCloser) ([]byte, error) {
 		return nil, errors.New("file exceeds the 16 MiB in-memory cap; use fileGrep, fileHead, fileTail, fileLines or fileReadRangeBytes")
 	}
 	return b, nil
-}
-
-func rowsToMaps(rows *sql.Rows) ([]map[string]any, error) {
-	cols, err := rows.Columns()
-	if err != nil {
-		return nil, err
-	}
-	var result []map[string]any
-	for rows.Next() {
-		values := make([]any, len(cols))
-		ptrs := make([]any, len(cols))
-		for i := range values {
-			ptrs[i] = &values[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-		row := make(map[string]any, len(cols))
-		for i, col := range cols {
-			v := values[i]
-			if b, ok := v.([]byte); ok {
-				v = string(b)
-			}
-			row[col] = v
-		}
-		result = append(result, row)
-	}
-	return result, rows.Err()
 }
 
 func randomHex(n int) string {

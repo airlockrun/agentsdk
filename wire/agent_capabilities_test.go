@@ -17,6 +17,7 @@ func TestAgentCapabilityPolicyValidation(t *testing.T) {
 		{"image", &AgentCapabilityPolicy{Allow: []AgentCapability{CapabilityAttachToContext, CapabilityFileStat}}, true},
 		{"missing helper dependency", &AgentCapabilityPolicy{Allow: []AgentCapability{CapabilityAttachToContext}}, false},
 		{"unknown", &AgentCapabilityPolicy{Allow: []AgentCapability{"air//execute"}}, false},
+		{"generic SQL", &AgentCapabilityPolicy{Allow: []AgentCapability{"air//query_db"}}, false},
 		{"js alias", &AgentCapabilityPolicy{Allow: []AgentCapability{"air.fileRead"}}, false},
 		{"direct alias", &AgentCapabilityPolicy{Allow: []AgentCapability{"air__file_read"}}, false},
 		{"private declaration owns selection", &AgentCapabilityPolicy{Allow: []AgentCapability{"tool//private"}}, false},

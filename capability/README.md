@@ -38,13 +38,15 @@ file operations means directory-specific policy must still be checked.
 
 ## Inventory
 
-`Fixed()` contains 30 entries. Builtin input contracts live in `inputs.go` and
-are shared with the app/direct executors. No selected-definition list can add
+`Fixed()` contains 29 entries. Builtin input contracts live in `inputs.go` and
+file output contracts in `outputs.go`; both are shared with the app executors.
+Generic SQL is not a runtime capability; app-owned tools use the SDK database APIs.
+No selected-definition list can add
 an executor to an app.
 
 | Target | Operations |
 | --- | --- |
-| App, 18 | `file_read`, `file_read_bytes`, `file_read_range_bytes`, `file_grep`, `file_head`, `file_tail`, `file_lines`, `file_stat`, `file_exists`, `file_write`, `file_delete`, `file_list`, `file_encode`, `file_decode`, `file_decode_text`, `file_edit_lines`, `file_sed`, `query_db` |
+| App, 17 | `file_read`, `file_read_bytes`, `file_read_range_bytes`, `file_grep`, `file_head`, `file_tail`, `file_lines`, `file_stat`, `file_exists`, `file_write`, `file_delete`, `file_list`, `file_encode`, `file_decode`, `file_decode_text`, `file_edit_lines`, `file_sed` |
 | Platform, 11 | `output`, `file_share_url`, `http_request`, `web_search`, `attach_to_context`, `analyze_image`, `transcribe_audio`, `generate_image`, `speak`, `embed`, `request_upgrade` |
 | Executor, 1 | `air.log`; console methods are JS intrinsics, not app RPCs |
 

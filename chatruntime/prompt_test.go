@@ -50,6 +50,46 @@ func TestPromptUsesCanonicalCatalog(t *testing.T) {
 	}
 }
 
+func TestFixedFileOutputDeclarations(t *testing.T) {
+	for _, def := range capability.Fixed() {
+		if def.Target != capability.App {
+			continue
+		}
+		t.Run(def.Path.CanonicalOperation(), func(t *testing.T) {
+			declaration, err := chatruntime.RenderTypeScript([]capability.Definition{def})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(def.OutputSchema) == 0 || strings.Contains(declaration, "Promise<unknown>") {
+				t.Fatalf("missing output contract: %s", declaration)
+			}
+			var want []string
+			switch def.Path.CanonicalOperation() {
+			case "file_stat", "file_write", "file_list":
+				want = []string{"path: string;", "filename: string;", "contentType: string;", "size: number;", "lastModified: string;"}
+			case "file_read_bytes", "file_read_range_bytes":
+				want = []string{"base64: string;", "size: number;"}
+			case "file_delete":
+				want = []string{"deleted: boolean;"}
+			case "file_exists":
+				want = []string{"exists: boolean;"}
+			case "file_encode", "file_decode", "file_decode_text", "file_edit_lines", "file_sed":
+				want = []string{"inline: true;", "content: string;", "inline: false;", "savedTo: string;", "preview?: string;", "size: number;"}
+			default:
+				want = []string{"Promise<string>"}
+			}
+			if def.Path.CanonicalOperation() == "file_list" {
+				want = append(want, "| null")
+			}
+			for _, text := range want {
+				if !strings.Contains(declaration, text) {
+					t.Errorf("missing %q in %s", text, declaration)
+				}
+			}
+		})
+	}
+}
+
 func TestPromptAdvertisesOnlyQualifiedSharedSurface(t *testing.T) {
 	defs := []capability.Definition{
 		{Path: capability.Qualified(capability.Host, "", "", "list_apps"), Target: capability.Platform, InputSchema: json.RawMessage(`{"type":"object"}`)},

@@ -30,6 +30,9 @@ type run struct {
 	mu              sync.Mutex // guards actions and logs
 	fileCache       *fileCache // per-run local-disk read cache (large-file reads spill here)
 	cleanupOnce     sync.Once  // guards cleanupScratch so run.complete can call it on every path
+	loggingOff      bool
+	actionsBytes    int
+	actionErrors    bool
 }
 
 func newRun(agent *Agent, id, bridgeID, conversationID string, ctx context.Context) *run {
@@ -75,9 +78,13 @@ const maxRunLogBytes = 64 * 1024
 func (r *run) logAppend(level wire.LogLevel, msg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.loggingOff {
+		return
+	}
+	msg = wire.BoundedAuditText(msg, 4096)
 	r.logs = append(r.logs, wire.LogEntry{Level: level, Message: msg})
 	r.logsBytes += len(msg)
-	for r.logsBytes > maxRunLogBytes && len(r.logs) > 1 {
+	for (r.logsBytes > maxRunLogBytes || len(r.logs) > wire.MaxAuditLogs) && len(r.logs) > 1 {
 		r.logsBytes -= len(r.logs[0].Message)
 		r.logs = r.logs[1:]
 	}

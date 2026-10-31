@@ -28,8 +28,8 @@ type AsyncTask struct {
 // Invocation enqueues work before returning its ID. The host owns delivery,
 // cancellation and recovery; no handler goroutine is detached in the app.
 // The returned native handle can also declare crons or inspect typed job output.
-// Use this for work that may exceed the foreground step's shared 60-second
-// model/tool-batch deadline; callers observe completion through task controls.
+// Use this for long work that requires durable delivery beyond foreground
+// operation deadlines; callers observe completion through task controls.
 func RegisterAsyncTool[In, Out any](a *Agent, definition *AsyncTool[In, Out]) *JobHandle[In, Out] {
 	if a == nil || definition == nil || definition.Job == nil {
 		panic("agentsdk: async tool requires an agent and job definition")

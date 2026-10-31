@@ -18,11 +18,27 @@ func (r *run) recordAction(actionType string, request any, response any, err err
 		Response:   response,
 	}
 	if err != nil {
-		a.Error = err.Error()
+		a.Error = wire.BoundedAuditText(err.Error(), wire.MaxAuditErrorBytes)
 	}
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err != nil {
+		r.actionErrors = true
+	}
+	if r.loggingOff || len(r.actions) >= wire.MaxAuditActions {
+		return
+	}
+	bounded := wire.BoundAuditActions([]wire.Action{a})
+	if len(bounded) == 0 {
+		return
+	}
+	a = bounded[0]
+	encoded, _ := json.Marshal(a)
+	if r.actionsBytes+len(encoded) > wire.MaxAuditActionsBytes {
+		return
+	}
+	r.actionsBytes += len(encoded)
 	r.actions = append(r.actions, a)
-	r.mu.Unlock()
 }
 
 // complete flushes the run's recorded actions to Airlock. Called only by
@@ -39,6 +55,9 @@ func (r *run) complete(ctx context.Context, status, errMsg, errorKind, panicTrac
 func (r *run) hasActionErrors() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.actionErrors {
+		return true
+	}
 	for _, a := range r.actions {
 		if a.Error != "" {
 			return true
@@ -51,14 +70,20 @@ func (r *run) completeWithCheckpoint(ctx context.Context, status, errMsg, errorK
 	// The run is terminal here (every dispatcher path funnels through this
 	// finalizer); drop the local-disk read cache before flushing.
 	r.cleanupScratch()
+	r.mu.Lock()
+	actions, logs := wire.BoundAuditActions(r.actions), wire.BoundAuditLogs(r.logs)
+	r.mu.Unlock()
+	if r.loggingOff {
+		actions, logs, errMsg, panicTrace = nil, nil, "", ""
+	}
 	body := wire.RunCompleteRequest{
 		RunID:      r.id,
 		Status:     status,
-		Error:      errMsg,
+		Error:      wire.BoundedAuditText(errMsg, wire.MaxAuditErrorBytes),
 		ErrorKind:  errorKind,
-		PanicTrace: panicTrace,
-		Actions:    r.actions,
-		Logs:       r.logs,
+		PanicTrace: wire.BoundedAuditText(panicTrace, wire.MaxAuditPanicBytes),
+		Actions:    actions,
+		Logs:       logs,
 		Checkpoint: checkpoint,
 	}
 	if body.Actions == nil {

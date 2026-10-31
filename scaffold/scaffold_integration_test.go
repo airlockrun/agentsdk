@@ -49,6 +49,11 @@ tool github.com/a-h/templ/cmd/templ
 	}
 	env := append(os.Environ(), "GOWORK=off", "DOCKER_HOST=unix:///nonexistent", "AIRLOCK_API_URL=", "AIRLOCK_AGENT_ID=", "AIRLOCK_AGENT_TOKEN=", "AIRLOCK_DB_URL=", "TEST_DB_URL=")
 	binary := filepath.Join(dir, "app")
+	sqlc := exec.Command("go", "run", "github.com/sqlc-dev/sqlc/cmd/sqlc@v"+SQLCVersion, "generate")
+	sqlc.Dir, sqlc.Env = dir, env
+	if output, err := sqlc.CombinedOutput(); err != nil {
+		t.Fatalf("sqlc generate: %v\n%s", err, output)
+	}
 	for _, args := range [][]string{
 		{"mod", "tidy"}, {"tool", "templ", "generate"}, {"test", "-count=1", "./..."}, {"build", "-buildvcs=false", "-o", binary, "."},
 	} {
@@ -70,6 +75,9 @@ tool github.com/a-h/templ/cmd/templ
 	}
 	if err := wire.CheckAppRuntimeProtocol(manifest.RuntimeProtocol); err != nil {
 		t.Fatal(err)
+	}
+	if manifest.Icon != "📦" {
+		t.Fatalf("offline scaffold icon = %q, want 📦", manifest.Icon)
 	}
 	if len(manifest.Routes) == 0 || len(manifest.StaticAssets) == 0 {
 		t.Fatal("offline scaffold omitted app declarations")

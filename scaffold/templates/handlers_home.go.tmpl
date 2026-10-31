@@ -10,6 +10,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"agent/views"
@@ -17,18 +18,27 @@ import (
 
 // Handler owns the HTTP handlers. Add a package-local Deps struct and accept it
 // in New when handlers need services from a domain package.
-type Handler struct{}
+type Welcome interface {
+	Word(context.Context) (string, error)
+	SetWord(context.Context, string) error
+}
+
+type Handler struct{ welcome Welcome }
 
 // New constructs the HTTP handler set.
-func New() *Handler {
-	return &Handler{}
+func New(welcome Welcome) *Handler {
+	if welcome == nil { panic("handlers: welcome service is required") }
+	return &Handler{welcome: welcome}
 }
 
 // Home renders the default placeholder homepage. The view-model is
 // constructed inline because there's no domain yet; replace this with
 // a converter from your own data once you add a real model.
 func (h *Handler) Home(w http.ResponseWriter, r *http.Request) error {
+	word, err := h.welcome.Word(r.Context())
+	if err != nil { return err }
 	view := views.HomeView{
+		Word: word,
 		Title:    "Hello from your new agent",
 		Subtitle: "This is the default placeholder homepage.",
 		Examples: []string{
@@ -38,4 +48,20 @@ func (h *Handler) Home(w http.ResponseWriter, r *http.Request) error {
 		},
 	}
 	return views.Index(view).Render(r.Context(), w)
+}
+
+func (h *Handler) Word(w http.ResponseWriter, r *http.Request) error {
+	word, err := h.welcome.Word(r.Context())
+	if err != nil { return err }
+	return views.WelcomeWord(word).Render(r.Context(), w)
+}
+
+func (h *Handler) SetWord(w http.ResponseWriter, r *http.Request) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := r.ParseForm(); err != nil { return err }
+	if err := h.welcome.SetWord(r.Context(), r.FormValue("word")); err != nil { return err }
+	// Push refreshes the tiny read-only fragment, including in other open tabs.
+	// Keep the form itself and its focused input out of the swap target.
+	w.WriteHeader(http.StatusNoContent)
+	return nil
 }

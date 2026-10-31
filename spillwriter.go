@@ -41,11 +41,11 @@ func peekAndSpill(
 		return peek, "", int64(len(peek)), nil
 	}
 
-	cr := &spillCountingReader{r: io.MultiReader(bytes.NewReader(peek), r)}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	if err := agent.writeFileRaw(ctx, dstPath, cr, contentType, ""); err != nil {
+	n, err := agent.writeFileRaw(ctx, dstPath, io.MultiReader(bytes.NewReader(peek), r), contentType, "")
+	if err != nil {
 		_, _ = io.Copy(io.Discard, r)
 		return nil, "", 0, err
 	}
@@ -54,20 +54,7 @@ func peekAndSpill(
 	if previewLen > len(peek) {
 		previewLen = len(peek)
 	}
-	return peek[:previewLen], dstPath, cr.n, nil
-}
-
-// spillCountingReader tallies bytes read so a streamed write can report
-// the final size without buffering the whole body.
-type spillCountingReader struct {
-	r io.Reader
-	n int64
-}
-
-func (c *spillCountingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	c.n += int64(n)
-	return n, err
+	return peek[:previewLen], dstPath, n, nil
 }
 
 // newCallID returns an 8-char hex id used to label spill files. Per call,

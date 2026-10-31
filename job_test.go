@@ -349,7 +349,12 @@ func TestJobHandleEnqueueAtRequiresFireAtBeforeCreatingRun(t *testing.T) {
 func TestJobHandleEnqueueMaterializesLazyRun(t *testing.T) {
 	a, mock := testAgent(t)
 	handle := RegisterJob(a, testJobDefinition(1))
-	lazy := &lazyRun{agent: a, triggerRef: "POST /work", callerAccess: AccessUser}
+	metadata := testWireCaller("user", wire.AccessUser)
+	proof, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lazy := &lazyRun{agent: a, callerAccess: AccessUser, caller: callerFromWire(metadata), proof: string(proof)}
 
 	if _, err := handle.Enqueue(contextWithLazyRun(context.Background(), lazy), testJobID, testJobInput{}); err != nil {
 		t.Fatal(err)
@@ -357,15 +362,15 @@ func TestJobHandleEnqueueMaterializesLazyRun(t *testing.T) {
 	if lazy.materialized() == nil {
 		t.Fatal("lazy run was not materialized")
 	}
-	requests := mock.RequestsByPath("/api/agent/run/create")
+	requests := mock.RequestsByPath("/api/agent/run/materialize-route")
 	if len(requests) != 1 {
 		t.Fatalf("run/create requests = %d, want 1", len(requests))
 	}
-	var request wire.CreateRunRequest
+	var request wire.MaterializeRouteRequest
 	if err := json.Unmarshal(requests[0].Body, &request); err != nil {
 		t.Fatal(err)
 	}
-	if request.TriggerType != "code" || request.TriggerRef != "POST /work" {
+	if request.Proof != string(proof) {
 		t.Fatalf("request = %+v", request)
 	}
 }
@@ -461,7 +466,7 @@ func TestJobHandleGetDoesNotMaterializeLazyRun(t *testing.T) {
 	a, mock := testAgent(t)
 	handle := RegisterJob(a, testJobDefinition(1))
 	mock.GetJobResponse = &wire.GetJobResponse{Job: testJobInfo(a, JobStatusQueued, json.RawMessage(`42`))}
-	lazy := &lazyRun{agent: a, triggerRef: "GET /status"}
+	lazy := &lazyRun{agent: a}
 
 	result, err := handle.Get(contextWithLazyRun(context.Background(), lazy), testJobID)
 	if err != nil {

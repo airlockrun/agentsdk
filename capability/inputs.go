@@ -127,11 +127,6 @@ type EmbedInput struct {
 	Texts []string `json:"texts,omitempty"`
 }
 
-type QueryDBInput struct {
-	SQL    string `json:"sql"`
-	Params []any  `json:"params,omitempty" jsonschema:"description=Positional parameters bound as $1, $2, ..."`
-}
-
 type RequestUpgradeInput struct {
 	Description string `json:"description"`
 }

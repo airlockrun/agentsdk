@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
-	"github.com/airlockrun/goai/tool"
 )
 
 // defaultTimeout is the default execution timeout for webhooks.
@@ -70,11 +69,18 @@ type Route struct {
 	Handler     RouteHandlerFunc // required
 	Access      Access           // required: AccessAdmin, AccessUser, or AccessPublic
 	Description string           // required: shown to users and the LLM
-	// Tool identifies a corresponding tool registered on this app by Name.
-	// The zero value leaves the route unlinked. Handler and Access remain
-	// independent: correspondence neither invokes the tool nor grants its access.
-	Tool tool.Tool
+	Logging     RouteLogging     // metadata retention; independent of access and authority
 }
+
+// RouteLogging selects route audit retention. GET and HEAD default to Off;
+// other methods default to Normal. Sensitive reads and exports should opt in.
+type RouteLogging = wire.RouteLogging
+
+const (
+	LoggingDefault = wire.LoggingDefault
+	LoggingOff     = wire.LoggingOff
+	LoggingNormal  = wire.LoggingNormal
+)
 
 // --- Connection ---
 

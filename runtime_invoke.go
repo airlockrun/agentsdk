@@ -192,7 +192,6 @@ func runtimeLocalTools(a *Agent, r *run) map[string]tool.Tool {
 		"file_write":            wrapFileWrite(a, r),
 		"file_delete":           wrapFileDelete(a, r),
 		"file_list":             wrapFileList(a, r),
-		"query_db":              wrapQueryDB(a, r),
 	}
 }
 

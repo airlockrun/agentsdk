@@ -36,6 +36,7 @@ const (
 )
 
 var frameworkRoutePatterns = []string{
+	"GET " + wire.UIChangeStreamPath,
 	"POST " + wire.RuntimeInvokePath,
 	"POST /prompt",
 	"POST /webhook/{name}",
@@ -115,7 +116,7 @@ func (a *Agent) validateRegistrations() {
 	if err := wire.ValidateAgentDefinitions(manifest); err != nil {
 		panic("agentsdk: " + err.Error())
 	}
-	if err := wire.ValidateRouteTools(manifest); err != nil {
+	if err := wire.ValidateRouteLogging(manifest); err != nil {
 		panic("agentsdk: " + err.Error())
 	}
 }
@@ -231,6 +232,9 @@ func validateWebhook(w *Webhook) {
 func validateRoute(r *Route) {
 	if r == nil {
 		panic("agentsdk: RegisterRoute: nil *Route")
+	}
+	if _, err := r.Logging.Resolve(r.Method); err != nil {
+		panic(err)
 	}
 	if !validHTTPMethod(r.Method) || r.Method != strings.ToUpper(r.Method) {
 		panic(fmt.Sprintf("agentsdk: RegisterRoute(%q %q): Method must be an uppercase HTTP token", r.Method, r.Path))

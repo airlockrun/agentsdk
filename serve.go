@@ -67,6 +67,7 @@ func (a *Agent) Serve() {
 
 	go func() {
 		<-ctx.Done()
+		a.stopUIChanges()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		server.Shutdown(shutdownCtx)
@@ -123,13 +124,17 @@ func (a *Agent) Handler() http.Handler {
 	// Bundled frontend assets are same-origin so layouts do not depend on a CDN.
 	mux.HandleFunc("GET /__air/assets/{name}", a.handleAsset)
 	mux.HandleFunc("GET /static/{name}", a.handleStaticAsset)
+	if len(a.uiChangeTopics) > 0 {
+		route := a.uiChangeRoute()
+		mux.HandleFunc("GET "+wire.UIChangeStreamPath, a.wrapRoute("GET "+wire.UIChangeStreamPath, route))
+	}
 
 	// Mount custom routes registered via RegisterRoute.
 	// Each route gets a lazy-run installed in ctx — a run is only created
 	// if the handler actually makes a model call. The wrapper also logs
 	// returned errors, panics, and 5xx responses.
 	for key, route := range a.routes {
-		mux.HandleFunc(key, a.wrapRoute(key, route.Handler))
+		mux.HandleFunc(key, a.wrapRoute(key, route))
 	}
 
 	return a.authenticateHost(mux)
@@ -160,7 +165,7 @@ func (a *Agent) authenticateHost(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		for _, name := range []string{"X-Run-ID", "X-Bridge-ID", jobLeaseTokenHeader, wire.InvocationTokenHeader} {
+		for _, name := range []string{"X-Run-ID", "X-Bridge-ID", jobLeaseTokenHeader, wire.InvocationTokenHeader, wire.RouteDispatchHeader, wire.RouteDeadlineHeader} {
 			count := 0
 			for key, values := range r.Header {
 				if strings.EqualFold(key, name) {
@@ -237,10 +242,13 @@ func (a *Agent) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	run.complete(ctx, "success", "", "", "")
 }
 
-// wrapRoute converts a RouteHandlerFunc into http.HandlerFunc and completes the
-// Airlock-created route run from the handler's error, panic, and response status.
-// Direct Handler tests without an ingress run retain lazy-run behavior.
-func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc {
+// wrapRoute retains the admitted caller without I/O and bounds the handler to
+// the host's absolute deadline. Only run-required APIs materialize the request.
+func (a *Agent) wrapRoute(key string, route *Route) http.HandlerFunc {
+	logging, err := route.Logging.Resolve(route.Method)
+	if err != nil {
+		panic(err)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		metadata, err := wire.DecodeCallerHeader(r.Header)
 		if err != nil {
@@ -249,24 +257,23 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 		}
 		caller := callerFromWire(metadata)
 		user, _ := caller.User()
-		var activeRun *run
-		var lazy *lazyRun
-		var ctx context.Context
-		if runID := r.Header.Get("X-Run-ID"); runID != "" {
-			activeRun = newRun(a, runID, "", "", r.Context())
-			activeRun.invocationToken = r.Header.Get(wire.InvocationTokenHeader)
-			activeRun.setCaller(caller)
-			ctx = activeRun.checkedCtx()
-		} else {
-			lazy = &lazyRun{
-				agent:        a,
-				triggerRef:   "route:" + key,
-				userID:       user.ID,
-				callerAccess: caller.Access(),
-				caller:       caller,
-			}
-			ctx = contextWithLazyRun(r.Context(), lazy)
+		proof := r.Header.Get(wire.RouteDispatchHeader)
+		deadline, err := time.Parse(time.RFC3339Nano, r.Header.Get(wire.RouteDeadlineHeader))
+		if proof == "" || err != nil || !deadline.After(time.Now()) {
+			http.Error(w, "valid host route dispatch is required", http.StatusUnauthorized)
+			return
 		}
+		base, cancel := context.WithDeadline(r.Context(), deadline)
+		defer cancel()
+		lazy := &lazyRun{
+			agent:        a,
+			proof:        proof,
+			loggingOff:   logging == LoggingOff,
+			userID:       user.ID,
+			callerAccess: caller.Access(),
+			caller:       caller,
+		}
+		ctx := contextWithLazyRun(base, lazy)
 		r = r.WithContext(ctx)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
 		var dispatchErr error
@@ -274,15 +281,15 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 
 		defer func() {
 			if rec := recover(); rec != nil {
-				panicTrace = string(debug.Stack())
-				dispatchErr = fmt.Errorf("%v", rec)
-				agentLogger().Error("route panic", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Any("recover", rec), zap.String("stack", panicTrace))
+				panicTrace = wire.BoundedAuditText(string(debug.Stack()), wire.MaxAuditPanicBytes)
+				dispatchErr = errors.New(wire.BoundedAuditText(fmt.Sprint(rec), wire.MaxAuditErrorBytes))
+				agentLogger().Error("route panic", zap.String("route", key), zap.Error(dispatchErr), zap.String("stack", panicTrace))
 				if !sw.wroteHeader {
 					http.Error(sw, "internal server error", http.StatusInternalServerError)
 				}
 			}
 			if dispatchErr != nil && panicTrace == "" {
-				agentLogger().Error("route error", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Error(dispatchErr))
+				agentLogger().Error("route error", zap.String("route", key), zap.String("error", wire.BoundedAuditText(dispatchErr.Error(), wire.MaxAuditErrorBytes)))
 				if !sw.wroteHeader {
 					var httpErr *HTTPError
 					if errors.As(dispatchErr, &httpErr) {
@@ -293,16 +300,12 @@ func (a *Agent) wrapRoute(key string, handler RouteHandlerFunc) http.HandlerFunc
 				}
 			}
 			if sw.status >= http.StatusInternalServerError {
-				agentLogger().Warn("route error response", zap.String("method", r.Method), zap.String("path", r.URL.Path), zap.Int("status", sw.status))
+				agentLogger().Warn("route error response", zap.String("route", key), zap.Int("status", sw.status))
 			}
-			if activeRun != nil {
-				completeHTTPRun(ctx, activeRun, sw.status, dispatchErr, panicTrace)
-			} else {
-				completeLazyRun(ctx, lazy, sw.status, dispatchErr, panicTrace)
-			}
+			completeLazyRun(ctx, lazy, sw.status, dispatchErr, panicTrace)
 		}()
 
-		dispatchErr = handler(sw, r)
+		dispatchErr = route.Handler(sw, r)
 	}
 }
 
@@ -318,7 +321,7 @@ func completeHTTPRun(ctx context.Context, run *run, status int, dispatchErr erro
 	var err error
 	if dispatchErr != nil {
 		err = run.complete(ctx, "error", dispatchErr.Error(), wire.ErrorKindAgent, panicTrace)
-	} else if status >= http.StatusInternalServerError {
+	} else if status >= http.StatusBadRequest {
 		errMsg := fmt.Sprintf("HTTP status %d", status)
 		err = run.complete(ctx, "error", errMsg, wire.ErrorKindAgent, "")
 	} else {
@@ -399,10 +402,13 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := struct {
-		Status   string   `json:"status"`
-		Webhooks []string `json:"webhooks"`
-		Tools    []string `json:"tools"`
-	}{status, webhooks, tools}
+		Status            string   `json:"status"`
+		Webhooks          []string `json:"webhooks"`
+		Tools             []string `json:"tools"`
+		EnvConfigProtocol string   `json:"envConfigProtocol"`
+		EnvConfigRevision int64    `json:"envConfigRevision"`
+		EnvConfigAttempt  string   `json:"envConfigAttempt"`
+	}{status, webhooks, tools, a.envConfig.Protocol, a.envConfig.Revision, a.envConfig.Attempt}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)

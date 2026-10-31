@@ -45,8 +45,26 @@ type DeploymentInfo struct {
 	ImageRef         string `protobuf:"bytes,16,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
 	SdkVersion       string `protobuf:"bytes,17,opt,name=sdk_version,json=sdkVersion,proto3" json:"sdk_version,omitempty"`
 	OwnerWorkspaceId string `protobuf:"bytes,18,opt,name=owner_workspace_id,json=ownerWorkspaceId,proto3" json:"owner_workspace_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Exact-runtime durable build admission, including queued native/CLI work.
+	BuildTaskId     string                    `protobuf:"bytes,19,opt,name=build_task_id,json=buildTaskId,proto3" json:"build_task_id,omitempty"`
+	BuildTaskStatus string                    `protobuf:"bytes,20,opt,name=build_task_status,json=buildTaskStatus,proto3" json:"build_task_status,omitempty"`
+	BuildPhase      AgentBuildDeploymentPhase `protobuf:"varint,21,opt,name=build_phase,json=buildPhase,proto3,enum=airlock.v1.AgentBuildDeploymentPhase" json:"build_phase,omitempty"`
+	// Human navigation through authenticated Airlock UI. Empty for previews
+	// without an owning conversation displaying this exact runtime.
+	WorkspaceUrl string `protobuf:"bytes,22,opt,name=workspace_url,json=workspaceUrl,proto3" json:"workspace_url,omitempty"`
+	// Environment revisions are independent of schedule/subscription policy.
+	DesiredEnvRevision int64  `protobuf:"varint,23,opt,name=desired_env_revision,json=desiredEnvRevision,proto3" json:"desired_env_revision,omitempty"`
+	AppliedEnvRevision *int64 `protobuf:"varint,24,opt,name=applied_env_revision,json=appliedEnvRevision,proto3,oneof" json:"applied_env_revision,omitempty"`
+	// unknown until a compatible replacement runtime reaches readiness.
+	EnvConfigurationState string `protobuf:"bytes,25,opt,name=env_configuration_state,json=envConfigurationState,proto3" json:"env_configuration_state,omitempty"`
+	RestartRequired       bool   `protobuf:"varint,26,opt,name=restart_required,json=restartRequired,proto3" json:"restart_required,omitempty"`
+	// Optional informational declaration checks for candidate_revision_id.
+	ConfigurationReadiness *ConfigurationReadiness `protobuf:"bytes,27,opt,name=configuration_readiness,json=configurationReadiness,proto3" json:"configuration_readiness,omitempty"`
+	// Metadata-only presence: configured empty strings and nonempty defaults count
+	// as present. Empty declaration defaults represent no default in the SDK schema.
+	UnconfiguredEnvCount *int64 `protobuf:"varint,28,opt,name=unconfigured_env_count,json=unconfiguredEnvCount,proto3,oneof" json:"unconfigured_env_count,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *DeploymentInfo) Reset() {
@@ -205,6 +223,144 @@ func (x *DeploymentInfo) GetOwnerWorkspaceId() string {
 	return ""
 }
 
+func (x *DeploymentInfo) GetBuildTaskId() string {
+	if x != nil {
+		return x.BuildTaskId
+	}
+	return ""
+}
+
+func (x *DeploymentInfo) GetBuildTaskStatus() string {
+	if x != nil {
+		return x.BuildTaskStatus
+	}
+	return ""
+}
+
+func (x *DeploymentInfo) GetBuildPhase() AgentBuildDeploymentPhase {
+	if x != nil {
+		return x.BuildPhase
+	}
+	return AgentBuildDeploymentPhase_AGENT_BUILD_DEPLOYMENT_PHASE_UNSPECIFIED
+}
+
+func (x *DeploymentInfo) GetWorkspaceUrl() string {
+	if x != nil {
+		return x.WorkspaceUrl
+	}
+	return ""
+}
+
+func (x *DeploymentInfo) GetDesiredEnvRevision() int64 {
+	if x != nil {
+		return x.DesiredEnvRevision
+	}
+	return 0
+}
+
+func (x *DeploymentInfo) GetAppliedEnvRevision() int64 {
+	if x != nil && x.AppliedEnvRevision != nil {
+		return *x.AppliedEnvRevision
+	}
+	return 0
+}
+
+func (x *DeploymentInfo) GetEnvConfigurationState() string {
+	if x != nil {
+		return x.EnvConfigurationState
+	}
+	return ""
+}
+
+func (x *DeploymentInfo) GetRestartRequired() bool {
+	if x != nil {
+		return x.RestartRequired
+	}
+	return false
+}
+
+func (x *DeploymentInfo) GetConfigurationReadiness() *ConfigurationReadiness {
+	if x != nil {
+		return x.ConfigurationReadiness
+	}
+	return nil
+}
+
+func (x *DeploymentInfo) GetUnconfiguredEnvCount() int64 {
+	if x != nil && x.UnconfiguredEnvCount != nil {
+		return *x.UnconfiguredEnvCount
+	}
+	return 0
+}
+
+type ConfigurationReadiness struct {
+	state                          protoimpl.MessageState `protogen:"open.v1"`
+	CandidateDeclarationsAvailable bool                   `protobuf:"varint,1,opt,name=candidate_declarations_available,json=candidateDeclarationsAvailable,proto3" json:"candidate_declarations_available,omitempty"`
+	UnboundResources               []string               `protobuf:"bytes,2,rep,name=unbound_resources,json=unboundResources,proto3" json:"unbound_resources,omitempty"`
+	UnsetEnvVars                   []string               `protobuf:"bytes,3,rep,name=unset_env_vars,json=unsetEnvVars,proto3" json:"unset_env_vars,omitempty"`
+	UnsetSecrets                   []string               `protobuf:"bytes,4,rep,name=unset_secrets,json=unsetSecrets,proto3" json:"unset_secrets,omitempty"`
+	unknownFields                  protoimpl.UnknownFields
+	sizeCache                      protoimpl.SizeCache
+}
+
+func (x *ConfigurationReadiness) Reset() {
+	*x = ConfigurationReadiness{}
+	mi := &file_airlock_v1_deployments_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigurationReadiness) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigurationReadiness) ProtoMessage() {}
+
+func (x *ConfigurationReadiness) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_deployments_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigurationReadiness.ProtoReflect.Descriptor instead.
+func (*ConfigurationReadiness) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ConfigurationReadiness) GetCandidateDeclarationsAvailable() bool {
+	if x != nil {
+		return x.CandidateDeclarationsAvailable
+	}
+	return false
+}
+
+func (x *ConfigurationReadiness) GetUnboundResources() []string {
+	if x != nil {
+		return x.UnboundResources
+	}
+	return nil
+}
+
+func (x *ConfigurationReadiness) GetUnsetEnvVars() []string {
+	if x != nil {
+		return x.UnsetEnvVars
+	}
+	return nil
+}
+
+func (x *ConfigurationReadiness) GetUnsetSecrets() []string {
+	if x != nil {
+		return x.UnsetSecrets
+	}
+	return nil
+}
+
 // Optional ownership identifies a live caller-owned hosted developer session.
 // Laptop previews leave this empty. Selection never changes ownership.
 type CreatePreviewRequest struct {
@@ -216,7 +372,7 @@ type CreatePreviewRequest struct {
 
 func (x *CreatePreviewRequest) Reset() {
 	*x = CreatePreviewRequest{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[1]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -228,7 +384,7 @@ func (x *CreatePreviewRequest) String() string {
 func (*CreatePreviewRequest) ProtoMessage() {}
 
 func (x *CreatePreviewRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[1]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -241,7 +397,7 @@ func (x *CreatePreviewRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreatePreviewRequest.ProtoReflect.Descriptor instead.
 func (*CreatePreviewRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{1}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CreatePreviewRequest) GetOwnerWorkspaceId() string {
@@ -260,7 +416,7 @@ type GetDeploymentResponse struct {
 
 func (x *GetDeploymentResponse) Reset() {
 	*x = GetDeploymentResponse{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[2]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -272,7 +428,7 @@ func (x *GetDeploymentResponse) String() string {
 func (*GetDeploymentResponse) ProtoMessage() {}
 
 func (x *GetDeploymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[2]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -285,7 +441,7 @@ func (x *GetDeploymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetDeploymentResponse.ProtoReflect.Descriptor instead.
 func (*GetDeploymentResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{2}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetDeploymentResponse) GetDeployment() *DeploymentInfo {
@@ -304,7 +460,7 @@ type ListDeploymentsResponse struct {
 
 func (x *ListDeploymentsResponse) Reset() {
 	*x = ListDeploymentsResponse{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[3]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -316,7 +472,7 @@ func (x *ListDeploymentsResponse) String() string {
 func (*ListDeploymentsResponse) ProtoMessage() {}
 
 func (x *ListDeploymentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[3]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -329,7 +485,7 @@ func (x *ListDeploymentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDeploymentsResponse.ProtoReflect.Descriptor instead.
 func (*ListDeploymentsResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{3}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ListDeploymentsResponse) GetDeployments() []*DeploymentInfo {
@@ -350,7 +506,7 @@ type SetDeploymentPolicyRequest struct {
 
 func (x *SetDeploymentPolicyRequest) Reset() {
 	*x = SetDeploymentPolicyRequest{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[4]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -362,7 +518,7 @@ func (x *SetDeploymentPolicyRequest) String() string {
 func (*SetDeploymentPolicyRequest) ProtoMessage() {}
 
 func (x *SetDeploymentPolicyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[4]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -375,7 +531,7 @@ func (x *SetDeploymentPolicyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDeploymentPolicyRequest.ProtoReflect.Descriptor instead.
 func (*SetDeploymentPolicyRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{4}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SetDeploymentPolicyRequest) GetExpectedRevision() int64 {
@@ -408,7 +564,7 @@ type InvokeDeploymentToolRequest struct {
 
 func (x *InvokeDeploymentToolRequest) Reset() {
 	*x = InvokeDeploymentToolRequest{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[5]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -420,7 +576,7 @@ func (x *InvokeDeploymentToolRequest) String() string {
 func (*InvokeDeploymentToolRequest) ProtoMessage() {}
 
 func (x *InvokeDeploymentToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[5]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -433,7 +589,7 @@ func (x *InvokeDeploymentToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeDeploymentToolRequest.ProtoReflect.Descriptor instead.
 func (*InvokeDeploymentToolRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{5}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *InvokeDeploymentToolRequest) GetInput() *structpb.Value {
@@ -453,7 +609,7 @@ type InvokeDeploymentToolResponse struct {
 
 func (x *InvokeDeploymentToolResponse) Reset() {
 	*x = InvokeDeploymentToolResponse{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[6]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +621,7 @@ func (x *InvokeDeploymentToolResponse) String() string {
 func (*InvokeDeploymentToolResponse) ProtoMessage() {}
 
 func (x *InvokeDeploymentToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[6]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +634,7 @@ func (x *InvokeDeploymentToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvokeDeploymentToolResponse.ProtoReflect.Descriptor instead.
 func (*InvokeDeploymentToolResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{6}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *InvokeDeploymentToolResponse) GetRunId() string {
@@ -506,7 +662,7 @@ type StartDeploymentAgentRequest struct {
 
 func (x *StartDeploymentAgentRequest) Reset() {
 	*x = StartDeploymentAgentRequest{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[7]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -518,7 +674,7 @@ func (x *StartDeploymentAgentRequest) String() string {
 func (*StartDeploymentAgentRequest) ProtoMessage() {}
 
 func (x *StartDeploymentAgentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[7]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -531,7 +687,7 @@ func (x *StartDeploymentAgentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDeploymentAgentRequest.ProtoReflect.Descriptor instead.
 func (*StartDeploymentAgentRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{7}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *StartDeploymentAgentRequest) GetRequestId() string {
@@ -567,7 +723,7 @@ type DeploymentAgentRunResponse struct {
 
 func (x *DeploymentAgentRunResponse) Reset() {
 	*x = DeploymentAgentRunResponse{}
-	mi := &file_airlock_v1_deployments_proto_msgTypes[8]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -579,7 +735,7 @@ func (x *DeploymentAgentRunResponse) String() string {
 func (*DeploymentAgentRunResponse) ProtoMessage() {}
 
 func (x *DeploymentAgentRunResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_deployments_proto_msgTypes[8]
+	mi := &file_airlock_v1_deployments_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -592,7 +748,7 @@ func (x *DeploymentAgentRunResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeploymentAgentRunResponse.ProtoReflect.Descriptor instead.
 func (*DeploymentAgentRunResponse) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{8}
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DeploymentAgentRunResponse) GetRun() *structpb.Struct {
@@ -609,12 +765,116 @@ func (x *DeploymentAgentRunResponse) GetCreated() bool {
 	return false
 }
 
+type ListDeploymentAgentRunsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Runs          []*structpb.Struct     `protobuf:"bytes,1,rep,name=runs,proto3" json:"runs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListDeploymentAgentRunsResponse) Reset() {
+	*x = ListDeploymentAgentRunsResponse{}
+	mi := &file_airlock_v1_deployments_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListDeploymentAgentRunsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListDeploymentAgentRunsResponse) ProtoMessage() {}
+
+func (x *ListDeploymentAgentRunsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_deployments_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListDeploymentAgentRunsResponse.ProtoReflect.Descriptor instead.
+func (*ListDeploymentAgentRunsResponse) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ListDeploymentAgentRunsResponse) GetRuns() []*structpb.Struct {
+	if x != nil {
+		return x.Runs
+	}
+	return nil
+}
+
+type ContinueDeploymentAgentRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	ContractHash  string                 `protobuf:"bytes,2,opt,name=contract_hash,json=contractHash,proto3" json:"contract_hash,omitempty"`
+	Prompt        string                 `protobuf:"bytes,3,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ContinueDeploymentAgentRequest) Reset() {
+	*x = ContinueDeploymentAgentRequest{}
+	mi := &file_airlock_v1_deployments_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ContinueDeploymentAgentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContinueDeploymentAgentRequest) ProtoMessage() {}
+
+func (x *ContinueDeploymentAgentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_deployments_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContinueDeploymentAgentRequest.ProtoReflect.Descriptor instead.
+func (*ContinueDeploymentAgentRequest) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_deployments_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ContinueDeploymentAgentRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ContinueDeploymentAgentRequest) GetContractHash() string {
+	if x != nil {
+		return x.ContractHash
+	}
+	return ""
+}
+
+func (x *ContinueDeploymentAgentRequest) GetPrompt() string {
+	if x != nil {
+		return x.Prompt
+	}
+	return ""
+}
+
 var File_airlock_v1_deployments_proto protoreflect.FileDescriptor
 
 const file_airlock_v1_deployments_proto_rawDesc = "" +
 	"\n" +
 	"\x1cairlock/v1/deployments.proto\x12\n" +
-	"airlock.v1\x1a\x1cgoogle/protobuf/struct.proto\"\x89\x05\n" +
+	"airlock.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16airlock/v1/types.proto\"\xde\t\n" +
 	"\x0eDeploymentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x15\n" +
 	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12\x12\n" +
@@ -636,9 +896,27 @@ const file_airlock_v1_deployments_proto_rawDesc = "" +
 	"\timage_ref\x18\x10 \x01(\tR\bimageRef\x12\x1f\n" +
 	"\vsdk_version\x18\x11 \x01(\tR\n" +
 	"sdkVersion\x12,\n" +
-	"\x12owner_workspace_id\x18\x12 \x01(\tR\x10ownerWorkspaceIdB\n" +
+	"\x12owner_workspace_id\x18\x12 \x01(\tR\x10ownerWorkspaceId\x12\"\n" +
+	"\rbuild_task_id\x18\x13 \x01(\tR\vbuildTaskId\x12*\n" +
+	"\x11build_task_status\x18\x14 \x01(\tR\x0fbuildTaskStatus\x12F\n" +
+	"\vbuild_phase\x18\x15 \x01(\x0e2%.airlock.v1.AgentBuildDeploymentPhaseR\n" +
+	"buildPhase\x12#\n" +
+	"\rworkspace_url\x18\x16 \x01(\tR\fworkspaceUrl\x120\n" +
+	"\x14desired_env_revision\x18\x17 \x01(\x03R\x12desiredEnvRevision\x125\n" +
+	"\x14applied_env_revision\x18\x18 \x01(\x03H\x01R\x12appliedEnvRevision\x88\x01\x01\x126\n" +
+	"\x17env_configuration_state\x18\x19 \x01(\tR\x15envConfigurationState\x12)\n" +
+	"\x10restart_required\x18\x1a \x01(\bR\x0frestartRequired\x12[\n" +
+	"\x17configuration_readiness\x18\x1b \x01(\v2\".airlock.v1.ConfigurationReadinessR\x16configurationReadiness\x129\n" +
+	"\x16unconfigured_env_count\x18\x1c \x01(\x03H\x02R\x14unconfiguredEnvCount\x88\x01\x01B\n" +
 	"\n" +
-	"\b_running\"D\n" +
+	"\b_runningB\x17\n" +
+	"\x15_applied_env_revisionB\x19\n" +
+	"\x17_unconfigured_env_count\"\xda\x01\n" +
+	"\x16ConfigurationReadiness\x12H\n" +
+	" candidate_declarations_available\x18\x01 \x01(\bR\x1ecandidateDeclarationsAvailable\x12+\n" +
+	"\x11unbound_resources\x18\x02 \x03(\tR\x10unboundResources\x12$\n" +
+	"\x0eunset_env_vars\x18\x03 \x03(\tR\funsetEnvVars\x12#\n" +
+	"\runset_secrets\x18\x04 \x03(\tR\funsetSecrets\"D\n" +
 	"\x14CreatePreviewRequest\x12,\n" +
 	"\x12owner_workspace_id\x18\x01 \x01(\tR\x10ownerWorkspaceId\"S\n" +
 	"\x15GetDeploymentResponse\x12:\n" +
@@ -664,7 +942,14 @@ const file_airlock_v1_deployments_proto_rawDesc = "" +
 	"\x05input\x18\x03 \x01(\v2\x16.google.protobuf.ValueR\x05input\"a\n" +
 	"\x1aDeploymentAgentRunResponse\x12)\n" +
 	"\x03run\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x03run\x12\x18\n" +
-	"\acreated\x18\x02 \x01(\bR\acreatedB8Z6github.com/airlockrun/airlock/gen/airlock/v1;airlockv1b\x06proto3"
+	"\acreated\x18\x02 \x01(\bR\acreated\"N\n" +
+	"\x1fListDeploymentAgentRunsResponse\x12+\n" +
+	"\x04runs\x18\x01 \x03(\v2\x17.google.protobuf.StructR\x04runs\"|\n" +
+	"\x1eContinueDeploymentAgentRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12#\n" +
+	"\rcontract_hash\x18\x02 \x01(\tR\fcontractHash\x12\x16\n" +
+	"\x06prompt\x18\x03 \x01(\tR\x06promptB8Z6github.com/airlockrun/airlock/gen/airlock/v1;airlockv1b\x06proto3"
 
 var (
 	file_airlock_v1_deployments_proto_rawDescOnce sync.Once
@@ -678,31 +963,38 @@ func file_airlock_v1_deployments_proto_rawDescGZIP() []byte {
 	return file_airlock_v1_deployments_proto_rawDescData
 }
 
-var file_airlock_v1_deployments_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_airlock_v1_deployments_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_airlock_v1_deployments_proto_goTypes = []any{
-	(*DeploymentInfo)(nil),               // 0: airlock.v1.DeploymentInfo
-	(*CreatePreviewRequest)(nil),         // 1: airlock.v1.CreatePreviewRequest
-	(*GetDeploymentResponse)(nil),        // 2: airlock.v1.GetDeploymentResponse
-	(*ListDeploymentsResponse)(nil),      // 3: airlock.v1.ListDeploymentsResponse
-	(*SetDeploymentPolicyRequest)(nil),   // 4: airlock.v1.SetDeploymentPolicyRequest
-	(*InvokeDeploymentToolRequest)(nil),  // 5: airlock.v1.InvokeDeploymentToolRequest
-	(*InvokeDeploymentToolResponse)(nil), // 6: airlock.v1.InvokeDeploymentToolResponse
-	(*StartDeploymentAgentRequest)(nil),  // 7: airlock.v1.StartDeploymentAgentRequest
-	(*DeploymentAgentRunResponse)(nil),   // 8: airlock.v1.DeploymentAgentRunResponse
-	(*structpb.Value)(nil),               // 9: google.protobuf.Value
-	(*structpb.Struct)(nil),              // 10: google.protobuf.Struct
+	(*DeploymentInfo)(nil),                  // 0: airlock.v1.DeploymentInfo
+	(*ConfigurationReadiness)(nil),          // 1: airlock.v1.ConfigurationReadiness
+	(*CreatePreviewRequest)(nil),            // 2: airlock.v1.CreatePreviewRequest
+	(*GetDeploymentResponse)(nil),           // 3: airlock.v1.GetDeploymentResponse
+	(*ListDeploymentsResponse)(nil),         // 4: airlock.v1.ListDeploymentsResponse
+	(*SetDeploymentPolicyRequest)(nil),      // 5: airlock.v1.SetDeploymentPolicyRequest
+	(*InvokeDeploymentToolRequest)(nil),     // 6: airlock.v1.InvokeDeploymentToolRequest
+	(*InvokeDeploymentToolResponse)(nil),    // 7: airlock.v1.InvokeDeploymentToolResponse
+	(*StartDeploymentAgentRequest)(nil),     // 8: airlock.v1.StartDeploymentAgentRequest
+	(*DeploymentAgentRunResponse)(nil),      // 9: airlock.v1.DeploymentAgentRunResponse
+	(*ListDeploymentAgentRunsResponse)(nil), // 10: airlock.v1.ListDeploymentAgentRunsResponse
+	(*ContinueDeploymentAgentRequest)(nil),  // 11: airlock.v1.ContinueDeploymentAgentRequest
+	(AgentBuildDeploymentPhase)(0),          // 12: airlock.v1.AgentBuildDeploymentPhase
+	(*structpb.Value)(nil),                  // 13: google.protobuf.Value
+	(*structpb.Struct)(nil),                 // 14: google.protobuf.Struct
 }
 var file_airlock_v1_deployments_proto_depIdxs = []int32{
-	0,  // 0: airlock.v1.GetDeploymentResponse.deployment:type_name -> airlock.v1.DeploymentInfo
-	0,  // 1: airlock.v1.ListDeploymentsResponse.deployments:type_name -> airlock.v1.DeploymentInfo
-	9,  // 2: airlock.v1.InvokeDeploymentToolRequest.input:type_name -> google.protobuf.Value
-	9,  // 3: airlock.v1.StartDeploymentAgentRequest.input:type_name -> google.protobuf.Value
-	10, // 4: airlock.v1.DeploymentAgentRunResponse.run:type_name -> google.protobuf.Struct
-	5,  // [5:5] is the sub-list for method output_type
-	5,  // [5:5] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	12, // 0: airlock.v1.DeploymentInfo.build_phase:type_name -> airlock.v1.AgentBuildDeploymentPhase
+	1,  // 1: airlock.v1.DeploymentInfo.configuration_readiness:type_name -> airlock.v1.ConfigurationReadiness
+	0,  // 2: airlock.v1.GetDeploymentResponse.deployment:type_name -> airlock.v1.DeploymentInfo
+	0,  // 3: airlock.v1.ListDeploymentsResponse.deployments:type_name -> airlock.v1.DeploymentInfo
+	13, // 4: airlock.v1.InvokeDeploymentToolRequest.input:type_name -> google.protobuf.Value
+	13, // 5: airlock.v1.StartDeploymentAgentRequest.input:type_name -> google.protobuf.Value
+	14, // 6: airlock.v1.DeploymentAgentRunResponse.run:type_name -> google.protobuf.Struct
+	14, // 7: airlock.v1.ListDeploymentAgentRunsResponse.runs:type_name -> google.protobuf.Struct
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_deployments_proto_init() }
@@ -710,6 +1002,7 @@ func file_airlock_v1_deployments_proto_init() {
 	if File_airlock_v1_deployments_proto != nil {
 		return
 	}
+	file_airlock_v1_types_proto_init()
 	file_airlock_v1_deployments_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -717,7 +1010,7 @@ func file_airlock_v1_deployments_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_deployments_proto_rawDesc), len(file_airlock_v1_deployments_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

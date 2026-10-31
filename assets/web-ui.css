@@ -1,0 +1,4 @@
+/* SDK-owned presentation state; app authors mark identity-only elements. */
+html[data-airlock-embedded="true"] [data-airlock-standalone-only] {
+  display: none !important;
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -141,5 +142,29 @@ func TestCompactionPrunesWithoutSummaryModel(t *testing.T) {
 	}
 	if !store.messages[1].Parts[0].Tool.Compacted {
 		t.Fatal("old tool output was not pruned")
+	}
+}
+
+func TestCompactionPreservesCanonicalCurrentTurn(t *testing.T) {
+	in, model := input(testutil.MockTextResponse("previous history", testutil.MockUsage(100, 10)))
+	in.ModelLimits = session.ModelLimits{Input: 5000, Output: 1000}
+	tail := []session.Message{
+		{ID: "context", ParentID: "human", Generated: true, Role: "user", Content: "workspace A"},
+		{ID: "human", Role: "user", Parts: []session.Part{{ID: "text", Type: "text", Text: "current request"}}},
+		{ID: "call", ParentID: "human", Role: "assistant", Parts: []session.Part{{Type: "tool", Tool: &session.ToolPart{CallID: "effect", Name: "write", Input: "{}", Status: "pending"}}}},
+		{ID: "result", ParentID: "human", Role: "tool", Parts: []session.Part{{Type: "tool", Tool: &session.ToolPart{CallID: "effect", Name: "write", Output: "already executed", Status: "completed"}}}},
+		{ID: "event", Role: "user", Generated: true, Content: "host observation"},
+	}
+	history := append([]session.Message{{ID: "old", Role: "user", Content: strings.Repeat("old history ", 5000)}}, tail...)
+	got, err := compact(t.Context(), in, history, "instructions", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(tail)+1 || !got[0].Summary || !reflect.DeepEqual(got[1:], tail) {
+		t.Fatalf("current turn changed: %+v", got)
+	}
+	again, err := compact(t.Context(), in, got, "instructions", nil)
+	if err != nil || !reflect.DeepEqual(again, got) || len(model.Requests()) != 1 {
+		t.Fatalf("repeated compaction: %+v %v", again, err)
 	}
 }

@@ -62,7 +62,19 @@ func newScriptTool(name string, definition tool.Tool, backend ScriptBackend, fac
 		rt := &runtime{ctx: ctx, input: Input{Capabilities: catalog, Backend: backend, ExecutorFactory: factory, AutoConfirm: autoConfirm, JavaScriptPrelude: prelude}}
 		defer func() {
 			if rt.executor != nil {
-				err = errors.Join(err, rt.executor.Close())
+				if closeErr := rt.executor.Close(); closeErr != nil {
+					if err != nil {
+						err = errors.Join(err, closeErr)
+						return
+					}
+					// A validated completion is authoritative even when destruction
+					// fails. Losing its receipt can provoke duplicate side effects.
+					if result.Metadata == nil {
+						result.Metadata = make(map[string]any)
+					}
+					result.Metadata["executor_cleanup_failed"] = true
+					result.Output += "\n[Executor cleanup failed after confirmed execution. Preserve the returned result; do not replay this script.]"
+				}
 			}
 		}()
 		if name == "run_js_file" {

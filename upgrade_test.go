@@ -12,14 +12,19 @@ func TestUpgradeInstructions(t *testing.T) {
 		wantEmpty      bool
 		wantErr        string
 	}{
-		{name: "cross prerelease boundary", from: "0.8.1-alpha.6", to: "0.8.1", wantContains: "## v0.8.1-alpha.7"},
+		{name: "cross prerelease boundary", from: "0.8.1-alpha.6", to: "0.8.1", wantContains: "## v0.8.1"},
 		{name: "leading v and build metadata", from: "v0.8.1-alpha.6+internal", to: "v0.8.1+build.4", wantContains: "hx-disabled-elt"},
-		{name: "storage declaration migration", from: "0.8.1-alpha.7", to: "0.8.1-alpha.8", wantContains: "Declare every app-storage prefix"},
-		{name: "canonical mock task migration", from: "0.8.1-alpha.8", to: "0.8.1-alpha.9", wantContains: "goai/testutil.NewMockModel"},
-		{name: "submission review migration", from: "0.8.1-alpha.11", to: "0.8.1-alpha.12", wantContains: "AgentDefinition.Review"},
-		{name: "already at latest entry", from: "0.8.1-alpha.12", to: "0.8.1", wantEmpty: true},
+		{name: "storage declaration migration", from: "0.8.1-alpha.7", to: "0.8.1", wantContains: "Declare every app-storage prefix"},
+		{name: "canonical mock task migration", from: "0.8.1-alpha.8", to: "0.8.1", wantContains: "goai/testutil.NewMockModel"},
+		{name: "submission review migration", from: "0.8.1-alpha.11", to: "0.8.1", wantContains: "AgentDefinition.Review"},
+		{name: "target before consolidated release", from: "0.8.1-alpha.7", to: "0.8.1-alpha.12", wantEmpty: true},
+		{name: "lazy route migration", from: "0.8.1-alpha.12", to: "0.8.1", wantContains: "LoggingNormal"},
+		{name: "environment snapshot migration", from: "0.8.1-alpha.12", to: "0.8.1", wantContains: "EnvVarHandle.Refresh()"},
+		{name: "SQL capability migration", from: "0.8.1-alpha.12", to: "0.8.1", wantContains: "agentsdk.CapabilityQueryDB"},
+		{name: "app icon migration", from: "0.8.1-alpha.12", to: "0.8.1", wantContains: "agentsdk.Config.Icon"},
+		{name: "already at latest entry", from: "0.8.1", to: "0.8.2", wantEmpty: true},
 		{name: "same version", from: "0.8.1", to: "v0.8.1", wantEmpty: true},
-		{name: "same-base content addressed prerelease", from: "0.8.1-devabc123", to: "0.8.1", wantEmpty: true},
+		{name: "same-base content addressed prerelease", from: "0.8.1-devabc123", to: "0.8.1", wantContains: "## v0.8.1"},
 		{name: "invalid source", from: "", to: "0.8.1", wantErr: "invalid source SDK version"},
 		{name: "invalid target", from: "0.8.0", to: "latest", wantErr: "invalid target SDK version"},
 		{name: "stable to prerelease downgrade", from: "0.8.1", to: "0.8.1-alpha.8", wantErr: "cannot select upgrade instructions for downgrade"},
@@ -42,6 +47,42 @@ func TestUpgradeInstructions(t *testing.T) {
 			}
 			if tt.wantContains != "" && !strings.Contains(got, tt.wantContains) {
 				t.Fatalf("UpgradeInstructions() missing %q:\n%s", tt.wantContains, got)
+			}
+		})
+	}
+}
+
+func TestConsolidatedStableUpgradeInstructions(t *testing.T) {
+	entries, err := parseUpgradeInstructions(upgradeInstructionsMarkdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].version != "v0.8.1" {
+		t.Fatalf("expected one consolidated v0.8.1 entry, got %#v", entries)
+	}
+	for _, from := range []string{"0.7.0", "0.8.1-alpha.7", "0.8.1-alpha.8", "0.8.1-alpha.9", "0.8.1-alpha.12", "0.8.1-alpha.13"} {
+		t.Run(from, func(t *testing.T) {
+			got, err := UpgradeInstructions(from, "0.8.1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != entries[0].text {
+				t.Fatal("source version did not receive the complete consolidated migration")
+			}
+			for _, required := range []string{
+				"EnvVarHandle.Refresh()", "go tool air resources", "agentsdk.Config.Icon", "LoggingNormal", "agentsdk.CapabilityQueryDB",
+				"RegisterDirectory", "AccessInternal", "hx-ignore", "hx-disabled-elt", "event.detail.ctx.response.status",
+				"goai/testutil.NewMockModel", "MockConfig.Stream", "agentsdk/testutil.WithCaller", "remote.TestClientFromEnvironment()",
+				"AgentDefinition.Review", "checkpoint version 2", "SaveCheckpoint", "executable identity",
+			} {
+				if !strings.Contains(got, required) {
+					t.Errorf("consolidated migration missing %q", required)
+				}
+			}
+			for _, unavailable := range []string{"agenttest.Options.Models", "agenttest.RunAgent", "agenttest.RegisterFlags", "env.MockModel(slot)", "-agenttest.model="} {
+				if strings.Contains(got, unavailable) {
+					t.Errorf("consolidated migration instructs use of unavailable API %q", unavailable)
+				}
 			}
 		})
 	}

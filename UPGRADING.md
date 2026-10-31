@@ -1,13 +1,62 @@
 # Agent SDK upgrade instructions
 
-This file contains source migrations that Airlock can apply while rebuilding an
-application. Each entry starts at the first SDK release that requires the
-change. Compatible releases without source changes do not need an entry.
+This file contains consolidated source migrations for SDK target releases.
+Airlock selects entries whose versions are greater than the application's source
+SDK version and at most the target SDK version. The v0.8.1 entry describes the
+complete final migration from earlier stable and prerelease SDKs. Apply only the
+instructions relevant to the application's source. An application already on
+v0.8.1 receives no instructions when rebuilding against v0.8.1.
 
-## v0.8.1-alpha.12
+## v0.8.1
 
-Foreground Sol steps are bounded to 60 seconds for a model response plus its
-complete tool batch. Convert tools that may exceed that bound to
+Environment handles read an immutable process-start configuration snapshot.
+Remove calls to `EnvVarHandle.Refresh()`; save configuration through Airlock and
+explicitly restart the target to apply it. Rebuild apps and the host together:
+manifests require `envConfigProtocol: airlock.env-config.v1` under
+`airlock.app-runtime.v4`. `Agent.Start` requires the host-provided snapshot for
+declared environment slots before startup hooks run. See
+[`reference/environment.md`](reference/environment.md).
+
+Use the unified `go tool air resources` CLI in scripts and developer instructions.
+Global resource addresses are `/name` or `/UUID`; app bindings use `target/slot`.
+Use `resources list [target]`, `resources inspect ADDRESS`, `resources request
+ADDRESS --path /path`, `resources mcp-tools ADDRESS`, `resources mcp-call ADDRESS
+--tool NAME --data JSON`, and `resources mcp-probe URL`. Remove invocations of
+the top-level `integrations`, `connection`, and `mcp` command families. Bind with
+`resources bind preview/slot --resource /name`, adding `--type` for ambiguous
+slot types. Bare resource selectors are not accepted. Production app-slot calls
+retain host approval gates; production configuration uses the approved immutable
+candidate rather than a production execution grant.
+
+Generic SQL is not a runtime capability. Remove `agentsdk.CapabilityQueryDB`
+from capability policies. Database work belongs in explicit typed app-owned Go
+tools using `Agent.DB()`; task agents can declare those private tools. Runtime
+scripts use those tools rather than `air.queryDB` or `apps.<alias>.db.query`.
+
+App identity uses `agentsdk.Config.Icon` with one domain-specific emoji, for
+example `Icon: "🎧"`. Update `Config` literals that specify `Emoji` to use
+`Icon`, retaining the chosen value. Canonical SDK manifests use JSON `icon`.
+Image URLs and icon-library names are not supported. Empty icon declarations
+preserve the stored app icon. SDK and host must be rebuilt together.
+
+Remove `Tool` fields from `agentsdk.Route` declarations. Share application logic
+explicitly between HTTP handlers and registered tools; their access policies are
+independent. Set `Logging: agentsdk.LoggingNormal` on sensitive GET/HEAD reads and
+exports (corporate secrets, personal data, privileged downloads). Method-default
+logging is Off for GET/HEAD and Normal for other methods. Polling and static
+assets use Off. Do not implement mutations through GET.
+
+Applications require `airlock.app-runtime.v4` and a matching host rebuild.
+Route run-required SDK APIs preserve the host-admitted human or anonymous caller.
+Caller reads perform no I/O. Handlers must honor the absolute 30-minute ingress
+deadline; durable work belongs in registered jobs. Route metadata never implies
+permission to invoke a tool. See `reference/html-ui.md`.
+
+### Long-running tools and application tests
+
+Sol provider attempts have a 15-minute wall ceiling and five-minute meaningful
+progress inactivity ceiling. Each tool has a fresh ten-minute ceiling, subject
+to shorter operation-specific, caller and task deadlines. Convert long tools to
 `RegisterAsyncTool` with an explicit typed `Job` policy. Return the accepted
 `AsyncTask` promptly; observe completion with host task controls/subscriptions.
 Synchronous handlers must honor cancellation. Cancellation does not roll back
@@ -26,6 +75,17 @@ checks `newAgent().Manifest()`. Put runtime/migration/storage/agent tests behind
 real runner's scoped opaque capability and exact source/runtime coordinates.
 Do not copy laptop login/provider/DB credentials into a test runner.
 
+Use `goai/testutil.NewMockModel(testutil.MockConfig{ID: ..., ...})` for streaming
+model tests. Configure Text, ToolCalls and Usage in MockResponse, or set Events
+for a precise event sequence. Responses supplies a sequence, Default answers
+unmatched requests, and Rules selects responses by LastUserText or Match.
+Handle the constructor error. Read captured call options through Requests();
+Configure changes response behavior while retaining the model's ID.
+MockConfig.Stream supplies custom request-boundary streaming behavior. Inject
+the model directly into domain services; live evaluations use explicit remote
+suites with host-authorized models and budgets. See
+`/libs/agentsdk/reference/testing.md`.
+
 `air preview` creates or updates the saved preview per app/remote. General app
 commands default to production; `--target preview` requires a saved reference.
 Inside a real hosted development workspace, the injected preview is the default.
@@ -35,6 +95,8 @@ admission plans, applied by the host at cutover, not live-binding PUTs.
 --wait` executes that candidate's packaged real-host suite. All fixture files are
 in the whole source candidate. Platform PG/Deno/image verification is explicitly
 selected with `airlockplatformintegration`, outside default SDK unit testing.
+
+### Task submissions and review
 
 Use the model-facing `submit` control in task instructions and mock tool calls.
 Its output branch is `{kind:"output",output:<typed result>,artifacts:[{path:"..."}]}`;
@@ -52,7 +114,7 @@ submission ID because delivery is at least once.
 
 Handle `AgentRunSubmitted` and `AgentRunReviewing` as nonterminal. Automatic
 correction retains the same run ID and cumulative reasoning budget. Public
-Continue still addresses a completed session and starts a new run. Reviewed
+Continue addresses a completed session and starts a new run. Reviewed
 definition/submission integration uses the real host controller; pure engine,
 checkpoint and review validation uses deterministic runtime unit tests.
 
@@ -65,38 +127,7 @@ cutover. Deploy compatible SDK/host binaries together and retain exact admitted
 executable identity throughout review/correction; declaration hashes alone do
 not identify callback code. See `/libs/agentsdk/reference/agents.md`.
 
-## v0.8.1-alpha.9
-
-Select local live models using full `slug/provider/model` references in
-`agenttest.Options.Models`, `-agenttest.model=slot=slug/provider/model`, and the
-local runtime JSON `models` string map. Remove `Options.Auth` and
-`-agenttest.auth`. Put credentials only in the private OS user `sol/config.json`,
-using named provider entries prepared through Sol's account-scoped auth commands.
-For example, use `"models":{"@default":"work/openai/gpt-5.4"}` and
-`sol --auth login work/openai --method codex`. See
-`/libs/agentsdk/reference/local-development.md` for startup and dependency requirements.
-
-Use `goai/testutil.NewMockModel(testutil.MockConfig{ID: ..., ...})` for streaming
-model tests. Configure Text, ToolCalls and Usage in MockResponse, or set Events
-for a precise event sequence. Responses supplies a sequence, Default answers
-unmatched requests, and Rules selects responses by LastUserText or Match.
-Handle the constructor error. Read captured call options through Requests();
-Configure changes response behavior while retaining the model's ID.
-MockConfig.Stream supplies custom request-boundary streaming behavior.
-
-Test registered application tasks with `agenttest.RunAgent`, the declared model
-slot's `env.MockModel(slot)` and an explicit executor factory. The mock host
-rejects hosted task lifecycle operations. Test production AgentHandle transport
-contracts with an isolated test-owned HTTP responder. Configure app streaming
-calls through canonical per-slot MockConfig/MockResponse values.
-
-For explicit live selection, call `agenttest.RegisterFlags(flag.CommandLine)`
-once in test-package setup and pass its options to NewWithOptions. Unselected
-text/vision slots use mocks; missing live configuration fails. App code only
-declares ModelSlot and does not bind test models. See
-`/libs/agentsdk/reference/testing.md` for the runnable registered-task example.
-
-## v0.8.1-alpha.8
+### Storage declarations
 
 Declare every app-storage prefix used by native Go code with
 `RegisterDirectory`. Use `AccessInternal` for private native-only paths, and
@@ -109,7 +140,7 @@ Do not register a broad synthetic prefix to cover unrelated paths. Declare the
 actual storage roots so the catalog, Files visibility, and longest-prefix nested
 directory policy remain consistent.
 
-## v0.8.1-alpha.7
+### HTMX 4
 
 Update applications that use htmx from htmx 2 to the bundled htmx 4 core asset.
 Applications without htmx usage require no source changes, but still verify the

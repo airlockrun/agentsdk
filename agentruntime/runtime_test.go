@@ -714,6 +714,11 @@ func TestRunInterruptedModelAndFreshContinuation(t *testing.T) {
 	if !strings.Contains(string(raw), "No local tools") || strings.Contains(string(raw), "discarded") {
 		t.Fatalf("recovery request=%s", raw)
 	}
+	for _, msg := range store.messages {
+		if strings.HasPrefix(msg.Content, "Recovery notice:") && !msg.Generated {
+			t.Fatal("recovery notice became a human compaction boundary")
+		}
+	}
 	store.cp = nil // Host creates a new run in the same completed session.
 	in.Message = "follow up"
 	continued, err := testutil.NewMockModel(testutil.MockConfig{ID: "continuation", Responses: []testutil.MockResponse{{Events: batch(complete("continued"))}}})
@@ -733,6 +738,25 @@ func TestRunInterruptedModelAndFreshContinuation(t *testing.T) {
 	}
 	if userMessages[len(userMessages)-1] != "follow up" || userMessages[0] != "start" {
 		t.Fatal(userMessages)
+	}
+}
+
+func TestSubmitReminderIsGenerated(t *testing.T) {
+	in, _ := input(testutil.MockTextResponse("Working on the task.", testutil.MockUsage(10, 10)), batch(complete("done")))
+	if result, err := Run(t.Context(), in); err != nil || result.Reply == nil {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	found := false
+	for _, msg := range in.Store.(*memoryStore).messages {
+		if msg.Content == "Call submit with a typed output or a needs_input question." {
+			found = true
+			if !msg.Generated {
+				t.Fatal("submit reminder became a human compaction boundary")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing submit reminder")
 	}
 }
 
