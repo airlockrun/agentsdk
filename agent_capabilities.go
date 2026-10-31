@@ -28,7 +28,6 @@ const (
 	CapabilityFileDecodeText     = wire.CapabilityFileDecodeText
 	CapabilityFileEditLines      = wire.CapabilityFileEditLines
 	CapabilityFileSed            = wire.CapabilityFileSed
-	CapabilityQueryDB            = wire.CapabilityQueryDB
 	CapabilityOutput             = wire.CapabilityOutput
 	CapabilityFileShareURL       = wire.CapabilityFileShareURL
 	CapabilityHTTPRequest        = wire.CapabilityHTTPRequest

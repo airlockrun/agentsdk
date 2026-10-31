@@ -1,6 +1,6 @@
 module github.com/airlockrun/agentsdk/internal/apicompat
 
-go 1.26.0
+go 1.26.10
 
 require (
 	golang.org/x/exp v0.0.0-20260718201538-764159d718ef

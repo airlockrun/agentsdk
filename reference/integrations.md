@@ -1,18 +1,100 @@
-# Live integration validation
+# Direct resources and app integration validation
+
+## Discover and use your resources directly
+
+Use `resources` to discover resources available to your authenticated identity,
+inspect safe metadata, or call HTTP/MCP providers without an app declaration or
+binding:
+
+```bash
+go tool air resources list
+go tool air resources inspect /personal_spotify
+go tool air resources request /personal_spotify --path /v1/me/player/currently-playing
+go tool air resources inspect /personal_github
+go tool air resources mcp-tools /personal_github
+go tool air resources mcp-call /personal_github --tool search_repos --data '{"query":"airlock"}'
+```
+
+`/name` uses the globally unique resource slug on the selected remote, not its
+human display name or a provider name. `/UUID` selects the stable resource ID;
+UUID-shaped selectors always mean IDs. Bare names/UUIDs are rejected, never
+guessed. Names such as `/preview` and `/production` are ordinary global names.
+The list contains only resources visible under your ownership/grants,
+not every user's resources. Inspect requires view access; calls require live use
+access. Credentials stay in Airlock's shared resource transport. HTTP requests
+default to GET. These are real provider calls; only perform the authorized
+operation, and never repeat an interrupted call just to discover its outcome.
+
+Hosted development uses the injected, per-command execution credential on its
+admitted Airlock host. No browser login, app binding or production-app execution
+grant is needed. Original conversation/bridge/MCP restrictions, resource grants,
+revocation and command-attempt fences remain live. App-originated delegation does
+not acquire host resource authority. Local development uses your existing login
+and selected/default remote; `--remote <name>` selects another saved remote.
+Hosted remotes must match the injected host; credentials cannot be forwarded to
+an arbitrary `--url`. Global addresses reject `--agent` and `--target`.
+Build-bound codegen integration tokens cannot use direct resources.
+
+## Verify an app's declared slots
 
 Use the same `go tool air` commands from a bound local workspace or Airlock
 codegen to validate configured dependencies without retrieving their
 credentials:
 
 ```bash
-go tool air integrations list
-go tool air connection request spotify --path /v1/me
-go tool air mcp probe https://example.com/mcp
-go tool air mcp tools github
-go tool air mcp call github search_repos --args '{"query":"airlock"}'
+go tool air resources list preview
+go tool air resources inspect preview/spotify
+go tool air resources request preview/spotify --path /v1/me
+go tool air resources request production/spotify --path /v1/me
+go tool air resources mcp-tools preview/github
+go tool air resources mcp-call preview/github --tool search_repos --data '{"query":"airlock"}'
+go tool air resources mcp-probe https://example.com/mcp
 ```
 
-`mcp probe` connects directly to a URL and reports the public tool list plus a
+`target/slot` selects a declared app slot, not a global resource name. The logical
+app must be unambiguously bound in the workspace/remote or selected with `--agent`.
+`preview` selects the authenticated owner's saved preview; `production` selects
+production. Other target labels pass through existing deployment resolution and
+must already exist; the CLI does not create named deployments. A conflicting
+`--target` is rejected. Use `--type connection` or `--type mcp_server` when the
+same slot slug is declared with multiple types; the CLI never guesses.
+Run `resources list preview` and `resources list production` first.
+An integration definition and an authorized resource in your account do not
+establish a binding: select that resource for the selected deployment's slot in
+Airlock when verifying the app slot. For direct provider inspection, use
+`resources request` or `resources mcp-*` instead; do not create an app binding
+just to inspect your resource. Per-user slots require the authenticated caller's own binding; another
+user's binding or the app owner's identity is never substituted. Preview and
+production bindings are independent. A host error saying the slot is not
+declared or not bound occurs before any provider request. An upstream failure
+prints `HTTP <status>` and `resource returned HTTP <status>`. App-bound production
+calls require the existing production execution approval in hosted development;
+neither a global name nor an app-slot name grants authority.
+
+```bash
+go tool air resources bind preview/spotify --resource /personal_spotify
+go tool air resources unbind preview/spotify
+```
+
+Binding compatibility and live resource use are checked by the host.
+`resources bind` changes the selected deployed target, not a pending source candidate.
+Missing, incompatible or ambiguous resources require user input, not guessing or borrowing
+another user's connection. Production live binding edits remain protected
+configuration administration, outside a production execution grant in hosted
+development. Standalone operator logins retain ordinary app-admin configuration
+gates. For hosted production, prepare selections with
+`deploy --bind connection:spotify=UUID` in the approved immutable
+production candidate. For initial/setup-blocked previews, inspect
+`preview configuration <candidate-UUID>` and use `preview --bind connection:spotify=UUID`
+to select the pending candidate; do not mutate an unrelated running target.
+
+Required unbound slots do not block source deployment. Report unresolved slots
+and the target's existing settings link, and distinguish deployed source from
+operational readiness. Apply only compatible, unambiguous selections within the
+user's authority; missing authority or a required choice needs user input, not a
+pre-deployment configuration gate.
+
+`resources mcp-probe` connects directly to a URL and reports the public tool list plus a
 passive OAuth assessment. `auth.dynamicClientRegistration` is `advertised`,
 `not_advertised`, or `unknown`; the probe never attempts to register a client.
 When OAuth endpoints are discovered without DCR, the output marks
@@ -31,9 +113,9 @@ different instances:
 
 ```bash
 go tool air deploy --remote dev --url https://airlock.example.com --agent my-agent-dev -m "Configure development integrations"
-go tool air integrations list --remote dev
-go tool air connection request spotify --remote dev --path /v1/me
-go tool air mcp tools github --remote dev
+go tool air resources list preview --remote dev
+go tool air resources request preview/spotify --remote dev --path /v1/me
+go tool air resources mcp-tools preview/github --remote dev
 ```
 
 Selecting `dev` does not change `default_remote`. Subsequent deploys and pulls
@@ -43,24 +125,27 @@ default. An existing remote cannot be rebound to another URL or agent; use a
 different remote name so source synchronization state stays attached to one
 deployment target.
 
-User-authenticated app commands default to production. Add `--target preview` to
-use the saved preview for the selected app/remote. Hosted development commands
-default to the injected preview; `--target production` reaches existing host authorization.
+Addresses always state their scope explicitly. `resources list` lists global
+resources; `resources list <target>` and `resources bindings --target <target>`
+list that app target's slots without exposing credentials.
 
 Airlock injects credentials for authenticated connection and MCP declarations.
-No-auth declarations use their fixed manifest endpoint directly and require no
+Native Go no-auth handles use their fixed manifest endpoint directly and require no
 resource setup or binding. Their `BindingMode` is optional and ignored; known
 values remain accepted for source compatibility. Independently created no-auth
 resources remain available through the direct resource namespace and retain
 their resource grants.
-Local calls require agent-admin access. Hosted codegen receives a short-lived
+App-slot calls require agent-admin access and independent live resource-use access.
+Hosted development uses its verified execution credential; preview calls need
+no separate browser login or production approval. Hosted codegen receives a short-lived
 integration token that cannot deploy, update source, configure credentials, or
-call unrelated agent APIs. Hosted codegen is fixed to its build-bound target and
-does not accept local target-selection flags.
+call unrelated agent APIs. In codegen, `resources list` lists only the build's
+slots; use `<injected-runtime-UUID>/<slot>` addresses. Codegen cannot select a
+different remote/target or resolve global resource names.
 
-Connection response bodies are written to stdout. `mcp tools` prints Airlock's
-cached input schemas; `mcp call` invokes the live
-server. Both print JSON so their output can become sanitized test fixtures.
+Connection response bodies are written to stdout. `resources mcp-tools` discovers the
+authorized server's live tool schemas and instructions; `resources mcp-call` invokes the
+live server. Both print JSON so their output can become sanitized test fixtures.
 Connection and MCP results are capped at 20 MiB.
 
 ## Go connection response bodies

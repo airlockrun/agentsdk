@@ -66,6 +66,28 @@ func TestPrintEnvVarsRedactsSecretPayload(t *testing.T) {
 	}
 }
 
+func TestCmdEnvSecretMutationsDoNotPrintValues(t *testing.T) {
+	var mutations atomic.Int32
+	server := setupEnvCommand(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			writeEnvVarList(t, w, &airlockv1.EnvVarInfo{Slug: "API_KEY", IsSecret: true, Required: true})
+			return
+		}
+		mutations.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	defer server.Close()
+	for _, args := range [][]string{{"set", "API_KEY", "do-not-print-this", "--target", "production"}, {"clear", "API_KEY", "--target", "production"}} {
+		output := captureCommandStdout(t, func() error { return cmdEnv(args) })
+		if strings.Contains(output, "do-not-print-this") || !strings.Contains(output, "Restart required") {
+			t.Fatalf("unsafe mutation output: %s", output)
+		}
+	}
+	if mutations.Load() != 2 {
+		t.Fatal("secret set/clear did not reach the server")
+	}
+}
+
 func TestCmdEnvGet(t *testing.T) {
 	t.Run("prints configured non-secret value", func(t *testing.T) {
 		server := setupEnvCommand(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -128,7 +150,7 @@ func TestCmdEnvSetValueBeginningWithDashes(t *testing.T) {
 	output := captureCommandStdout(t, func() error {
 		return cmdEnv([]string{"set", "OPTIONS", "--target", "production", "--", "--verbose"})
 	})
-	if output != "Set OPTIONS\n" {
+	if !strings.Contains(output, "Set OPTIONS. Restart required") {
 		t.Fatalf("env set output = %q", output)
 	}
 }
@@ -163,11 +185,11 @@ func TestCmdEnvSetAndClear(t *testing.T) {
 	output := captureCommandStdout(t, func() error {
 		return cmdEnv([]string{"set", "GREETING", "hello wide world", "--target", "production"})
 	})
-	if output != "Set GREETING\n" || strings.Contains(output, "hello wide world") {
+	if !strings.Contains(output, "Set GREETING. Restart required") || strings.Contains(output, "hello wide world") {
 		t.Fatalf("env set output = %q", output)
 	}
 	output = captureCommandStdout(t, func() error { return cmdEnv([]string{"clear", "GREETING", "--target", "production"}) })
-	if output != "Cleared GREETING\n" {
+	if !strings.Contains(output, "Cleared GREETING. Restart required") {
 		t.Fatalf("env clear output = %q", output)
 	}
 	if mutations.Load() != 2 {
@@ -193,8 +215,6 @@ func TestCmdEnvValidatesDeclarationBeforeMutation(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "secret set", args: []string{"set", "SECRET", "hidden value"}, want: "is secret"},
-		{name: "secret clear", args: []string{"clear", "SECRET"}, want: "is secret"},
 		{name: "undeclared", args: []string{"set", "MISSING", "value"}, want: "not declared"},
 		{name: "pattern mismatch", args: []string{"set", "REGION", "us west"}, want: "required pattern"},
 	}

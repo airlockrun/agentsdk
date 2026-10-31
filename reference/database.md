@@ -145,4 +145,10 @@ err := agent.DB().Transaction(ctx, nil, func(tx agentsdk.DBTX) error {
 })
 ```
 
+The callback value retains its app ownership and exposes the sqlc `DBTX` surface,
+not transaction completion methods. To update live UI fragments from HTTP, tools
+or jobs, publish through a declared `RegisterUIChangeTopic` handle inside that
+same callback and propagate its error. Rollback includes the change intent. See
+[live UI updates](html-ui.md#live-updates-without-disrupting-work).
+
 **Always use sqlc.** Never write raw `db.QueryRow`/`db.Exec` strings in Go.

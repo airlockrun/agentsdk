@@ -44,7 +44,7 @@ func cmdEnv(args []string) error {
 	}
 
 	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx, flags)
+	target, err := resolveDeployment(ctx, targetFlags{dir: ".", url: flags.url, remote: flags.remote, agent: flags.agent, target: flags.target}, false)
 	if err != nil {
 		return err
 	}
@@ -53,7 +53,11 @@ func cmdEnv(args []string) error {
 		return err
 	}
 	if command == "list" {
-		return printEnvVars(envVars)
+		if err := printEnvVars(envVars); err != nil {
+			return err
+		}
+		fmt.Printf("Settings: %s\n", envSettingsURL(target))
+		return nil
 	}
 
 	slug := positional[0]
@@ -61,7 +65,7 @@ func cmdEnv(args []string) error {
 	if err != nil {
 		return err
 	}
-	if envVar.IsSecret {
+	if envVar.IsSecret && command == "get" {
 		return fmt.Errorf("env var %q is secret; env %s only supports non-secret vars", slug, command)
 	}
 	path := envVarsPath(target) + "/" + url.PathEscape(slug)
@@ -87,16 +91,34 @@ func cmdEnv(args []string) error {
 		if err := doProto(ctx, target.baseURL, http.MethodPost, path, target.token, &airlockv1.SetEnvVarValueRequest{Value: value}, nil); err != nil {
 			return err
 		}
-		fmt.Printf("Set %s\n", slug)
+		fmt.Printf("Set %s. Restart required for running instances; takes effect on next start for stopped targets.\n", safeTableCell(slug))
 		return nil
 	case "clear":
 		if err := doProto(ctx, target.baseURL, http.MethodDelete, path, target.token, nil, nil); err != nil {
 			return err
 		}
-		fmt.Printf("Cleared %s\n", slug)
+		fmt.Printf("Cleared %s. Restart required for running instances; takes effect on next start for stopped targets.\n", safeTableCell(slug))
 		return nil
 	}
 	panic("unreachable")
+}
+
+func envSettingsURL(target selectedDeployment) string {
+	if target.info.WorkspaceUrl != "" {
+		link, err := url.Parse(target.info.WorkspaceUrl)
+		if err == nil {
+			query := link.Query()
+			query.Set("settings", "environment")
+			selector := target.info.Id
+			if target.info.Kind == "production" {
+				selector = "production"
+			}
+			query.Set("target", selector)
+			link.RawQuery = query.Encode()
+			return safeTableCell(link.String())
+		}
+	}
+	return target.baseURL + "/agents/" + url.PathEscape(target.app.AgentID) + "?view=advanced&target=" + url.QueryEscape(target.info.Id) + "#env-vars"
 }
 
 func parseEnvArgs(args []string) (integrationTargetFlags, []string, error) {
@@ -125,7 +147,7 @@ func parseEnvArgs(args []string) (integrationTargetFlags, []string, error) {
 	return flags, positional, nil
 }
 
-func listEnvVars(ctx context.Context, target integrationTarget) ([]*airlockv1.EnvVarInfo, error) {
+func listEnvVars(ctx context.Context, target selectedDeployment) ([]*airlockv1.EnvVarInfo, error) {
 	var resp airlockv1.ListEnvVarsResponse
 	if err := doProto(ctx, target.baseURL, http.MethodGet, envVarsPath(target), target.token, nil, &resp); err != nil {
 		return nil, err
@@ -133,8 +155,8 @@ func listEnvVars(ctx context.Context, target integrationTarget) ([]*airlockv1.En
 	return resp.EnvVars, nil
 }
 
-func envVarsPath(target integrationTarget) string {
-	return "/api/v1/agents/" + url.PathEscape(target.agentID) + "/env-vars"
+func envVarsPath(target selectedDeployment) string {
+	return target.path("/env-vars")
 }
 
 func declaredEnvVar(envVars []*airlockv1.EnvVarInfo, slug string) (*airlockv1.EnvVarInfo, error) {
@@ -148,14 +170,18 @@ func declaredEnvVar(envVars []*airlockv1.EnvVarInfo, slug string) (*airlockv1.En
 
 func printEnvVars(envVars []*airlockv1.EnvVarInfo) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "SLUG\tSECRET\tCONFIGURED\tDEFAULT\tPATTERN\tVALUE\tDESCRIPTION")
+	fmt.Fprintln(w, "SLUG\tSECRET\tSTATE\tREQUIRED\tPRESENT\tDEFAULT\tPATTERN\tVALUE\tDESCRIPTION")
 	for _, envVar := range envVars {
 		defaultValue, value := envVar.DefaultValue, envVar.Value
 		if envVar.IsSecret {
 			defaultValue, value = "", ""
 		}
-		fmt.Fprintf(w, "%s\t%t\t%t\t%s\t%s\t%s\t%s\n",
-			safeTableCell(envVar.Slug), envVar.IsSecret, envVar.Configured, safeTableCell(defaultValue),
+		state := "unset"
+		if envVar.Configured {
+			state = "set"
+		}
+		fmt.Fprintf(w, "%s\t%t\t%s\t%t\t%t\t%s\t%s\t%s\t%s\n",
+			safeTableCell(envVar.Slug), envVar.IsSecret, state, envVar.Required, envVar.Present, safeTableCell(defaultValue),
 			safeTableCell(envVar.Pattern), safeTableCell(value), safeTableCell(envVar.Description))
 	}
 	return w.Flush()

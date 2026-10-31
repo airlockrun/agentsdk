@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -127,6 +128,9 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 	}
 	baseURL, token := s.baseURL, s.token
 	fmt.Fprintf(os.Stderr, "Target: remote=%s app=%s target=%s runtime=%s\n", s.remoteName, s.app.AgentID, s.info.Name, s.info.Id)
+	if !f.json {
+		s.printAppURL()
+	}
 	target := agentRemoteBinding{AgentID: s.info.Id, Slug: s.info.Name}
 	path := s.path("/builds")
 	state := s.app.Targets[s.info.Id]
@@ -137,7 +141,7 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 				return fmt.Errorf("get deployment task: %w", taskErr)
 			}
 			if f.json && task.Info.Status != "succeeded" {
-				if err := writeProtoJSON(task.Info); err != nil {
+				if err := writeBuildObservation(task.Info, s.info); err != nil {
 					return err
 				}
 			} else if !f.json {
@@ -196,7 +200,7 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 				resp.Builds = resp.Builds[:f.limit]
 			}
 			if f.json {
-				return writeProtoJSON(&resp)
+				return writeBuildObservation(&resp, s.info)
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "BUILD ID\tTYPE\tSTATUS\tSTARTED\tMESSAGE")
@@ -221,7 +225,7 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 			return errors.New("build response does not match the requested build and agent")
 		}
 		if f.json {
-			if err := writeProtoJSON(&resp); err != nil {
+			if err := writeBuildObservation(&resp, s.info); err != nil {
 				return err
 			}
 		} else {
@@ -262,6 +266,28 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 		case <-timer.C:
 		}
 	}
+}
+
+// Build observations retain protobuf field names alongside the selected target's
+// app origin and explicit workspace link. Neither asserts that a candidate is deployed.
+func writeBuildObservation(response proto.Message, deployment *airlockv1.DeploymentInfo) error {
+	raw, err := protoMarshal.Marshal(response)
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	fields["workspaceUrl"], err = json.Marshal(deployment.WorkspaceUrl)
+	if err != nil {
+		return err
+	}
+	fields["routeBaseUrl"], err = json.Marshal(deployment.RouteBaseUrl)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(os.Stdout).Encode(fields)
 }
 
 func buildTime(t *timestamppb.Timestamp) string {

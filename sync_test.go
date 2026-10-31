@@ -13,6 +13,33 @@ import (
 	"github.com/airlockrun/agentsdk/wire"
 )
 
+func TestManifestIcon(t *testing.T) {
+	for _, icon := range []string{"📦", "👩‍💻", "🇺🇦", ""} {
+		t.Run(icon, func(t *testing.T) {
+			a := New(Config{Description: "App identity", Icon: icon})
+			manifest := a.Manifest()
+			if manifest.Icon != icon {
+				t.Fatalf("manifest icon = %q, want %q", manifest.Icon, icon)
+			}
+			payload, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(payload, &fields); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := fields["emoji"]; ok {
+				t.Fatal("manifest must not expose an emoji field")
+			}
+			var got string
+			if err := json.Unmarshal(fields["icon"], &got); err != nil || got != icon {
+				t.Fatalf("manifest JSON icon = %q, %v", got, err)
+			}
+		})
+	}
+}
+
 func TestSyncRequiresRuntimeHandshake(t *testing.T) {
 	for _, protocol := range []string{"", "airlock.app-runtime.v1", "airlock.app-runtime.v2", wire.AppRuntimeProtocol} {
 		t.Run(protocol, func(t *testing.T) {

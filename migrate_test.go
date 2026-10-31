@@ -52,7 +52,7 @@ func TestAutoMigrateRequiresExplicitRuntimeDirectory(t *testing.T) {
 					t.Fatalf("panic = %s", got)
 				}
 			}()
-			(&Agent{}).autoMigrate()
+			(&Agent{}).autoMigrate(migrationUp, 0)
 		})
 	}
 }
@@ -60,5 +60,33 @@ func TestMigrationLockKeyIsStablePerAgent(t *testing.T) {
 	first := migrationLockKey("agent-a")
 	if first != migrationLockKey("agent-a") || first == migrationLockKey("agent-b") {
 		t.Fatal("migration lock identity is not stable/isolated")
+	}
+}
+
+func TestConfiguredMigrationMode(t *testing.T) {
+	for _, tt := range []struct {
+		name, validate, down, up string
+		mode                     migrationMode
+		version                  int64
+		invalid                  bool
+	}{
+		{name: "normal runtime", mode: migrationUp},
+		{name: "validation", validate: "1", mode: migrationValidate},
+		{name: "down to zero", down: "0", mode: migrationDownTo},
+		{name: "down to version", down: "7", mode: migrationDownTo, version: 7},
+		{name: "up only", up: "1", mode: migrationUpOnly},
+		{name: "unrecognized validation flag remains normal", validate: "true", mode: migrationUp},
+		{name: "unrecognized up flag remains normal", up: "true", mode: migrationUp},
+		{name: "invalid down fails", down: "invalid", invalid: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AGENT_VALIDATE_MIGRATIONS", tt.validate)
+			t.Setenv("AGENT_MIGRATE_DOWN_TO", tt.down)
+			t.Setenv("AGENT_MIGRATE_UP_ONLY", tt.up)
+			mode, version, err := configuredMigrationMode()
+			if (err != nil) != tt.invalid || !tt.invalid && (mode != tt.mode || version != tt.version) {
+				t.Fatalf("mode=%v version=%d err=%v", mode, version, err)
+			}
+		})
 	}
 }

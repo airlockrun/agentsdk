@@ -37,6 +37,7 @@ type Mock struct {
 	EnqueueJobError           *wire.EnqueueJobErrorResponse
 	GetJobResponse            *wire.GetJobResponse
 	RunCompleteStatus         int
+	RouteLogging              wire.RouteLogging
 	JobProgressStatus         int
 	ConnectorCommandResponses map[string]json.RawMessage
 	ConnectorJobResponses     map[string]json.RawMessage
@@ -53,7 +54,7 @@ func New() (*Mock, string) {
 }
 
 func newMock(models map[string]stream.Model) (*Mock, string) {
-	m := &Mock{models: models}
+	m := &Mock{models: models, RouteLogging: wire.LoggingNormal}
 	mux := http.NewServeMux()
 	for _, pattern := range []string{
 		"POST /api/agent/agents/{definition}/runs",
@@ -160,6 +161,20 @@ func newMock(models map[string]stream.Model) (*Mock, string) {
 		_ = json.NewEncoder(w).Encode(wire.CreateRunResponse{RunID: "run-mock-123",
 			Caller: wire.Caller{Kind: "application", Access: wire.AccessPublic,
 				Origin: wire.CallerOrigin{Interface: "application", Execution: "background"}}})
+	})
+	mux.HandleFunc("POST /api/agent/run/materialize-route", func(w http.ResponseWriter, r *http.Request) {
+		m.record(r)
+		var request wire.MaterializeRouteRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "bad test dispatch", http.StatusBadRequest)
+			return
+		}
+		var caller wire.Caller
+		if err := json.Unmarshal([]byte(request.Proof), &caller); err != nil {
+			http.Error(w, "bad test dispatch", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(wire.MaterializeRouteResponse{Runtime: wire.RuntimeContext{RunID: "run-mock-123", InvocationToken: "abababababababababababababababababababababababababababababababab", Caller: caller}, Deadline: time.Now().Add(time.Minute), Logging: m.RouteLogging})
 	})
 	mux.HandleFunc("POST /api/agent/run/complete", func(w http.ResponseWriter, r *http.Request) {
 		m.record(r)

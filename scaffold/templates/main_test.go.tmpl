@@ -10,6 +10,9 @@ import (
 // HTTP admission, migrations, sync and OnStart execute on real Airlock previews.
 func TestAgentComposition(t *testing.T) {
 	manifest := newAgent().Manifest()
+	if manifest.Icon == "" {
+		t.Fatal("app must declare an Icon emoji")
+	}
 	if err := wire.CheckAppRuntimeProtocol(manifest.RuntimeProtocol); err != nil {
 		t.Fatal(err)
 	}

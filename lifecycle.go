@@ -62,7 +62,26 @@ func (a *Agent) Start(ctx context.Context) (retErr error) {
 	}()
 
 	a.freeze()
-	a.initializeRuntime()
+	mode, downTo, err := configuredMigrationMode()
+	if err != nil {
+		return err
+	}
+	// Migration-only processes use an isolated database and exit before host
+	// sync or startup hooks. They do not consume a live configuration snapshot.
+	if mode == migrationUp {
+		if err := a.loadEnvConfig(); err != nil {
+			return err
+		}
+	}
+	a.initializeRuntime(mode, downTo)
+	if mode != migrationUp {
+		return errors.New("agentsdk: migration-only execution returned without exiting")
+	}
+	if len(a.uiChangeTopics) > 0 {
+		if err := a.initializeUIChanges(ctx); err != nil {
+			return fmt.Errorf("agentsdk: initialize UI changes: %w", err)
+		}
+	}
 	if err := a.syncWithAirlock(ctx); err != nil {
 		return err
 	}
@@ -74,6 +93,7 @@ func (a *Agent) Start(ctx context.Context) (retErr error) {
 }
 
 func (a *Agent) cleanupFailedStart() error {
+	a.stopUIChanges()
 	var err error
 	if a.db != nil && a.db.db != nil {
 		err = a.db.db.Close()
@@ -83,7 +103,7 @@ func (a *Agent) cleanupFailedStart() error {
 }
 
 func (a *Agent) runStartHooks(ctx context.Context) (err error) {
-	lazy := &lazyRun{agent: a, triggerRef: "startup", callerAccess: AccessAdmin,
+	lazy := &lazyRun{agent: a, callerAccess: AccessAdmin, startup: true,
 		caller: callerFromWire(wire.Caller{Kind: "application", Access: wire.AccessAdmin,
 			Origin: wire.CallerOrigin{Interface: "application", Execution: "startup"}})}
 	ctx = contextWithLazyRun(contextWithJobRun(ctx, nil), lazy)

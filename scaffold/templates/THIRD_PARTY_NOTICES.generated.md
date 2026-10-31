@@ -486,7 +486,7 @@ goai is distributed. See LICENSE for the full license text.
 
 
 ================================================================================
-github.com/airlockrun/sol v0.1.18
+github.com/airlockrun/sol v0.1.19
 ================================================================================
 Copyright 2026 Oleg Karpov
 
@@ -1544,7 +1544,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-golang.org/x/net v0.60.0
+golang.org/x/net v0.62.0
 ================================================================================
 Copyright 2009 The Go Authors.
 
@@ -1608,7 +1608,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-golang.org/x/sync v0.23.0
+golang.org/x/sync v0.24.0
 ================================================================================
 Copyright 2009 The Go Authors.
 
@@ -1640,7 +1640,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-golang.org/x/sys v0.48.0
+golang.org/x/sys v0.49.0
 ================================================================================
 Copyright 2009 The Go Authors.
 
@@ -1672,7 +1672,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-golang.org/x/term v0.46.0
+golang.org/x/term v0.47.0
 ================================================================================
 Copyright 2009 The Go Authors.
 
@@ -1704,7 +1704,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ================================================================================
-golang.org/x/text v0.42.0
+golang.org/x/text v0.43.0
 ================================================================================
 Copyright 2009 The Go Authors.
 

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -385,7 +386,8 @@ func (a *Agent) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	return io.ReadAll(rc)
 }
 
-// WriteFile writes data with the given content type. Returns the resulting
+// WriteFile streams data with the given content type without requiring its size
+// or seeking. It does not close data. Returns the resulting
 // FileInfo (path/filename/contentType/size/lastModified). Trusted: no
 // caller access check. The path must belong to a registered directory.
 func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, contentType string) (FileInfo, error) {
@@ -396,13 +398,8 @@ func (a *Agent) WriteFile(ctx context.Context, path string, data io.Reader, cont
 	if err != nil {
 		return FileInfo{}, err
 	}
-	// Buffer to learn the size; the API path needs Content-Length.
-	var buf bytes.Buffer
-	n, err := io.Copy(&buf, data)
+	n, err := a.writeFileRaw(ctx, canon, data, contentType, "")
 	if err != nil {
-		return FileInfo{}, fmt.Errorf("agentsdk: WriteFile %s: read input: %w", canon, err)
-	}
-	if err := a.writeFileRaw(ctx, canon, &buf, contentType, ""); err != nil {
 		return FileInfo{}, err
 	}
 	return FileInfo{
@@ -595,28 +592,75 @@ func (a *Agent) publicURLForPath(path string) string {
 
 // --- HTTP client (raw helpers — Trusted Go API wraps these) ---
 
-func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, contentType, originalFilename string) error {
-	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+escapeStoragePath(path), data)
+// uploadReader hides seekability/GetBody from net/http: an upload is single-pass
+// and must not be replayed after the server may have accepted bytes. Atomics
+// permit inspection even when a transport returns before its body reader stops.
+type uploadReader struct {
+	ctx      context.Context
+	r        io.Reader
+	n        atomic.Int64
+	terminal atomic.Pointer[error]
+}
+
+func (r *uploadReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		r.terminal.Store(&err)
+		return 0, err
+	}
+	n, err := r.r.Read(p)
+	r.n.Add(int64(n))
+	if ctxErr := r.ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
 	if err != nil {
-		return err
+		r.terminal.Store(&err)
+	}
+	return n, err
+}
+
+func (a *Agent) writeFileRaw(ctx context.Context, path string, data io.Reader, contentType, originalFilename string) (int64, error) {
+	if data == nil {
+		return 0, errors.New("agentsdk: fileWrite requires a reader")
+	}
+	body := &uploadReader{ctx: ctx, r: data}
+	req, err := a.client.newRequest(ctx, "PUT", "/api/agent/storage/"+escapeStoragePath(path), body)
+	if err != nil {
+		return 0, err
 	}
 	req.Header.Set("Content-Type", contentType)
 	if originalFilename != "" {
 		req.Header.Set("X-Filename", originalFilename)
 	}
-	resp, err := a.client.http.Do(req)
+	// Redirects cannot establish that this endpoint committed the upload.
+	// In particular, a 301/302 must not turn a PUT into a successful GET.
+	client := *a.client.http
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("agentsdk: fileWrite %s: %w", path, err)
+		return 0, fmt.Errorf("agentsdk: fileWrite %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		if err := storageDirectoryResponseError(b); err != nil {
-			return err
+		b, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+		if readErr != nil {
+			return 0, fmt.Errorf("agentsdk: fileWrite %s: status %d: read response: %w", path, resp.StatusCode, readErr)
 		}
-		return fmt.Errorf("agentsdk: fileWrite %s: status %d: %s", path, resp.StatusCode, string(b))
+		if err := storageDirectoryResponseError(b); err != nil {
+			return 0, err
+		}
+		return 0, fmt.Errorf("agentsdk: fileWrite %s: status %d: %s", path, resp.StatusCode, string(b))
 	}
-	return nil
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	terminal := body.terminal.Load()
+	if terminal == nil {
+		return 0, fmt.Errorf("agentsdk: fileWrite %s: upload not fully consumed: %w", path, io.ErrUnexpectedEOF)
+	}
+	if *terminal != io.EOF {
+		return 0, fmt.Errorf("agentsdk: fileWrite %s: read input: %w", path, *terminal)
+	}
+	return body.n.Load(), nil
 }
 
 func (a *Agent) openFileRaw(ctx context.Context, path string) (io.ReadCloser, error) {

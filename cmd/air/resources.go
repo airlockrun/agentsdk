@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"google.golang.org/protobuf/proto"
@@ -16,20 +17,40 @@ import (
 // require app+target; neither operation establishes a developer session.
 func cmdResources(args []string) error {
 	if len(args) == 0 {
-		return errors.New("resources requires list, inspect, request, mcp-tools, mcp-call, bindings, bind, fixture or unbind")
+		return errors.New("resources requires list, inspect, request, mcp-tools, mcp-call, mcp-probe, bindings, bind, fixture or unbind")
 	}
 	command := args[0]
+	if command == "mcp-probe" {
+		if len(args) != 2 {
+			return errors.New("resources mcp-probe requires one HTTP(S) URL")
+		}
+		return probeMCP(args[1])
+	}
 	resource, fixture, revision, data, method, path, tool := "", "", "", "", "GET", "", ""
+	typ := ""
+	headers := map[string]string{}
 	var targetArgs []string
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--resource", "--fixture", "--revision", "--data", "--method", "--path", "--tool":
+		case "--resource", "--fixture", "--revision", "--data", "--method", "--path", "--tool", "--type", "--header":
 			key := args[i]
+			allowed := key == "--type" || key == "--resource" && command == "bind" || (key == "--fixture" || key == "--revision") && command == "fixture" || key == "--data" && (command == "request" || command == "mcp-call") || (key == "--method" || key == "--path" || key == "--header") && command == "request" || key == "--tool" && command == "mcp-call"
+			if !allowed {
+				return fmt.Errorf("%s is not supported by resources %s; pending candidate selections use preview/deploy --bind", key, command)
+			}
 			if i+1 >= len(args) {
 				return fmt.Errorf("%s requires a value", key)
 			}
 			i++
 			switch key {
+			case "--header":
+				name, value, ok := strings.Cut(args[i], ":")
+				if !ok || strings.TrimSpace(name) == "" {
+					return errors.New("--header requires name:value")
+				}
+				headers[strings.TrimSpace(name)] = strings.TrimSpace(value)
+			case "--type":
+				typ = args[i]
 			case "--resource":
 				resource = args[i]
 			case "--fixture":
@@ -50,19 +71,45 @@ func cmdResources(args []string) error {
 		}
 	}
 	isBinding := command == "bindings" || command == "bind" || command == "fixture" || command == "unbind"
-	if !isBinding {
-		for _, arg := range targetArgs {
-			if arg == "--target" || arg == "--agent" {
-				return errors.New("direct resource commands are user+remote scoped; use resources bindings|bind|fixture|unbind for app targets")
-			}
-		}
-	}
 	f, positional, err := parseSelectionFlags(targetArgs)
 	if err != nil {
 		return err
 	}
 	if f.wait {
 		return errors.New("resource commands do not support --wait")
+	}
+	if command == "list" && (len(positional) == 1 || f.target != "") {
+		if len(positional) > 0 {
+			if err := selectResourceTarget(&f, positional[0]); err != nil {
+				return err
+			}
+			positional = nil
+		}
+		command = "bindings"
+		isBinding = true
+	}
+	if command == "list" && f.agent != "" {
+		return errors.New("global resources are user+remote scoped; --agent is unavailable")
+	}
+	if (command == "list" || command == "bindings") && len(positional) != 0 {
+		return errors.New("resources list takes at most one target; bindings takes no positional arguments")
+	}
+	var address resourceAddress
+	if command != "list" && command != "bindings" {
+		if len(positional) != 1 {
+			return errors.New("resource operation requires /global-name or target/slot; use --type only to disambiguate a slot")
+		}
+		address, err = parseResourceAddress(positional[0])
+		if err != nil {
+			return err
+		}
+		if address.target != "" {
+			if err := selectResourceTarget(&f, address.target); err != nil {
+				return err
+			}
+		} else if f.target != "" || f.agent != "" {
+			return errors.New("global resources are user+remote scoped; --agent and --target are unavailable")
+		}
 	}
 	if isBinding {
 		if err := requireTarget(f.target); err != nil {
@@ -71,7 +118,13 @@ func cmdResources(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), f.timeout)
 	defer cancel()
+	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" {
+		return codegenResourceCommand(ctx, command, address, typ, f, path, method, data, tool, headers)
+	}
 	if isBinding {
+		if command != "bindings" && address.target == "" {
+			return errors.New("binding operations require target/slot")
+		}
 		s, err := resolveDeployment(ctx, f, false)
 		if err != nil {
 			return err
@@ -87,17 +140,29 @@ func cmdResources(args []string) error {
 			}
 			return writeProtoJSON(&response)
 		}
-		if len(positional) != 2 {
-			return errors.New("resources bind|fixture|unbind requires <type> <slot>")
+		if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" && f.target == "production" {
+			return errors.New("production binding changes require an approved immutable deployment candidate; prepare selections with deploy --bind/--fixture, not a production execution grant")
+		}
+		slot, err := resourceSlot(ctx, s, address.slot, typ)
+		if err != nil {
+			return err
 		}
 		var input proto.Message
 		verb := http.MethodPut
 		switch command {
 		case "bind":
-			if !deployUUIDRe.MatchString(resource) || fixture != "" {
-				return errors.New("bind requires --resource <UUID>, without --fixture")
+			selected, e := parseResourceAddress(resource)
+			if e != nil || selected.target != "" || fixture != "" {
+				return errors.New("bind requires --resource /global-name or /UUID, without --fixture")
 			}
-			input = &airlockv1.SetTargetBindingRequest{ResourceId: resource}
+			resolved, e := resolveGlobalResource(ctx, s.baseURL, s.token, selected.global)
+			if e != nil {
+				return e
+			}
+			if resolved.Type != slot.Type {
+				return errors.New("resource type does not match the declared slot")
+			}
+			input = &airlockv1.SetTargetBindingRequest{ResourceId: resolved.Id}
 		case "fixture":
 			if fixture == "" || !deployUUIDRe.MatchString(revision) || resource != "" {
 				return errors.New("fixture requires --fixture <name> --revision <candidate UUID>, without --resource")
@@ -110,7 +175,7 @@ func cmdResources(args []string) error {
 			verb = http.MethodDelete
 		}
 		var response airlockv1.ListTargetBindingsResponse
-		if err := doProto(ctx, s.baseURL, verb, s.path("/bindings/"+url.PathEscape(positional[0])+"/"+url.PathEscape(positional[1])), s.token, input, &response); err != nil {
+		if err := doProto(ctx, s.baseURL, verb, s.path("/bindings/"+url.PathEscape(slot.Type)+"/"+url.PathEscape(address.slot)), s.token, input, &response); err != nil {
 			return err
 		}
 		if response.RuntimeAgentId != s.info.Id {
@@ -118,9 +183,49 @@ func cmdResources(args []string) error {
 		}
 		return writeProtoJSON(&response)
 	}
-	baseURL, token, err := resolveUserRemote(ctx, f)
-	if err != nil {
-		return err
+	var baseURL, token, requestPath, mcpRoot string
+	if address.target != "" {
+		s, e := resolveDeployment(ctx, f, false)
+		if e != nil {
+			return e
+		}
+		slot, e := resourceSlot(ctx, s, address.slot, typ)
+		if e != nil {
+			return e
+		}
+		if command == "inspect" {
+			return writeProtoJSON(slot)
+		}
+		if (command == "request" && slot.Type != "connection") || ((command == "mcp-tools" || command == "mcp-call") && slot.Type != "mcp_server") {
+			return errors.New("operation does not match the declared slot type")
+		}
+		baseURL, token = s.baseURL, s.token
+		requestPath = s.path("/resources/connections/" + url.PathEscape(address.slot) + "/request")
+		mcpRoot = s.path("/resources/mcp/" + url.PathEscape(address.slot))
+	} else {
+		baseURL, token, err = resolveUserRemote(ctx, f)
+		if err != nil {
+			return err
+		}
+		if command != "list" {
+			resolved, e := resolveGlobalResource(ctx, baseURL, token, address.global)
+			if e != nil {
+				return e
+			}
+			if typ != "" && typ != resolved.Type {
+				return errors.New("resource type does not match --type")
+			}
+			if command == "inspect" {
+				positional = []string{resolved.Type, resolved.Id}
+			} else {
+				positional = []string{resolved.Id}
+			}
+			if (command == "request" && resolved.Type != "connection") || ((command == "mcp-tools" || command == "mcp-call") && resolved.Type != "mcp_server") {
+				return errors.New("operation does not match the resource type")
+			}
+			requestPath = "/api/v1/resources/connections/" + resolved.Id + "/request"
+			mcpRoot = "/api/v1/resources/mcp_servers/" + resolved.Id
+		}
 	}
 	switch command {
 	case "list":
@@ -142,11 +247,11 @@ func cmdResources(args []string) error {
 		}
 		return writeProtoJSON(&response)
 	case "request":
-		if len(positional) != 1 || !deployUUIDRe.MatchString(positional[0]) || path == "" {
-			return errors.New("resources request requires resource UUID --path /path [--method METHOD] [--data body]")
+		if path == "" {
+			return errors.New("resources request requires an address and --path /path")
 		}
 		var response airlockv1.InvokeConnectionResponse
-		if err := doProto(ctx, baseURL, http.MethodPost, "/api/v1/resources/connections/"+positional[0]+"/request", token, &airlockv1.InvokeConnectionRequest{Method: method, Path: path, Body: []byte(data)}, &response); err != nil {
+		if err := doProto(ctx, baseURL, http.MethodPost, requestPath, token, &airlockv1.InvokeConnectionRequest{Method: method, Path: path, Body: []byte(data), Headers: headers}, &response); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "HTTP %d\n", response.StatusCode)
@@ -158,16 +263,13 @@ func cmdResources(args []string) error {
 		}
 		return nil
 	case "mcp-tools", "mcp-call":
-		if len(positional) != 1 || !deployUUIDRe.MatchString(positional[0]) {
-			return errors.New("MCP resource command requires resource UUID")
-		}
-		root := "/api/v1/resources/mcp_servers/" + positional[0]
+		root := mcpRoot
 		if command == "mcp-tools" {
 			var response airlockv1.ListIntegrationMCPToolsResponse
 			if err := doProto(ctx, baseURL, http.MethodGet, root+"/tools", token, nil, &response); err != nil {
 				return err
 			}
-			return writeProtoJSON(&response)
+			return printResourceMCPTools(&response)
 		}
 		if tool == "" {
 			return errors.New("mcp-call requires --tool")
@@ -192,8 +294,8 @@ func cmdResources(args []string) error {
 }
 
 func resolveUserRemote(ctx context.Context, f targetFlags) (string, string, error) {
-	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" || os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
-		return "", "", errors.New("direct resources require a user login for an explicitly selected Airlock remote")
+	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" {
+		return "", "", errors.New("build integration credentials cannot access direct resources")
 	}
 	binding, _, err := loadAgentBinding(f.dir)
 	if err != nil {
@@ -205,6 +307,27 @@ func resolveUserRemote(ctx context.Context, f targetFlags) (string, string, erro
 	}
 	remote, _ := binding.remote(name)
 	baseURL := normalizeBaseURL(f.url)
+	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
+		injectedURL := normalizeBaseURL(os.Getenv("AIRLOCK_API_URL"))
+		injectedOrigin, err := canonicalAuthOrigin(injectedURL)
+		if err != nil {
+			return "", "", errors.New("developer session requires a valid AIRLOCK_API_URL")
+		}
+		for _, selected := range []string{baseURL, remote.AirlockURL} {
+			if selected == "" {
+				continue
+			}
+			origin, err := canonicalAuthOrigin(selected)
+			if err != nil || origin != injectedOrigin {
+				return "", "", errors.New("selected resource remote conflicts with the admitted developer host")
+			}
+		}
+		if f.remote != "" && remote.AirlockURL == "" {
+			return "", "", errors.New("selected resource remote is not configured")
+		}
+		token, err := accessTokenForURL(ctx, injectedURL)
+		return injectedURL, token, err
+	}
 	if baseURL != "" && remote.AirlockURL != "" && baseURL != normalizeBaseURL(remote.AirlockURL) {
 		return "", "", errors.New("--url conflicts with the selected remote")
 	}

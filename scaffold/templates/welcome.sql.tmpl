@@ -1,0 +1,6 @@
+-- name: GetWelcomeWord :one
+SELECT word FROM welcome_words WHERE user_id = $1;
+
+-- name: SetWelcomeWord :exec
+INSERT INTO welcome_words (user_id, word) VALUES ($1, $2)
+ON CONFLICT (user_id) DO UPDATE SET word = EXCLUDED.word;

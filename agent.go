@@ -23,13 +23,11 @@ type Config struct {
 	noUnkeyedLiterals
 
 	Description string // required — shown to users in the Airlock UI
-	// Emoji is an optional decorative glyph shown next to the agent in
-	// the Airlock UI (agent list, sidebar, header). Purely cosmetic;
-	// empty means "no emoji". A short grapheme is expected (a single
-	// emoji incl. ZWJ / skin-tone / flag sequences) — it is NOT
-	// validated to one rune; over-long/garbage values are dropped
-	// server-side rather than failing the sync.
-	Emoji string
+	// Icon identifies the app in the Airlock UI (app list, sidebar, header).
+	// It accepts one emoji, including multi-codepoint sequences, not an image
+	// URL, HTML, or an icon-library name. Choose an emoji for the app's domain.
+	// Empty or invalid values leave the stored icon unchanged during sync.
+	Icon string
 }
 
 type agentPhase uint8
@@ -52,11 +50,17 @@ type Agent struct {
 	apiURL      string
 	token       string
 	description string
-	emoji       string
+	icon        string
 	httpClient  *http.Client
 	client      *airlockClient
 
-	db *AgentDB
+	db               *AgentDB
+	uiChangeTopics   map[string]struct{}
+	uiChangeStreams  chan struct{}
+	uiChangesContext context.Context
+	uiChangesCancel  context.CancelFunc
+	uiChangeSignals  *uiChangeSignals
+	databaseURL      string
 
 	sensitiveSet  map[string]struct{}
 	sensitiveM    sync.RWMutex
@@ -72,14 +76,16 @@ type Agent struct {
 	auths            map[string]*Connection
 	mcps             map[string]*MCP
 	envVars          map[string]*EnvVar
+	envConfig        wire.EnvConfigSnapshot
 	topics           map[string]*Topic
 	staticAssets     map[string]*StaticAsset
 	directories      []*directory // registration order; longest-prefix wins at lookup
 	connectors       map[string]*Connector
 
-	instructions []*Instruction // access-scoped system prompt fragments; see AddInstruction
-	modelSlots   []*ModelSlot   // named model slots; see RegisterModel
-	startHooks   []startHook
+	instructions     []*Instruction // access-scoped system prompt fragments; see AddInstruction
+	suggestedPrompts []wire.SuggestedPrompt
+	modelSlots       []*ModelSlot // named model slots; see RegisterModel
+	startHooks       []startHook
 
 	// Airlock-owned state: discovered server-side at sync time and pushed
 	// back via syncResponse. /refresh re-runs sync to pick up changes
@@ -148,7 +154,7 @@ func New(cfg Config) *Agent {
 	return newAgentRegistrationState(cfg)
 }
 
-func (a *Agent) initializeRuntime() {
+func (a *Agent) initializeRuntime(mode migrationMode, downTo int64) {
 	agentID := requireEnv("AIRLOCK_AGENT_ID")
 	apiURL := requireEnv("AIRLOCK_API_URL")
 	token := requireEnv("AIRLOCK_AGENT_TOKEN")
@@ -168,17 +174,19 @@ func (a *Agent) initializeRuntime() {
 	a.token = token
 	a.httpClient = &http.Client{}
 	a.db.db = sqlDB
+	a.databaseURL = dsn
 	a.client = newAirlockClient(apiURL, token, a.httpClient)
 	a.AddSensitive(token)
 	a.runtimeInitialized()
-	a.autoMigrate()
+	a.autoMigrate(mode, downTo)
 }
 
 func newAgentRegistrationState(cfg Config) *Agent {
+	uiContext, uiCancel := context.WithCancel(context.Background())
 	a := &Agent{
 		phase:            agentDefining,
 		description:      cfg.Description,
-		emoji:            cfg.Emoji,
+		icon:             cfg.Icon,
 		sensitiveSet:     make(map[string]struct{}),
 		tools:            make(map[string]*registeredTool),
 		agentDefinitions: make(map[string]*registeredAgent),
@@ -192,6 +200,11 @@ func newAgentRegistrationState(cfg Config) *Agent {
 		topics:           make(map[string]*Topic),
 		staticAssets:     make(map[string]*StaticAsset),
 		connectors:       make(map[string]*Connector),
+		uiChangeTopics:   make(map[string]struct{}),
+		uiChangeStreams:  make(chan struct{}, 64),
+		uiChangesContext: uiContext,
+		uiChangesCancel:  uiCancel,
+		uiChangeSignals:  newUIChangeSignals(),
 	}
 	a.db = &AgentDB{agent: a}
 	// Framework-owned scratch directory — used by run_js output truncation
@@ -271,11 +284,16 @@ func (a *Agent) markClosed() {
 // (a failed run's copy also feeds the Fix-this-error builder). Outside
 // a run (init, migrations, detached goroutines) it returns the plain
 // stdout logger — no run to attach to.
+// On LoggingOff HTTP routes, logging alone does not materialize a run or retain
+// audit telemetry; the returned logger writes only to container stdout.
 //
 // It is a real *zap.Logger: use zap.String/zap.Int/zap.Error/... for
 // structured fields, and the level-named methods (Info/Warn/Error/Debug)
 // for severity.
 func (a *Agent) Logger(ctx context.Context) *zap.Logger {
+	if lazy := lazyRunFromContext(ctx); lazy != nil && lazy.loggingOff {
+		return agentLogger()
+	}
 	if r := a.runForCall(ctx); r != nil {
 		return r.runLogger()
 	}
@@ -297,6 +315,7 @@ func (a *Agent) Close() error {
 	if !a.runtimeAvailable() {
 		return a.runtimeUnavailable("Close")
 	}
+	a.stopUIChanges()
 	if a.db == nil || a.db.db == nil {
 		return nil
 	}

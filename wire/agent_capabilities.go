@@ -35,7 +35,6 @@ const (
 	CapabilityFileDecodeText     AgentCapability = "air//file_decode_text"
 	CapabilityFileEditLines      AgentCapability = "air//file_edit_lines"
 	CapabilityFileSed            AgentCapability = "air//file_sed"
-	CapabilityQueryDB            AgentCapability = "air//query_db"
 	CapabilityOutput             AgentCapability = "air//output"
 	CapabilityFileShareURL       AgentCapability = "air//file_share_url"
 	CapabilityHTTPRequest        AgentCapability = "air//http_request"
@@ -59,7 +58,7 @@ func validateAgentCapabilities(m AgentManifest, p *AgentCapabilityPolicy) error 
 		CapabilityFileGrep, CapabilityFileHead, CapabilityFileTail, CapabilityFileLines,
 		CapabilityFileStat, CapabilityFileExists, CapabilityFileWrite, CapabilityFileDelete,
 		CapabilityFileList, CapabilityFileEncode, CapabilityFileDecode, CapabilityFileDecodeText,
-		CapabilityFileEditLines, CapabilityFileSed, CapabilityQueryDB, CapabilityOutput,
+		CapabilityFileEditLines, CapabilityFileSed, CapabilityOutput,
 		CapabilityFileShareURL, CapabilityHTTPRequest, CapabilityWebSearch, CapabilityAttachToContext,
 		CapabilityAnalyzeImage, CapabilityTranscribeAudio, CapabilityGenerateImage, CapabilitySpeak,
 		CapabilityEmbed, CapabilityRequestUpgrade,

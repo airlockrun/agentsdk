@@ -47,14 +47,37 @@ writes and lists receive the resolved physical path with the scope segment;
 reads, overwrites, and deletes require a matching scoped path. Trusted native
 storage calls continue to use the exact registered app-relative path supplied by
 app code; they do not insert or infer user, conversation, or run segments.
-An admin outside a run can address exact non-internal paths without scope
-insertion. Admin calls in real and lazy runs follow the selected scope.
+Human and resolved runtime paths require exact scope identities, including for
+app administrators.
+
+App directories and all descendant files/folders do not accept recipient sharing
+grants. Human access follows each declared operation's app-access threshold and
+exact scope. For collaboration, explicitly copy readable files to an authorized
+Home/shared Home location with destination write access, then use Home sharing.
+Copies are independent entries and do not carry source grants. Do not copy or
+share files automatically. The logical app's host-owned Development folder is
+developer-only and nonshareable; native app credentials cannot access it.
 
 The framework declares `tmp` as user-readable/writable/listable scratch with a
 72-hour retention period. Calling `RegisterDirectory("tmp", ...)` returns a valid
 handle and may customize its description without changing those framework
 settings. Local `os.CreateTemp` and `os.MkdirTemp` remain appropriate for
 process-local CLI scratch, but those paths must never be returned as `FilePath`.
+
+## Runtime file results
+
+Inspected `apps.<alias>.files` operations return decoded JSON values, not the
+transport envelope. `stat` and `write` return `{path, filename, contentType, size,
+lastModified}` with an RFC3339 timestamp string; `list` returns those entries or
+`null` for an empty nil result. `readBytes` and `readRangeBytes` return
+`{size, base64}`, `exists` returns `{exists}`, and `delete` returns `{deleted}`.
+Text readers (`read`, `grep`, `head`, `tail`, `lines`) return strings, including
+when file contents happen to be JSON.
+
+Transforms (`encode`, `decode`, `decodeText`, `editLines`, `sed`) return either
+`{inline: true, content, size}` or `{inline: false, savedTo, preview?, size}`.
+An inline empty result includes `content: ""`; saved results omit empty previews.
+These app-local results are distinct from platform catalog FileRef results.
 
 ## Materialized tool inputs
 
@@ -92,6 +115,15 @@ err := agent.DeleteFile(ctx, "reports/old.csv")
 err := agent.CopyFile(ctx, "uploads/in.csv", "reports/copy.csv")
 share, err := agent.ShareFileURL(ctx, "reports/q1.csv", time.Hour)
 ```
+
+`WriteFile` streams an `io.Reader` in one pass without requiring a known length
+or seeking, and does not close it. Airlock stages bounded multipart chunks,
+enforces a one-GiB maximum, and publishes only a complete successful upload.
+Read failures leave existing file content intact. The returned `Size` counts the
+successfully uploaded bytes; `LastModified` is the SDK's upload completion time.
+Use `StatFile` for persisted catalog metadata. Upload bodies are not automatically
+replayed. Context cancellation stops HTTP work and checks between source reads;
+an arbitrary reader blocked inside `Read` must itself support cancellation.
 
 These methods do not call `ResolveFilePath`, so they bypass the registered
 directory's caller-facing `Read`, `Write`, and `List` policies. They still require

@@ -27,18 +27,20 @@ func (s selectedDeployment) client(revision string) (*remote.Client, error) {
 }
 
 func cmdOperation(command string, args []string) error {
-	input, data, requestID, contractHash, revision := "{}", "", "", "", ""
+	input, data, requestID, contractHash, revision, prompt := "{}", "", "", "", "", ""
 	headers := http.Header{}
 	var selectionArgs []string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--input", "--data", "--header", "--request-id", "--contract", "--revision":
+		case "--input", "--data", "--header", "--request-id", "--contract", "--revision", "--prompt":
 			key := args[i]
 			if i+1 >= len(args) {
 				return fmt.Errorf("%s requires a value", key)
 			}
 			i++
 			switch key {
+			case "--prompt":
+				prompt = args[i]
 			case "--input":
 				input = args[i]
 			case "--data":
@@ -123,9 +125,39 @@ func cmdOperation(command string, args []string) error {
 		return writeProtoJSON(out)
 	case "agent":
 		if len(positional) < 2 {
-			return errors.New("agent requires start <definition> or get|wait|cancel <definition> <run-id>")
+			return errors.New("agent requires start|list <definition>, get|wait|cancel <definition> <run-id>, or continue <definition> <session-id> --prompt <text>")
 		}
 		action, definition := positional[0], positional[1]
+		if action == "list" {
+			if len(positional) != 2 {
+				return errors.New("agent list requires one definition")
+			}
+			runs, err := client.ListAgents(ctx, definition)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(runs)
+		}
+		if action == "continue" {
+			if len(positional) != 3 || !deployUUIDRe.MatchString(positional[2]) || strings.TrimSpace(prompt) == "" {
+				return errors.New("agent continue requires definition, session UUID and --prompt")
+			}
+			if requestID == "" {
+				requestID, err = newUUID()
+				if err != nil {
+					return err
+				}
+			}
+			if !deployUUIDRe.MatchString(requestID) {
+				return errors.New("--request-id must be a UUID")
+			}
+			fmt.Fprintf(os.Stderr, "Request ID: %s\n", requestID)
+			run, err := client.ContinueAgent(ctx, definition, positional[2], requestID, contractHash, prompt)
+			if err != nil {
+				return err
+			}
+			return json.NewEncoder(os.Stdout).Encode(run)
+		}
 		if action == "start" {
 			if len(positional) != 2 {
 				return errors.New("agent start takes one definition")

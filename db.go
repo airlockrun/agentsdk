@@ -38,6 +38,14 @@ type DBTX interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+// appTransaction retains the owning database handle without exposing transaction
+// completion through the callback. Domain sqlc code uses only DBTX; SDK APIs can
+// require the exact app transaction rather than accepting a pool or another app.
+type appTransaction struct {
+	DBTX
+	agent *Agent
+}
+
 // ExecContext satisfies sqlc's DBTX. Forwards to the underlying *sql.DB.
 func (a *AgentDB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return a.requireRuntime("ExecContext").ExecContext(ctx, query, args...)
@@ -76,29 +84,8 @@ func (a *AgentDB) Transaction(ctx context.Context, opts *sql.TxOptions, fn func(
 		return err
 	}
 	defer tx.Rollback()
-	if err := fn(tx); err != nil {
+	if err := fn(&appTransaction{DBTX: tx, agent: a.agent}); err != nil {
 		return err
 	}
 	return tx.Commit()
-}
-
-// queryReadOnly runs query inside a read-only transaction that is always
-// rolled back, then materializes the rows. This is the single enforcement
-// point for the admin queryDB binding/tool: Postgres refuses every write
-// (INSERT/UPDATE/DELETE/DDL/nextval/...) inside a READ ONLY transaction, so a
-// mutating statement fails loudly rather than persisting, and the unconditional
-// rollback guarantees nothing the query touched survives even if a future
-// driver stopped honoring the flag. No commit path exists here by design.
-func queryReadOnly(ctx context.Context, db *AgentDB, query string, params ...any) ([]map[string]any, error) {
-	tx, err := db.requireRuntime("queryReadOnly").BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, query, params...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return rowsToMaps(rows)
 }

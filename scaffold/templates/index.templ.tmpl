@@ -2,13 +2,18 @@ package views
 
 templ Index(view HomeView) {
 	@Layout(view.Title) {
-		<header class="mb-8">
-			<h1 class="text-3xl font-semibold">{ view.Title }</h1>
-			<p class="mt-2 text-base-content/70">{ view.Subtitle }</p>
+		<header data-airlock-standalone-only class="mb-4">
+			<h1 class="text-xl font-semibold">{ view.Title }</h1>
+			<p class="mt-1 text-sm text-base-content/70">{ view.Subtitle }</p>
 		</header>
 
 		<section class="card bg-base-200 shadow-sm">
 			<div class="card-body">
+				<p>Your welcome word: <span data-airlock-topic="welcome" hx-get="/welcome/word" hx-trigger="airlock:change" hx-swap="innerHTML">@WelcomeWord(view.Word)</span></p>
+				<form hx-post="/welcome/word" hx-swap="none" hx-indicator="find button" hx-disable="find button" class="flex flex-wrap gap-2">
+					<label class="input"><span>Word</span><input name="word" maxlength="40" required value={ view.Word }/></label>
+					<button class="btn btn-primary" type="submit">@ActionIcon("check") Set word</button>
+				</form>
 				<h2 class="card-title">What now?</h2>
 				<p>Open a chat with this agent and ask it to do something — for example:</p>
 				<ul class="list-disc space-y-1 pl-5">
@@ -22,4 +27,8 @@ templ Index(view HomeView) {
 			</div>
 		</section>
 	}
+}
+
+templ WelcomeWord(word string) {
+	{ word }
 }

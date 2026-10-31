@@ -52,7 +52,7 @@ func compact(ctx context.Context, in Input, history []session.Message, prompt st
 		if err := in.Controller.BeforeModel(ctx); err != nil {
 			return nil, err
 		}
-		if err := s.CompactAndContinue(ctx, in.Model, s.ToGoAIMessages(), &session.CompactOptions{
+		if err := s.CompactAndContinue(ctx, in.Model, &session.CompactOptions{
 			MaxOutputTokens: in.ModelLimits.Output,
 			TransformMessages: func(msgs []goai.Message) []goai.Message {
 				return session.MessagesToGoAI(redactMessages(session.FromGoAIMessages(msgs), in.Redactor))

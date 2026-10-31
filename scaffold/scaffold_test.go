@@ -87,6 +87,11 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(string(mainGo), "agentsdk.New(agentsdk.Config{") {
 		t.Error("main.go missing agentsdk.New(agentsdk.Config{)")
 	}
+	for _, want := range []string{`Icon:        "📦"`, "// Choose an emoji that represents this app."} {
+		if !strings.Contains(string(mainGo), want) {
+			t.Errorf("main.go missing app identity %q", want)
+		}
+	}
 	if !strings.Contains(string(mainGo), "func newAgent()") {
 		t.Error("main.go missing func newAgent() — tests build the agent through it")
 	}
@@ -96,7 +101,7 @@ func TestMaterialize(t *testing.T) {
 	if !strings.Contains(string(mainGo), "newAgent defines the complete agent and wires late-bound SDK handles") {
 		t.Error("main.go missing definition-only lifecycle guidance")
 	}
-	if !strings.Contains(string(mainGo), "pages := handlers.New()") {
+	if !strings.Contains(string(mainGo), "pages := handlers.New(words)") {
 		t.Error("main.go missing handler construction")
 	}
 	if !strings.Contains(string(mainGo), "Handler:     pages.Home") {
@@ -112,12 +117,23 @@ func TestMaterialize(t *testing.T) {
 	}
 	for _, want := range []string{
 		`content='{"noSwap":[204,304,401]}'`,
-		`document.addEventListener("htmx:response:error"`,
-		`e.detail.ctx.response.status === 401`,
+		`@agentsdk.WebUI(agentsdk.WebUIOptions{})`,
+		`min-w-0 w-full`,
 	} {
 		if !strings.Contains(string(layout), want) {
 			t.Errorf("views/layout.templ missing HTMX 4 auth handling %q", want)
 		}
+	}
+	if strings.Count(string(layout), "@agentsdk.WebUI(") != 1 || strings.Contains(string(layout), "htmx:response:error") {
+		t.Error("layout must include WebUI exactly once without an inline auth listener")
+	}
+	index, err := os.ReadFile(filepath.Join(dir, "views", "index.templ"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(index), `<header data-airlock-standalone-only class="mb-4">`) ||
+		!strings.Contains(string(index), `text-xl font-semibold`) {
+		t.Error("index must mark compact standalone identity")
 	}
 
 	mainTest, err := os.ReadFile(filepath.Join(dir, "main_test.go"))
@@ -136,13 +152,29 @@ func TestMaterialize(t *testing.T) {
 		t.Fatalf("read AGENTS.md: %v", err)
 	}
 	for _, want := range []string{
+		"Set `agentsdk.Config.Icon` in `newAgent()` to one emoji",
+		"customize the scaffold's `📦` placeholder",
 		"newAgent()` is the definition-only composition root",
 		"Agent.DB()` and registration APIs return late-bound handles",
 		"AIRLOCK_AGENT_MODE=manifest",
 		"Offline composition",
 		"No database or host runtime is provisioned",
-		`runtime_files = ["python-app/", "templates/", "static/"]`,
-		"Go registrations remain authoritative",
+		"reference/local-development.md",
+		"reference/html-ui.md",
+		"reference/testing.md",
+		"MUST register `RegisterTool`",
+		"canonical manifest",
+		"same caller authorization and data scoping",
+		"never substitute the owner",
+		"Internal tools open on useful data and primary actions",
+		"<header data-airlock-standalone-only>",
+		"filters, search, and actions outside it",
+		"iframe width changes during split-pane resizing",
+		"without reloading",
+		"required slots for both preview and production",
+		"compatible, unambiguous authorized resource",
+		"Missing configuration does not block source deployment",
+		"`/resource` versus `target/slot`",
 	} {
 		if !strings.Contains(string(agentsMD), want) {
 			t.Errorf("AGENTS.md missing lifecycle guidance %q", want)
@@ -157,12 +189,10 @@ func TestMaterialize(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"Give action buttons an idle icon",
-		`@ActionIcon("domain-appropriate-name")`,
-		`hx-disable="this"`,
-		`hx-target:inherited`,
-		`event.detail.ctx`,
-		"github.com/airlockrun/agentsdk/lucide",
+		"Give action buttons an idle Lucide icon",
+		"views.ActionIcon",
+		"bundled htmx is **v4**",
+		"version-matched `templ`, `htmx`",
 	} {
 		if !strings.Contains(string(agentsMD), want) {
 			t.Errorf("AGENTS.md missing icon guidance %q", want)
@@ -203,7 +233,7 @@ func TestMaterialize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read handlers/home.go: %v", err)
 	}
-	if !strings.Contains(string(homeGo), "func New() *Handler") || !strings.Contains(string(homeGo), "func (h *Handler) Home") {
+	if !strings.Contains(string(homeGo), "func New(welcome Welcome) *Handler") || !strings.Contains(string(homeGo), "func (h *Handler) Home") {
 		t.Error("handlers/home.go missing constructed receiver handler")
 	}
 

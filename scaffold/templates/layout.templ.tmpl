@@ -4,7 +4,7 @@ import "github.com/airlockrun/agentsdk"
 
 templ Layout(title string) {
 	<!DOCTYPE html>
-	<html lang="en" data-theme="light">
+	<html lang="en">
 		<head>
 			<meta charset="UTF-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -12,15 +12,10 @@ templ Layout(title string) {
 			<link rel="stylesheet" href={ AppCSSPath }/>
 			<meta name="htmx-config" content='{"noSwap":[204,304,401]}'/>
 			<script src={ agentsdk.Assets.HTMX }></script>
-			<!-- A full-page reload omits HX-Request and enters the auth relay flow. -->
-			<script>
-				document.addEventListener("htmx:response:error", function(e) {
-					if (e.detail.ctx.response.status === 401) window.location.reload();
-				});
-			</script>
+			@agentsdk.WebUI(agentsdk.WebUIOptions{})
 		</head>
 		<body class="min-h-screen bg-base-100 text-base-content">
-			<main class="mx-auto max-w-3xl px-4 py-10">
+			<main class="mx-auto min-w-0 w-full max-w-3xl p-4">
 				{ children... }
 			</main>
 		</body>

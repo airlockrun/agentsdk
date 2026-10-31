@@ -2,18 +2,19 @@ package agentsdk
 
 import (
 	"context"
+	"github.com/airlockrun/agentsdk/wire"
 	"sync"
 )
 
-// lazyRun is stashed in ctx by the route dispatcher. A run is materialized
-// (POST /api/agent/run/create, with trigger_type="code") only when the first
-// call inside the route handler asks for one. Handlers that make zero model
-// calls / zero log entries pay zero cost.
+// lazyRun materializes the exact host-admitted request for host callbacks.
+// Caller reads and handlers without host callbacks perform no I/O.
 type lazyRun struct {
 	mu         sync.Mutex
 	run        *run
 	agent      *Agent
-	triggerRef string
+	proof      string
+	startup    bool
+	loggingOff bool
 
 	// Dispatch metadata is available without materializing an app-owned run.
 	conversationID string
@@ -26,7 +27,25 @@ func (l *lazyRun) get(ctx context.Context) *run {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.run == nil {
-		l.run = l.agent.newRunFromAirlock(ctx, "code", l.triggerRef)
+		if l.startup {
+			if l.caller.Kind() != CallerApplication {
+				panic("agentsdk: startup requires application caller")
+			}
+			l.run = l.agent.newRunFromAirlock(ctx, "code", "startup")
+			return l.run
+		}
+		if l.proof == "" {
+			panic("agentsdk: route dispatch proof is required")
+		}
+		var response wire.MaterializeRouteResponse
+		if err := l.agent.client.doJSON(ctx, "POST", "/api/agent/run/materialize-route", wire.MaterializeRouteRequest{Proof: l.proof}, &response); err != nil {
+			panic("agentsdk: materialize route: " + err.Error())
+		}
+		if response.Runtime.RunID == "" || response.Runtime.InvocationToken == "" || (response.Logging != wire.LoggingOff && response.Logging != wire.LoggingNormal) || response.Runtime.Caller.Kind == "application" {
+			panic("agentsdk: invalid host route materialization response")
+		}
+		l.run = l.agent.borrowRuntimeRun(ctx, response.Runtime)
+		l.run.loggingOff = response.Logging == wire.LoggingOff
 	}
 	return l.run
 }

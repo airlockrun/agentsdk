@@ -81,30 +81,37 @@ without `--watch` succeeds immediately. An empty build history is an explicit
 error. A valid `deploy list -m "message"` uploads a directory named `list`;
 use `./list` or `./status` to make these directory names unambiguous.
 
-Developer resource setup uses the same CLI locally and in hosted development:
+Direct resources use the same CLI locally and in hosted development:
 
 ```bash
-go tool air resources request weather --name "Weather API" \
-  --base-url https://api.weather.example --auth-mode api_key --header X-API-Key
-go tool air resources status <request-id>
 go tool air resources list
-go tool air resources bind <request-id>
+go tool air resources inspect /personal_api
+go tool air resources request /personal_api --path /v1/items
+go tool air resources mcp-tools /personal_mcp
+go tool air resources mcp-call /personal_mcp --tool search --data '{"query":"airlock"}'
+go tool air resources list preview
+go tool air resources bind preview/api --resource /personal_api
+go tool air resources request production/api --path /v1/items
 ```
 
-`request` never accepts a secret argument. It creates a user-owned connection
-with its non-secret URL and authentication shape, then, when authentication is
-required, prints a settings URL where the user enters the credential. Local use
-lazily creates a private developer session and records its ID in
-`.airlock/local/agent.toml`;
-`--session <UUID>` attaches an existing owned session. Hosted development uses
-`AIRLOCK_DEVELOPMENT_SESSION`, `AIRLOCK_API_URL`, `AIRLOCK_AGENT_ID`, and
-`AIRLOCK_TOKEN`. A configured resource becomes `ready` and contributes one
-durable follow-up message to that developer session. `bind` succeeds only after
-a deployed manifest declares a compatible need.
+`request` calls an existing connection through Airlock's credential transport;
+it does not create a resource or require an app binding. Local use resolves the
+selected/default remote and user login. Hosted development uses its injected
+execution credential on the admitted host, retaining live source restrictions
+and resource grants without a separate login. No credentials are returned by
+inventory or inspection. `resources bindings/bind/fixture/unbind` manage app
+target selections separately. `/name` (or `/UUID`) selects a global resource;
+`target/slot` selects an app binding. Bare selectors are rejected. Production
+app-slot calls retain server approval gates. See [integrations](reference/integrations.md).
 
-Hosted `deploy` requires `AIRLOCK_DEPLOY_APPROVED=1`. The developer bash wrapper
-sets it only for the exact command approved through `request_permission=true`.
-Ordinary local deployment does not require this environment variable.
+Airlock authorizes hosted production operations on the server. A blocked request
+returns a durable challenge; the CLI reports it through the command supervisor's
+machine channel and exits `approval_required` (77). The supervisor stops the shell
+process group. Human decisions resume reasoning, never the original shell.
+Production execution grants last 30 minutes without refresh by use; deployment
+approval pins an immutable candidate and does not grant production-data access.
+Personal previews and ordinary authenticated operator CLI commands retain their
+normal service authorization.
 
 Running `airlock` inside an agent repository delegates non-bootstrap commands
 to `go tool air`; the repository's `go.mod` remains the version source of truth.

@@ -104,7 +104,7 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 			Method:      r.Method,
 			Access:      toWireAccess(r.Access),
 			Description: r.Description,
-			ToolName:    r.Tool.Name,
+			Logging:     r.Logging,
 		})
 	}
 	if len(a.staticAssets) > 0 {
@@ -114,6 +114,10 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 			Access:      wire.AccessPublic,
 			Description: "Immutable static assets registered by the agent",
 		})
+	}
+	if len(a.uiChangeTopics) > 0 {
+		r := a.uiChangeRoute()
+		routes = append(routes, wire.RouteDef{Path: r.Path, Method: r.Method, Access: wire.AccessUser, Logging: LoggingOff, Description: r.Description})
 	}
 	sort.Slice(routes, func(i, j int) bool {
 		if routes[i].Method == routes[j].Method {
@@ -217,26 +221,28 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 	}
 
 	return wire.AgentManifest{
-		RuntimeProtocol:  wire.AppRuntimeProtocol,
-		Version:          Version,
-		Description:      a.description,
-		Emoji:            a.emoji,
-		Tools:            tools,
-		Webhooks:         webhooks,
-		JobHandlers:      jobManifest.JobHandlers,
-		JobCrons:         jobManifest.JobCrons,
-		Routes:           routes,
-		Topics:           topics,
-		MCPServers:       mcpServers,
-		Connections:      connections,
-		EnvVars:          envVars,
-		Directories:      directories,
-		Instructions:     instructions,
-		ModelSlots:       modelSlots,
-		StaticAssets:     staticAssets,
-		StartupHooks:     startupHooks,
-		Connectors:       connectors,
-		AgentDefinitions: a.buildAgentDefinitions(),
+		SuggestedPrompts:  a.suggestedPromptManifest(),
+		RuntimeProtocol:   wire.AppRuntimeProtocol,
+		EnvConfigProtocol: wire.EnvConfigProtocol,
+		Version:           Version,
+		Description:       a.description,
+		Icon:              a.icon,
+		Tools:             tools,
+		Webhooks:          webhooks,
+		JobHandlers:       jobManifest.JobHandlers,
+		JobCrons:          jobManifest.JobCrons,
+		Routes:            routes,
+		Topics:            topics,
+		MCPServers:        mcpServers,
+		Connections:       connections,
+		EnvVars:           envVars,
+		Directories:       directories,
+		Instructions:      instructions,
+		ModelSlots:        modelSlots,
+		StaticAssets:      staticAssets,
+		StartupHooks:      startupHooks,
+		Connectors:        connectors,
+		AgentDefinitions:  a.buildAgentDefinitions(),
 	}
 }
 

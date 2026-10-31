@@ -20,6 +20,28 @@ import (
 const testBuildID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 const testBuildAgentID = "11111111-1111-1111-1111-111111111111"
 
+func TestBuildObservationAppURL(t *testing.T) {
+	workspaceURL := "https://dashboard.example.test/chat?app=" + testBuildAgentID
+	appURL := "https://authoritative-preview.example.test"
+	out := captureCommandStdout(t, func() error {
+		return writeBuildObservation(&airlockv1.GetAgentBuildResponse{Build: &airlockv1.AgentBuildInfo{Id: testBuildID, Status: "failed"}}, &airlockv1.DeploymentInfo{RouteBaseUrl: appURL, WorkspaceUrl: workspaceURL})
+	})
+	var result struct {
+		WorkspaceURL string `json:"workspaceUrl"`
+		RouteBaseURL string `json:"routeBaseUrl"`
+		Build        struct {
+			ID     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"build"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.RouteBaseURL != appURL || result.WorkspaceURL != workspaceURL || result.Build.ID != testBuildID || result.Build.Status != "failed" {
+		t.Fatalf("observation: %s", out)
+	}
+}
+
 func TestParseDeployBuildFlags(t *testing.T) {
 	for _, tt := range []struct {
 		name, command string

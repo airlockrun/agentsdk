@@ -77,11 +77,14 @@ them explicitly (this downloads pinned upstream documentation):
 The pre-commit hook verifies the bundle offline with the command's `--check`
 mode and never rewrites it.
 
-When an SDK change requires application source edits, add one `## vX.Y.Z` or
-`## vX.Y.Z-prerelease` entry to `UPGRADING.md` at the first release containing
-the change. The body is ordinary Markdown through the next level-two heading;
-level-two headings are reserved for version entries. Do not add entries for
-compatible releases that require no source migration.
+When an SDK target release requires application source edits, document them in
+one `## vX.Y.Z` or `## vX.Y.Z-prerelease` entry in `UPGRADING.md`. A consolidated
+stable entry contains the complete final migration from earlier stable and
+prerelease SDKs, with only currently applicable instructions. Airlock selects
+entries in the source-exclusive, target-inclusive version range. The body is
+ordinary Markdown through the next level-two heading; level-two headings are
+reserved for version entries. Compatible releases without source migrations
+do not need an entry.
 
 After dependency or bundled-asset changes, regenerate and verify the notices:
 

@@ -34,6 +34,7 @@ func TestPreviewUploadsCompleteCandidateAndScopesSource(t *testing.T) {
 	var paths []string
 	var archiveState string
 	version := wire.SourceVersion{Revision: testSourceRevision, Generation: 7}
+	appURL := "https://exact-preview.server-selected.example.test"
 	prefix := "/api/v1/agents/" + testBuildAgentID + "/deployments/preview"
 	concretePrefix := "/api/v1/agents/" + testBuildAgentID + "/deployments/" + previewName
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +51,7 @@ func TestPreviewUploadsCompleteCandidateAndScopesSource(t *testing.T) {
 			body, err := protoMarshal.Marshal(&airlockv1.GetDeploymentResponse{Deployment: &airlockv1.DeploymentInfo{
 				Id: previewRuntimeID, AppId: testBuildAgentID, RuntimeAgentId: previewRuntimeID, Kind: "personal_preview", Name: previewName, OwnerUserId: previewOwnerID,
 				Status: "active", Running: boolPointer(true), ImageRef: "candidate@sha256:123", SourceRevisionId: testSourceRevision,
+				RouteBaseUrl: appURL, WorkspaceUrl: "https://dashboard.example.test/chat/" + previewWorkspaceID,
 			}})
 			if err != nil {
 				t.Error(err)
@@ -107,10 +109,14 @@ func TestPreviewUploadsCompleteCandidateAndScopesSource(t *testing.T) {
 	if err := writeAgentBinding(dir, binding); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := captureCommandStdoutResult(t, func() error {
+	out, err := captureCommandStdoutResult(t, func() error {
 		return cmdPreview([]string{dir, "--wait", "--fixture", "crm=canned-crm", "-m", "Candidate"})
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(out, "App URL: "+appURL) || strings.Contains(out, "https://dashboard.example.test/chat/") {
+		t.Fatalf("preview URL: %s", out)
 	}
 	updated, _, err := loadAgentBinding(dir)
 	if err != nil {
@@ -141,7 +147,6 @@ func TestHostedPreviewUsesAdmittedContextWithoutRemoteOrLogin(t *testing.T) {
 	t.Setenv("AIRLOCK_AGENT_ID", previewRuntimeID)
 	t.Setenv("AIRLOCK_DEPLOYMENT_TARGET", previewName)
 	t.Setenv("AIRLOCK_TOKEN", testAccessToken)
-	t.Setenv("AIRLOCK_DEPLOY_APPROVED", "1")
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "go.mod"), "module candidate\n")
 	prefix := "/api/v1/agents/" + testBuildAgentID + "/deployments/" + previewName
@@ -183,7 +188,7 @@ func TestHostedPreviewUsesAdmittedContextWithoutRemoteOrLogin(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"GET " + prefix, "GET /api/v1/agent-sdk", "PUT " + prefix + "/source"}; !reflect.DeepEqual(paths, want) {
+	if want := []string{"GET " + prefix, "GET /api/v1/agent-sdk", "PUT " + prefix + "/source", "GET " + prefix}; !reflect.DeepEqual(paths, want) {
 		t.Fatalf("hosted preview requests = %v, want %v", paths, want)
 	}
 }
@@ -222,7 +227,6 @@ func TestHostedPreviewLaunchSourceAdmissionBeforeStart(t *testing.T) {
 			t.Setenv("AIRLOCK_AGENT_ID", previewRuntimeID)
 			t.Setenv("AIRLOCK_DEPLOYMENT_TARGET", previewName)
 			t.Setenv("AIRLOCK_TOKEN", testAccessToken)
-			t.Setenv("AIRLOCK_DEPLOY_APPROVED", "1")
 			t.Setenv("AIRLOCK_WORKSPACE_COMMAND_TASK", previewTaskID)
 			t.Setenv("AIRLOCK_WORKSPACE_COMMAND_OWNER", previewOwnerID)
 			version := wire.SourceVersion{Revision: testSourceRevision, Generation: 7}
@@ -437,6 +441,8 @@ func TestFixtureBindingIsRevisionScopedAndServerStored(t *testing.T) {
 				t.Errorf("fixture = %v", &request)
 			}
 			fmt.Fprintf(w, `{"runtimeAgentId":%q,"configRevision":"2","bindings":[]}`, previewRuntimeID)
+		case concretePrefix + "/bindings":
+			fmt.Fprintf(w, `{"runtimeAgentId":%q,"bindings":[{"type":"connection","slug":"crm","selection":"unbound"}]}`, previewRuntimeID)
 		default:
 			t.Errorf("unexpected API %s", r.URL)
 			http.NotFound(w, r)
@@ -454,7 +460,7 @@ func TestFixtureBindingIsRevisionScopedAndServerStored(t *testing.T) {
 	}
 	before, _ := os.ReadFile(filepath.Join(dir, agentBindingPath))
 	if _, err := captureCommandStdoutResult(t, func() error {
-		return cmdResources([]string{"fixture", "connection", "crm", "--fixture", "canned-crm", "--revision", testSourceRevision, "--target", "preview", "--dir", dir})
+		return cmdResources([]string{"fixture", "preview/crm", "--fixture", "canned-crm", "--revision", testSourceRevision, "--dir", dir})
 	}); err != nil {
 		t.Fatal(err)
 	}

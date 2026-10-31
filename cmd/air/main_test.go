@@ -523,7 +523,7 @@ func TestParseDeployFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseDeployFlags with derived slug: %v", err)
 	}
-	if f.slug != "sales-deck" || f.name != "Sales Deck" {
+	if !f.generatedSlug || f.slug != "" || f.name != "Sales Deck" {
 		t.Fatalf("derived flags = %#v", f)
 	}
 	if _, err := parseDeployFlags([]string{"--create", "--slug", "todo", "--agent", "todo"}); err == nil {
@@ -564,25 +564,6 @@ func TestDeployCreateRejectsBoundRemoteWithRetryInstruction(t *testing.T) {
 	err := cmdDeploy([]string{dir, "--target", "preview", "--create", "--slug", "dev", "-m", "Initial implementation"})
 	if err == nil || !strings.Contains(err.Error(), "without --create") {
 		t.Fatalf("cmdDeploy error = %v", err)
-	}
-}
-
-func TestSlugFromName(t *testing.T) {
-	tests := []struct {
-		name string
-		want string
-	}{
-		{name: "Sales Deck", want: "sales-deck"},
-		{name: " presentations_v2 ", want: "presentations-v2"},
-		{name: "A", want: ""},
-		{name: "--", want: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := slugFromName(tt.name); got != tt.want {
-				t.Fatalf("slugFromName(%q) = %q, want %q", tt.name, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -751,6 +732,36 @@ func TestEnsureToolchainProjectsCachedTools(t *testing.T) {
 	}
 	if !strings.Contains(string(installed), "# Updated SDK reference") {
 		t.Fatalf("agentsdk skill was not refreshed:\n%s", installed)
+	}
+}
+
+func TestInstallAgentSDKSkillIncludesScaffoldGuides(t *testing.T) {
+	moduleDir, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(t.TempDir(), "agentsdk")
+	if err := installAgentSDKSkill(dst, moduleDir); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"local-development", "remote-development", "testing", "caller", "html-ui",
+		"database", "jobs", "integrations", "auth-web", "connectors",
+	} {
+		t.Run(name, func(t *testing.T) {
+			rel := filepath.Join("reference", name+".md")
+			want, err := os.ReadFile(filepath.Join(moduleDir, rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := os.ReadFile(filepath.Join(dst, rel))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != string(want) {
+				t.Fatalf("installed %s differs from SDK source", rel)
+			}
+		})
 	}
 }
 

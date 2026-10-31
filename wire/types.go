@@ -303,28 +303,31 @@ type MCPResourceContent struct {
 // AgentManifest is the complete canonical declaration of an agent image. The
 // SDK emits it in offline manifest mode and sends the same value during runtime
 // synchronization. Slices are deterministically ordered by their identifiers,
-// except Instructions and StartupHooks, whose registration order is semantic.
+// except Instructions, StartupHooks, and SuggestedPrompts, whose registration
+// order is semantic.
 type AgentManifest struct {
-	RuntimeProtocol  string             `json:"runtimeProtocol"`
-	Version          string             `json:"version"`
-	Description      string             `json:"description"`
-	Emoji            string             `json:"emoji"`
-	Tools            []ToolDef          `json:"tools"`
-	Webhooks         []WebhookDef       `json:"webhooks"`
-	JobHandlers      []JobHandlerDef    `json:"jobHandlers"`
-	JobCrons         []JobCronDef       `json:"jobCrons"`
-	Routes           []RouteDef         `json:"routes"`
-	Topics           []TopicDef         `json:"topics"`
-	MCPServers       []MCPDef           `json:"mcpServers"`
-	Connections      []ConnectionDef    `json:"connections"`
-	EnvVars          []EnvVarDef        `json:"envVars"`
-	Directories      []DirectoryDef     `json:"directories"`
-	Instructions     []InstructionDef   `json:"instructions"`
-	ModelSlots       []ModelSlotDef     `json:"modelSlots"`
-	StaticAssets     []StaticAssetDef   `json:"staticAssets"`
-	StartupHooks     []StartupHookDef   `json:"startupHooks"`
-	Connectors       []ConnectorNeedDef `json:"connectors"`
-	AgentDefinitions []AgentDefinition  `json:"agentDefinitions,omitempty"`
+	EnvConfigProtocol string             `json:"envConfigProtocol"`
+	SuggestedPrompts  []SuggestedPrompt  `json:"suggestedPrompts,omitempty"`
+	RuntimeProtocol   string             `json:"runtimeProtocol"`
+	Version           string             `json:"version"`
+	Description       string             `json:"description"`
+	Icon              string             `json:"icon"`
+	Tools             []ToolDef          `json:"tools"`
+	Webhooks          []WebhookDef       `json:"webhooks"`
+	JobHandlers       []JobHandlerDef    `json:"jobHandlers"`
+	JobCrons          []JobCronDef       `json:"jobCrons"`
+	Routes            []RouteDef         `json:"routes"`
+	Topics            []TopicDef         `json:"topics"`
+	MCPServers        []MCPDef           `json:"mcpServers"`
+	Connections       []ConnectionDef    `json:"connections"`
+	EnvVars           []EnvVarDef        `json:"envVars"`
+	Directories       []DirectoryDef     `json:"directories"`
+	Instructions      []InstructionDef   `json:"instructions"`
+	ModelSlots        []ModelSlotDef     `json:"modelSlots"`
+	StaticAssets      []StaticAssetDef   `json:"staticAssets"`
+	StartupHooks      []StartupHookDef   `json:"startupHooks"`
+	Connectors        []ConnectorNeedDef `json:"connectors"`
+	AgentDefinitions  []AgentDefinition  `json:"agentDefinitions,omitempty"`
 }
 
 type ConnectorNeedDef struct {
@@ -378,10 +381,6 @@ type EnvVarDef struct {
 	Secret      bool   `json:"secret"`
 	Default     string `json:"default,omitempty"`
 	Pattern     string `json:"pattern,omitempty"`
-}
-
-type EnvVarValueResponse struct {
-	Value string `json:"value"`
 }
 
 type SealRequest struct {
@@ -482,11 +481,11 @@ type ToolDef struct {
 }
 
 type RouteDef struct {
-	Path        string `json:"path"`
-	Method      string `json:"method"`
-	Access      Access `json:"access"`
-	Description string `json:"description,omitempty"`
-	ToolName    string `json:"tool_name,omitempty"`
+	Path        string       `json:"path"`
+	Method      string       `json:"method"`
+	Access      Access       `json:"access"`
+	Description string       `json:"description,omitempty"`
+	Logging     RouteLogging `json:"logging"`
 }
 
 type WebhookDef struct {

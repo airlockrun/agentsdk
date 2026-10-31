@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/airlockrun/agentsdk/capability"
+
 	"golang.org/x/text/encoding"
 	"golang.org/x/text/encoding/charmap"
 	"golang.org/x/text/encoding/unicode"
@@ -135,14 +137,13 @@ func (r *run) streamThrough(ctx context.Context, src, dstCanon, contentType, suf
 	}()
 
 	if dstCanon != "" {
-		cr := &spillCountingReader{r: pr}
-		werr := r.agent.writeFileRaw(ctx, dstCanon, cr, contentType, "")
+		size, werr := r.agent.writeFileRaw(ctx, dstCanon, pr, contentType, "")
 		io.Copy(io.Discard, pr) // drain remainder so the goroutine can't leak on an early write error
 		if werr != nil {
 			return nil, werr
 		}
 		r.invalidateCache(dstCanon)
-		return &transformResult{savedTo: dstCanon, size: cr.n}, nil
+		return &transformResult{savedTo: dstCanon, size: size}, nil
 	}
 
 	autoPath := reservedTmpPath + "/" + newCallID() + suffix
@@ -157,33 +158,23 @@ func (r *run) streamThrough(ctx context.Context, src, dstCanon, contentType, suf
 		return &transformResult{savedTo: savedTo, size: size, preview: string(inline)}, nil
 	}
 	// Binary output never rides inline (it'd corrupt as a JS string).
-	cr := &spillCountingReader{r: pr}
-	werr := r.agent.writeFileRaw(ctx, autoPath, cr, contentType, "")
+	size, werr := r.agent.writeFileRaw(ctx, autoPath, pr, contentType, "")
 	io.Copy(io.Discard, pr)
 	if werr != nil {
 		return nil, werr
 	}
-	return &transformResult{savedTo: autoPath, size: cr.n}, nil
+	return &transformResult{savedTo: autoPath, size: size}, nil
 }
 
-// toMap projects transformResult onto the LLM-facing JSON shape shared by
+// output projects transformResult onto the LLM-facing JSON shape shared by
 // the run_js fileEncode/fileDecode/fileDecodeText/fileEditLines/fileSed
 // bindings and the direct-mode equivalents. `inline:true` carries `content`;
 // `inline:false` carries `savedTo` and (when set) `preview`.
-func (r *transformResult) toMap() map[string]any {
-	out := map[string]any{
-		"inline": r.inline,
-		"size":   r.size,
-	}
+func (r *transformResult) output() any {
 	if r.inline {
-		out["content"] = r.content
-		return out
+		return capability.FileTransformInlineOutput{Inline: true, Content: r.content, Size: r.size}
 	}
-	out["savedTo"] = r.savedTo
-	if r.preview != "" {
-		out["preview"] = r.preview
-	}
-	return out
+	return capability.FileTransformSavedOutput{SavedTo: r.savedTo, Preview: r.preview, Size: r.size}
 }
 
 // encodeContentType returns the MIME type for an encode codec's output.

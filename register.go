@@ -79,7 +79,6 @@ func (a *Agent) RegisterRoute(r *Route) {
 		panic("agentsdk: RegisterRoute: nil *Route")
 	}
 	copy := *r
-	copy.Tool = cloneTool(r.Tool)
 	validateRoute(&copy)
 	key := copy.Method + " " + copy.Path
 	if _, exists := a.routes[key]; exists {

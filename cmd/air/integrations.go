@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,12 +11,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
-	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 	"github.com/airlockrun/goai/mcp"
-	"google.golang.org/protobuf/proto"
 )
 
 type integrationTarget struct {
@@ -63,221 +59,10 @@ func resolveIntegrationTarget(ctx context.Context, flags integrationTargetFlags)
 }
 
 func (t integrationTarget) path(suffix string) string {
-	if t.codegen {
-		return "/api/codegen/integrations" + suffix
+	if !t.codegen {
+		panic("air: build-bound integration path requires codegen authority")
 	}
-	return "/api/v1/agents/" + url.PathEscape(t.agentID) + "/integrations" + suffix
-}
-
-func cmdIntegrations(args []string) error {
-	if len(args) == 0 || args[0] != "list" {
-		return errors.New("integrations requires: list [--remote <name>] [--url <url>] [--agent <slug-or-id>]")
-	}
-	flags, err := parseIntegrationTargetFlags(args[1:])
-	if err != nil {
-		return err
-	}
-	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx, flags)
-	if err != nil {
-		return err
-	}
-	var resp airlockv1.ListIntegrationsResponse
-	if err := doProto(ctx, target.baseURL, http.MethodGet, target.path("/"), target.token, nil, &resp); err != nil {
-		return err
-	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "TYPE\tSLUG\tSTATUS\tDESCRIPTION")
-	for _, item := range resp.Integrations {
-		status := "not configured"
-		if item.Configured {
-			status = "configured"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", item.Type, item.Slug, status, item.Description)
-	}
-	return w.Flush()
-}
-
-func cmdConnection(args []string) error {
-	if len(args) < 2 || args[0] != "request" {
-		return errors.New("connection requires: request <slug> --path <path> [--method <method>] [--data <body>] [--header <name:value>]")
-	}
-	slug := args[1]
-	method, path, body := http.MethodGet, "", ""
-	headers := map[string]string{}
-	var targetFlags integrationTargetFlags
-	for i := 2; i < len(args); i++ {
-		if handled, err := consumeIntegrationTargetFlag(args, &i, &targetFlags); handled || err != nil {
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		switch args[i] {
-		case "--method", "--path", "--data", "--header":
-			if i+1 >= len(args) {
-				return fmt.Errorf("%s requires a value", args[i])
-			}
-			key, value := args[i], args[i+1]
-			i++
-			switch key {
-			case "--method":
-				method = value
-			case "--path":
-				path = value
-			case "--data":
-				body = value
-			case "--header":
-				name, headerValue, ok := strings.Cut(value, ":")
-				if !ok || strings.TrimSpace(name) == "" {
-					return errors.New("--header must be name:value")
-				}
-				headers[strings.TrimSpace(name)] = strings.TrimSpace(headerValue)
-			}
-		default:
-			return fmt.Errorf("unknown connection flag %q", args[i])
-		}
-	}
-	if path == "" {
-		return errors.New("--path is required")
-	}
-	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx, targetFlags)
-	if err != nil {
-		return err
-	}
-	var resp airlockv1.InvokeConnectionResponse
-	err = doProto(ctx, target.baseURL, http.MethodPost, target.path("/connections/"+url.PathEscape(slug)+"/request"), target.token, &airlockv1.InvokeConnectionRequest{
-		Method: method, Path: path, Body: []byte(body), Headers: headers,
-	}, &resp)
-	if err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "HTTP %d\n", resp.StatusCode)
-	if _, err = os.Stdout.Write(resp.Body); err != nil {
-		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return fmt.Errorf("upstream returned HTTP %d", resp.StatusCode)
-	}
-	return nil
-}
-
-func cmdMCP(args []string) error {
-	if len(args) == 0 {
-		return errors.New("mcp requires: probe, tools, or call")
-	}
-	switch args[0] {
-	case "probe":
-		if len(args) != 2 {
-			return errors.New("mcp probe requires exactly one URL")
-		}
-		return probeMCP(args[1])
-	case "tools":
-		if len(args) < 2 {
-			return errors.New("mcp tools requires a server slug")
-		}
-		flags, err := parseIntegrationTargetFlags(args[2:])
-		if err != nil {
-			return err
-		}
-		return listMCPTools(args[1], flags)
-	case "call":
-		if len(args) < 3 {
-			return errors.New("mcp call requires: <server-slug> <tool> [--args <json>]")
-		}
-		arguments := "{}"
-		var flags integrationTargetFlags
-		for i := 3; i < len(args); i++ {
-			if handled, err := consumeIntegrationTargetFlag(args, &i, &flags); handled || err != nil {
-				if err != nil {
-					return err
-				}
-				continue
-			}
-			if args[i] != "--args" || i+1 >= len(args) {
-				return fmt.Errorf("unknown mcp call flag %q", args[i])
-			}
-			arguments = args[i+1]
-			i++
-		}
-		if !json.Valid([]byte(arguments)) {
-			return errors.New("MCP arguments must be valid JSON")
-		}
-		return callMCPTool(args[1], args[2], []byte(arguments), flags)
-	default:
-		return fmt.Errorf("unknown mcp subcommand %q", args[0])
-	}
-}
-
-func listMCPTools(slug string, flags integrationTargetFlags) error {
-	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx, flags)
-	if err != nil {
-		return err
-	}
-	var resp airlockv1.ListIntegrationMCPToolsResponse
-	if err := doProto(ctx, target.baseURL, http.MethodGet, target.path("/mcp/"+url.PathEscape(slug)+"/tools"), target.token, nil, &resp); err != nil {
-		return err
-	}
-	type listedTool struct {
-		Name         string          `json:"name"`
-		Description  string          `json:"description"`
-		InputSchema  json.RawMessage `json:"inputSchema"`
-		OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
-	}
-	result := struct {
-		Instructions string       `json:"instructions,omitempty"`
-		Tools        []listedTool `json:"tools"`
-	}{Instructions: resp.Instructions, Tools: make([]listedTool, len(resp.Tools))}
-	for i, item := range resp.Tools {
-		schema := json.RawMessage(item.InputSchemaJson)
-		if len(schema) == 0 {
-			schema = json.RawMessage(`{}`)
-		}
-		result.Tools[i] = listedTool{Name: item.Name, Description: item.Description, InputSchema: schema, OutputSchema: item.OutputSchemaJson}
-	}
-	encoded, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(encoded))
-	return nil
-}
-
-func callMCPTool(slug, toolName string, arguments []byte, flags integrationTargetFlags) error {
-	ctx := context.Background()
-	target, err := resolveIntegrationTarget(ctx, flags)
-	if err != nil {
-		return err
-	}
-	var resp airlockv1.InvokeMCPToolResponse
-	if err := doProto(ctx, target.baseURL, http.MethodPost, target.path("/mcp/"+url.PathEscape(slug)+"/call"), target.token, &airlockv1.InvokeMCPToolRequest{
-		Tool: toolName, ArgumentsJson: arguments,
-	}, &resp); err != nil {
-		return err
-	}
-	if err := printProtoJSON(&resp); err != nil {
-		return err
-	}
-	if resp.IsError {
-		return errors.New("MCP tool returned an error")
-	}
-	return nil
-}
-
-func parseIntegrationTargetFlags(args []string) (integrationTargetFlags, error) {
-	var flags integrationTargetFlags
-	for i := 0; i < len(args); i++ {
-		handled, err := consumeIntegrationTargetFlag(args, &i, &flags)
-		if err != nil {
-			return integrationTargetFlags{}, err
-		}
-		if !handled {
-			return integrationTargetFlags{}, fmt.Errorf("unknown integration target flag %q", args[i])
-		}
-	}
-	return flags, nil
+	return "/api/codegen/integrations" + suffix
 }
 
 func consumeIntegrationTargetFlag(args []string, index *int, flags *integrationTargetFlags) (bool, error) {
@@ -541,17 +326,4 @@ func probeMCP(rawURL string) error {
 		})
 	}
 	return printMCPProbe(result)
-}
-
-func printProtoJSON(message proto.Message) error {
-	encoded, err := protoMarshal.Marshal(message)
-	if err != nil {
-		return err
-	}
-	var indented bytes.Buffer
-	if err := json.Indent(&indented, encoded, "", "  "); err != nil {
-		return err
-	}
-	fmt.Println(indented.String())
-	return nil
 }

@@ -105,7 +105,7 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 			prompt += "\n\nHost recovery notice: " + in.Redactor(in.RecoveryNotice)
 		}
 		if cp.Phase == PhaseModel {
-			if err := save(PhaseReady, session.Message{Role: "user", Content: "Recovery notice: the previous model request was interrupted before a complete response was checkpointed. No local tools from that response were dispatched. JavaScript state is empty."}); err != nil {
+			if err := save(PhaseReady, session.Message{Role: "user", Generated: true, Content: "Recovery notice: the previous model request was interrupted before a complete response was checkpointed. No local tools from that response were dispatched. JavaScript state is empty."}); err != nil {
 				return nil, err
 			}
 		}
@@ -288,7 +288,7 @@ func Run(ctx context.Context, in Input) (result *Result, err error) {
 		}
 		var reminder []session.Message
 		if len(cp.Calls) == 0 {
-			reminder = []session.Message{{Role: "user", Content: "Call submit with a typed output or a needs_input question."}}
+			reminder = []session.Message{{Role: "user", Generated: true, Content: "Call submit with a typed output or a needs_input question."}}
 		}
 		if err := save(PhaseReady, reminder...); err != nil {
 			return nil, err

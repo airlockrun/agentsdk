@@ -162,7 +162,7 @@ func TestRuntimeInvokeAuthorization(t *testing.T) {
 		{"wrong agent token", func(*wire.RuntimeInvokeRequest) {}, "another-token", 401},
 		{"missing protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "" }, "test-token", 409},
 		{"old protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "airlock.app-runtime.v1" }, "test-token", 409},
-		{"unknown protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "airlock.app-runtime.v4" }, "test-token", 409},
+		{"unknown protocol", func(r *wire.RuntimeInvokeRequest) { r.RuntimeProtocol = "airlock.app-runtime.unsupported" }, "test-token", 409},
 		{"wrong agent scope", func(r *wire.RuntimeInvokeRequest) { r.Context.AgentID = "other-agent" }, "test-token", 403},
 		{"missing run", func(r *wire.RuntimeInvokeRequest) { r.Context.RunID = "" }, "test-token", 400},
 		{"invalid run", func(r *wire.RuntimeInvokeRequest) { r.Context.RunID = "not-a-run" }, "test-token", 400},
@@ -173,7 +173,10 @@ func TestRuntimeInvokeAuthorization(t *testing.T) {
 		{"unknown capability", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "tool//missing" }, "test-token", 404},
 		{"direct alias is not identity", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "tool__check" }, "test-token", 404},
 		{"platform does not execute in app", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "air//http_request" }, "test-token", 404},
-		{"DB requires admin", func(r *wire.RuntimeInvokeRequest) { r.CapabilityID = "air//query_db" }, "test-token", 403},
+		{"generic SQL unavailable to admin", func(r *wire.RuntimeInvokeRequest) {
+			r.CapabilityID = "air//query_db"
+			r.Context.Caller = testWireCaller("user", wire.AccessAdmin)
+		}, "test-token", 404},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, mock := testAgent(t)

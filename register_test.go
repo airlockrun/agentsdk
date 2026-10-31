@@ -9,7 +9,7 @@ import (
 	"github.com/airlockrun/goai/tool"
 )
 
-func TestRegisterRouteToolCorrespondence(t *testing.T) {
+func TestRegisterRouteLoggingSnapshot(t *testing.T) {
 	for _, toolFirst := range []bool{true, false} {
 		name := "route first"
 		if toolFirst {
@@ -21,15 +21,15 @@ func TestRegisterRouteToolCorrespondence(t *testing.T) {
 			if toolFirst {
 				a.RegisterTool(registered, AccessAdmin)
 			}
-			route := &Route{Method: http.MethodPost, Path: "/save", Handler: func(http.ResponseWriter, *http.Request) error { return nil }, Access: AccessPublic, Description: "Save through HTTP", Tool: tool.Tool{Name: registered.Name}}
+			route := &Route{Method: http.MethodPost, Path: "/save", Handler: func(http.ResponseWriter, *http.Request) error { return nil }, Access: AccessPublic, Description: "Save through HTTP", Logging: LoggingNormal}
 			a.RegisterRoute(route)
-			route.Tool.Name = "mutated"
+			route.Logging = LoggingOff
 			if !toolFirst {
 				a.RegisterTool(registered, AccessAdmin)
 			}
 			manifest := a.Manifest()
-			if len(manifest.Routes) != 1 || manifest.Routes[0].ToolName != "save" || manifest.Routes[0].Access != "public" || manifest.Tools[0].Access != "admin" {
-				t.Fatalf("correspondence or independent access lost: %+v", manifest)
+			if len(manifest.Routes) != 1 || manifest.Routes[0].Logging != LoggingNormal || manifest.Routes[0].Access != "public" || manifest.Tools[0].Access != "admin" {
+				t.Fatalf("logging snapshot or independent access lost: %+v", manifest)
 			}
 			if err := a.syncWithAirlock(t.Context()); err != nil {
 				t.Fatal(err)
@@ -44,22 +44,22 @@ func TestRegisterRouteToolCorrespondence(t *testing.T) {
 			if err := json.Unmarshal(requests[0].Body, &payload); err != nil {
 				t.Fatal(err)
 			}
-			if payload.Routes[0]["tool_name"] != "save" {
-				t.Fatalf("manifest wire correspondence = %+v", payload.Routes)
+			if payload.Routes[0]["logging"] != "normal" {
+				t.Fatalf("manifest wire logging = %+v", payload.Routes)
 			}
 		})
 	}
 }
 
-func TestRouteToolValidationBeforeFreeze(t *testing.T) {
+func TestRouteLoggingValidationAtRegistration(t *testing.T) {
 	for _, freeze := range []string{"handler", "manifest", "sync"} {
 		t.Run(freeze, func(t *testing.T) {
 			a, mock := testAgent(t)
 			other, _ := testAgent(t)
 			foreign := addTool("foreign", "Other app tool")
 			other.RegisterTool(foreign, AccessUser)
-			a.RegisterRoute(&Route{Method: http.MethodGet, Path: "/", Handler: func(http.ResponseWriter, *http.Request) error { return nil }, Access: AccessUser, Description: "Home", Tool: foreign})
-			expectPanicContains(t, `corresponding tool "foreign" must be registered on this app`, func() {
+			expectPanicContains(t, `unknown route logging mode`, func() {
+				a.RegisterRoute(&Route{Method: http.MethodGet, Path: "/", Handler: func(http.ResponseWriter, *http.Request) error { return nil }, Access: AccessUser, Description: "Home", Logging: "invalid"})
 				switch freeze {
 				case "handler":
 					a.Handler()
@@ -70,7 +70,7 @@ func TestRouteToolValidationBeforeFreeze(t *testing.T) {
 				}
 			})
 			if len(mock.Requests()) != 0 {
-				t.Fatal("invalid correspondence reached the host")
+				t.Fatal("invalid logging policy reached the host")
 			}
 		})
 	}

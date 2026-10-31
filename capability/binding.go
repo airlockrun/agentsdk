@@ -17,7 +17,6 @@ const (
 	Host                = binding.Host
 	AppTool             = binding.AppTool
 	AppFile             = binding.AppFile
-	AppDatabase         = binding.AppDatabase
 	ResourceTool        = binding.ResourceTool
 	ResourceConnection  = binding.ResourceConnection
 	MaxDirectNameLength = binding.MaxDirectNameLength

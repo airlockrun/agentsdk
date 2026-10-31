@@ -44,10 +44,7 @@ func wrapFileRead(agent *Agent, run *run) tool.Tool {
 		}).Build()
 }
 
-type fileReadBytesOutput struct {
-	Size   int    `json:"size"`
-	Base64 string `json:"base64"`
-}
+type fileReadBytesOutput = capability.FileReadBytesOutput
 
 func wrapFileReadBytes(agent *Agent, run *run) tool.Tool {
 	return tool.New("fileReadBytes").
@@ -230,9 +227,7 @@ func wrapFileStat(agent *Agent, run *run) tool.Tool {
 		}).Build()
 }
 
-type fileExistsOutput struct {
-	Exists bool `json:"exists"`
-}
+type fileExistsOutput = capability.FileExistsOutput
 
 func wrapFileExists(agent *Agent, run *run) tool.Tool {
 	return tool.New("fileExists").
@@ -283,7 +278,7 @@ func wrapFileEncode(agent *Agent, run *run) tool.Tool {
 			if err != nil {
 				return tool.Result{}, err
 			}
-			return jsonResult(res.toMap())
+			return jsonResult(res.output())
 		}).Build()
 }
 
@@ -310,7 +305,7 @@ func wrapFileDecode(agent *Agent, run *run) tool.Tool {
 			if err != nil {
 				return tool.Result{}, err
 			}
-			return jsonResult(res.toMap())
+			return jsonResult(res.output())
 		}).Build()
 }
 
@@ -336,7 +331,7 @@ func wrapFileDecodeText(agent *Agent, run *run) tool.Tool {
 			if err != nil {
 				return tool.Result{}, err
 			}
-			return jsonResult(res.toMap())
+			return jsonResult(res.output())
 		}).Build()
 }
 
@@ -364,7 +359,7 @@ func wrapFileEditLines(agent *Agent, run *run) tool.Tool {
 			if err != nil {
 				return tool.Result{}, err
 			}
-			return jsonResult(res.toMap())
+			return jsonResult(res.output())
 		}).Build()
 }
 
@@ -392,7 +387,7 @@ func wrapFileSed(agent *Agent, run *run) tool.Tool {
 			if err != nil {
 				return tool.Result{}, err
 			}
-			return jsonResult(res.toMap())
+			return jsonResult(res.output())
 		}).Build()
 }
 
@@ -454,7 +449,7 @@ func wrapFileDelete(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			run.invalidateCache(in.Path)
-			return jsonResult(map[string]bool{"deleted": true})
+			return jsonResult(capability.FileDeleteOutput{Deleted: true})
 		}).Build()
 }
 
@@ -480,25 +475,5 @@ func wrapFileList(agent *Agent, run *run) tool.Tool {
 				return tool.Result{}, err
 			}
 			return jsonResult(files)
-		}).Build()
-}
-
-type queryDBInput = capability.QueryDBInput
-
-func wrapQueryDB(agent *Agent, run *run) tool.Tool {
-	return tool.New("queryDB").
-		Description("Run a read-only SQL query against the agent's database. Runs inside a read-only transaction, so writes (INSERT/UPDATE/DELETE/DDL) are rejected. Returns an array of row objects.").
-		SchemaFromStruct(queryDBInput{}).
-		Execute(func(ctx context.Context, input json.RawMessage, opts tool.CallOptions) (tool.Result, error) {
-			var in queryDBInput
-			if err := json.Unmarshal(input, &in); err != nil {
-				return tool.Result{}, err
-			}
-			db := agent.DB()
-			res, err := queryReadOnly(run.ctx, db, in.SQL, in.Params...)
-			if err != nil {
-				return tool.Result{}, err
-			}
-			return jsonResult(res)
 		}).Build()
 }

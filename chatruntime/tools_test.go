@@ -76,6 +76,36 @@ func TestInvokerPreservesJSONString(t *testing.T) {
 	}
 }
 
+func TestInvokerDecodesFixedFileResults(t *testing.T) {
+	outputs := map[string]string{
+		"file_stat":       `{"path":"tmp/result","filename":"result","contentType":"text/plain","size":0,"lastModified":"2026-10-31T00:00:00Z"}`,
+		"file_list":       `null`,
+		"file_exists":     `{"exists":false}`,
+		"file_delete":     `{"deleted":true}`,
+		"file_read_bytes": `{"size":1,"base64":"YQ=="}`,
+		"file_sed":        `{"inline":true,"content":"","size":0}`,
+		"file_encode":     `{"inline":false,"savedTo":"tmp/result","size":12}`,
+	}
+	for _, def := range capability.Fixed() {
+		output, ok := outputs[def.Path.CanonicalOperation()]
+		if !ok {
+			continue
+		}
+		t.Run(def.Path.CanonicalOperation(), func(t *testing.T) {
+			i := &invoker{catalog: []capability.Definition{def}, backend: testBackend(func(context.Context, Invocation) (tool.Result, error) {
+				return tool.Result{Output: output, Title: "transport title", Metadata: map[string]any{"transport": true}}, nil
+			})}
+			value, err := i.Invoke(t.Context(), def.Path.ID(), json.RawMessage(`[{}]`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(value) != output {
+				t.Fatalf("decoded result=%s, want %s", value, output)
+			}
+		})
+	}
+}
+
 func TestCapabilitiesRejectAliasCollisions(t *testing.T) {
 	def := capability.Definition{Path: capability.Local(capability.Tool, "", "lookup"), Target: capability.App, InputSchema: json.RawMessage(`{"type":"object"}`)}
 	if err := validateCapabilities([]capability.Definition{def, def}); err == nil {

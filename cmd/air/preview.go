@@ -104,10 +104,8 @@ func deployToTarget(f deployFlags) error {
 	defer stop()
 	ctx, cancel := context.WithTimeout(ctx, f.timeout)
 	defer cancel()
-	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
-		if f.create || os.Getenv("AIRLOCK_DEPLOY_APPROVED") != "1" {
-			return errors.New("hosted developer deployment requires approval; rerun this exact command with request_permission=true")
-		}
+	if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" && f.create {
+		return errors.New("hosted developer credentials cannot create unrelated applications")
 	}
 	configHeader, err := candidateConfigHeader(f.binds, f.fixtures)
 	if err != nil {
@@ -220,6 +218,8 @@ func deployToTarget(f deployFlags) error {
 		return err
 	}
 	fmt.Printf("Remote: %s (%s)\nApp: %s\nTarget: %s\nRuntime: %s\nCandidate: %s\nTask: %s\n", s.remoteName, s.baseURL, s.app.AgentID, s.info.Name, s.info.Id, accepted.Revision, accepted.TaskID)
+	s.printAppURL()
+	reportDeploymentReadiness(ctx, s, accepted.Revision)
 	// Builds preserve an explicitly stopped target. Launch waits for that
 	// replacement before starting it, retaining the accepted task for recovery.
 	if f.launch && s.info.Status == "stopped" && state.PendingTask != "" {

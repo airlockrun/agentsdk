@@ -32,6 +32,7 @@ type deployFlags struct {
 	ensurePreview bool
 	launch        bool
 	create        bool
+	generatedSlug bool
 	force         bool
 	slug          string
 	agent         string
@@ -194,13 +195,10 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 			}
 		}
 		if f.slug == "" {
-			f.slug = slugFromName(f.name)
-			if f.slug == "" {
-				return deployFlags{}, fmt.Errorf("could not derive a slug from name %q; pass --slug", f.name)
-			}
+			f.generatedSlug = true
 		}
-		if !validAgentSlug(f.slug) {
-			return deployFlags{}, fmt.Errorf("invalid slug %q: use 2-63 lowercase letters, digits, and single dashes", f.slug)
+		if !f.generatedSlug && (!validAgentSlug(f.slug) || len(f.slug) > 27) {
+			return deployFlags{}, fmt.Errorf("invalid slug %q: use 2-27 lowercase letters, digits, and single dashes", f.slug)
 		}
 	}
 	return f, nil
@@ -279,31 +277,6 @@ func compatibleSDKVersions(server, local string) bool {
 	return semver.Compare(local, server) >= 0
 }
 
-func slugFromName(name string) string {
-	var b strings.Builder
-	lastDash := false
-	for _, r := range strings.ToLower(name) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-			lastDash = false
-		default:
-			if b.Len() > 0 && !lastDash {
-				b.WriteByte('-')
-				lastDash = true
-			}
-		}
-		if b.Len() >= 63 {
-			break
-		}
-	}
-	out := strings.Trim(b.String(), "-")
-	if len(out) < 2 || !validAgentSlug(out) {
-		return ""
-	}
-	return out
-}
-
 func validAgentSlug(s string) bool {
 	if len(s) < 2 || len(s) > 63 {
 		return false
@@ -317,9 +290,14 @@ func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags)
 		name = f.slug
 	}
 	var resp airlockv1.CreateAgentResponse
+	slugIntent := airlockv1.AppSlugIntent_APP_SLUG_INTENT_EXPLICIT
+	if f.generatedSlug {
+		slugIntent = airlockv1.AppSlugIntent_APP_SLUG_INTENT_GENERATED
+	}
 	err := doProto(ctx, baseURL, http.MethodPost, "/api/v1/agents", token, &airlockv1.CreateAgentRequest{
 		Name:             name,
 		Slug:             f.slug,
+		SlugIntent:       slugIntent,
 		Description:      f.description,
 		SkipInitialBuild: true,
 	}, &resp)

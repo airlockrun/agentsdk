@@ -1,13 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
 func TestHomeRenders(t *testing.T) {
-	handler := New()
+	handler := New(welcomeFixture{})
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 
@@ -21,3 +22,7 @@ func TestHomeRenders(t *testing.T) {
 		t.Fatal("rendered body is empty")
 	}
 }
+
+type welcomeFixture struct{}
+func (welcomeFixture) Word(context.Context) (string, error) { return "Hello", nil }
+func (welcomeFixture) SetWord(context.Context, string) error { return nil }

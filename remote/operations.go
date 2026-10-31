@@ -164,7 +164,14 @@ func (c *Client) agent(ctx context.Context, method, definition, id string, input
 	if result.Run == nil {
 		return nil, errors.New("remote: agent response omitted run")
 	}
-	raw, err := json.Marshal(result.Run.AsMap())
+	return decodeAgentRun(result.Run, definition, id)
+}
+
+func decodeAgentRun(value *structpb.Struct, definition, id string) (*AgentRun, error) {
+	if value == nil {
+		return nil, errors.New("remote: agent response omitted run")
+	}
+	raw, err := json.Marshal(value.AsMap())
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +183,39 @@ func (c *Client) agent(ctx context.Context, method, definition, id string, input
 		return nil, errors.New("remote: agent response has inconsistent identity")
 	}
 	return &run, nil
+}
+
+func (c *Client) ListAgents(ctx context.Context, definition string) ([]AgentRun, error) {
+	if definition == "" {
+		return nil, errors.New("remote: agent definition is required")
+	}
+	var result airlockv1.ListDeploymentAgentRunsResponse
+	if err := c.call(ctx, http.MethodGet, c.path()+"/agents/"+url.PathEscape(definition)+"/runs", nil, &result); err != nil {
+		return nil, err
+	}
+	out := make([]AgentRun, 0, len(result.Runs))
+	for _, value := range result.Runs {
+		run, err := decodeAgentRun(value, definition, "")
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *run)
+	}
+	return out, nil
+}
+
+func (c *Client) ContinueAgent(ctx context.Context, definition, session, requestID, contractHash, prompt string) (*AgentRun, error) {
+	if definition == "" || session == "" || requestID == "" || strings.TrimSpace(prompt) == "" {
+		return nil, errors.New("remote: definition, session, request ID and prompt are required")
+	}
+	if err := c.checkExecution(ctx); err != nil {
+		return nil, err
+	}
+	var result airlockv1.DeploymentAgentRunResponse
+	if err := c.call(ctx, http.MethodPost, c.path()+"/agents/"+url.PathEscape(definition)+"/sessions/"+url.PathEscape(session)+"/continue", &airlockv1.ContinueDeploymentAgentRequest{RequestId: requestID, ContractHash: contractHash, Prompt: prompt}, &result); err != nil {
+		return nil, err
+	}
+	return decodeAgentRun(result.Run, definition, "")
 }
 
 func (c *Client) GetAgent(ctx context.Context, definition, id string) (*AgentRun, error) {

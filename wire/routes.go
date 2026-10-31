@@ -1,20 +1,37 @@
 package wire
 
-import "fmt"
+import (
+	"fmt"
+	"net/http"
+)
 
-// ValidateRouteTools checks correspondence against the same manifest's app
-// tools. Tool names are app-local identities; access policies are independent.
-func ValidateRouteTools(manifest AgentManifest) error {
-	tools := make(map[string]struct{}, len(manifest.Tools))
-	for _, t := range manifest.Tools {
-		tools[t.Name] = struct{}{}
-	}
-	for _, route := range manifest.Routes {
-		if route.ToolName == "" {
-			continue
+type RouteLogging string
+
+const (
+	LoggingDefault RouteLogging = ""
+	LoggingOff     RouteLogging = "off"
+	LoggingNormal  RouteLogging = "normal"
+)
+
+func (mode RouteLogging) Resolve(method string) (RouteLogging, error) {
+	switch mode {
+	case LoggingDefault:
+		if method == http.MethodGet || method == http.MethodHead {
+			return LoggingOff, nil
 		}
-		if _, registered := tools[route.ToolName]; !registered {
-			return fmt.Errorf("route %s %s: corresponding tool %q must be registered on this app", route.Method, route.Path, route.ToolName)
+		return LoggingNormal, nil
+	case LoggingOff, LoggingNormal:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("unknown route logging mode %q", mode)
+	}
+}
+
+// ValidateRouteLogging rejects unknown policies before manifest synchronization.
+func ValidateRouteLogging(manifest AgentManifest) error {
+	for _, route := range manifest.Routes {
+		if _, err := route.Logging.Resolve(route.Method); err != nil {
+			return err
 		}
 	}
 	return nil

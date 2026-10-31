@@ -38,7 +38,13 @@ func (c *airlockClient) newRequest(ctx context.Context, method, path string, bod
 		return nil, fmt.Errorf("agentsdk: request %s %s: %w", method, path, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
-	if run := runFromContext(ctx); run != nil {
+	run := runFromContext(ctx)
+	if run == nil && path != "/api/agent/run/materialize-route" {
+		if lazy := lazyRunFromContext(ctx); lazy != nil && lazy.proof != "" {
+			run = lazy.get(ctx)
+		}
+	}
+	if run != nil {
 		for name, value := range run.callbackHeaders() {
 			req.Header.Set(name, value)
 		}

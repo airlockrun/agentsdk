@@ -3,9 +3,32 @@ package agentsdk
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestTransformOutputContract(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result transformResult
+		want   string
+	}{
+		{"empty inline", transformResult{inline: true}, `{"inline":true,"content":"","size":0}`},
+		{"saved", transformResult{savedTo: "result", size: 12}, `{"inline":false,"savedTo":"result","size":12}`},
+		{"preview", transformResult{savedTo: "result", preview: "text", size: 12}, `{"inline":false,"savedTo":"result","preview":"text","size":12}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := json.Marshal(tc.result.output())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("output = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
 
 // encode/decode through the same params the bindings use.
 func (r *run) testEncode(ctx context.Context, src, codec, dst string) (*transformResult, error) {

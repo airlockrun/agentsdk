@@ -153,7 +153,11 @@ func (b *limitedBuffer) Write(value []byte) (int, error) {
 }
 
 func inspectConnectorManifest(dir, binary string) ([]byte, error) {
-	stdout := &limitedBuffer{limit: protocol.MaxManifestBytes + 1}
+	return inspectManifestBinary(dir, binary, "AIRLOCK_CONNECTOR_MODE=manifest", "connector", protocol.MaxManifestBytes)
+}
+
+func inspectManifestBinary(dir, binary, mode, kind string, maxBytes int) ([]byte, error) {
+	stdout := &limitedBuffer{limit: maxBytes + 1}
 	stderr := &limitedBuffer{limit: 64 << 10}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -161,29 +165,29 @@ func inspectConnectorManifest(dir, binary string) ([]byte, error) {
 	configureManifestProcess(command)
 	defer terminateManifestDescendants(command)
 	command.Dir = dir
-	command.Env = connectorEnvironment([]string{"AIRLOCK_CONNECTOR_MODE=manifest"})
+	command.Env = connectorEnvironment([]string{mode})
 	command.Stdout, command.Stderr = stdout, stderr
 	command.WaitDelay = 2 * time.Second
 	if err := command.Run(); err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, errors.New("connector manifest timed out after 30 seconds")
+			return nil, fmt.Errorf("%s manifest timed out after 30 seconds", kind)
 		}
 		if stderr.overflow {
-			return nil, errors.New("connector manifest stderr exceeds 64 KiB")
+			return nil, fmt.Errorf("%s manifest stderr exceeds 64 KiB", kind)
 		}
 		if stdout.overflow {
-			return nil, fmt.Errorf("connector manifest stdout exceeds %d bytes", protocol.MaxManifestBytes)
+			return nil, fmt.Errorf("%s manifest stdout exceeds %d bytes", kind, maxBytes)
 		}
 		return nil, fmt.Errorf("run manifest binary: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	if stderr.overflow {
-		return nil, errors.New("connector manifest stderr exceeds 64 KiB")
+		return nil, fmt.Errorf("%s manifest stderr exceeds 64 KiB", kind)
 	}
-	if stdout.overflow || stdout.Len() > protocol.MaxManifestBytes {
-		return nil, fmt.Errorf("connector manifest stdout exceeds %d bytes", protocol.MaxManifestBytes)
+	if stdout.overflow || stdout.Len() > maxBytes {
+		return nil, fmt.Errorf("%s manifest stdout exceeds %d bytes", kind, maxBytes)
 	}
 	if stdout.Len() == 0 {
-		return nil, errors.New("connector manifest stdout is empty")
+		return nil, fmt.Errorf("%s manifest stdout is empty", kind)
 	}
 	return append([]byte(nil), stdout.Bytes()...), nil
 }

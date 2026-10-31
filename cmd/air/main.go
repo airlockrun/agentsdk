@@ -53,6 +53,10 @@ const (
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "air: %v\n", err)
+		var approval *approvalRequiredError
+		if errors.As(err, &approval) {
+			os.Exit(77)
+		}
 		os.Exit(1)
 	}
 }
@@ -64,6 +68,12 @@ func run(args []string) error {
 	}
 
 	switch args[0] {
+	case "supervisor-protocol":
+		if len(args) != 1 {
+			return errors.New("supervisor-protocol takes no arguments")
+		}
+		fmt.Println("airlock-operation-challenges.v1")
+		return nil
 	case "-h", "--help", "help":
 		usage(os.Stdout)
 		return nil
@@ -86,16 +96,10 @@ func run(args []string) error {
 		return errors.New("air run is unsupported: use air preview for real Airlock execution")
 	case "stage-runtime-files":
 		return cmdStageRuntimeFiles(args[1:])
-	case "integrations":
-		return cmdIntegrations(args[1:])
 	case "env":
 		return cmdEnv(args[1:])
 	case "connectors":
 		return cmdConnectors(args[1:])
-	case "connection":
-		return cmdConnection(args[1:])
-	case "mcp":
-		return cmdMCP(args[1:])
 	case "login":
 		return cmdLogin(args[1:])
 	case "logout":
@@ -138,10 +142,9 @@ Usage:
   air context delete --remote NAME request deletion of that remote's owned workspace
   air request METHOD /path       request app HTTP (production by default)
   air tools list|invoke <name>    inspect or invoke registered app tools
-  air agent start|get|wait|cancel operate a registered agent on the real host
+  air agent start|get|list|wait|cancel|continue operate a registered agent on the real host
   air logs <run-UUID>             read a selected target's run log snapshot
   air start|stop|suspend          operate a selected target's runtime
-  air integrations list [flags]   list configured external integrations
   air env list [flags]            list agent environment variable declarations
   air env get <slug> [flags]      print one configured non-secret value
   air env set <slug> <value> [flags]
@@ -149,18 +152,18 @@ Usage:
   air env clear <slug> [flags]    clear one declared non-secret value
   air connectors list [--json]    list connector resources visible to you
   air connectors inspect <id>     inspect one connector interface
-  air connection request ...      call a target's HTTP connection
-  air mcp probe|tools|call ...     inspect or call MCP servers
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
   air deploy [dir] -m <text>      upload source and start a build
   air deploy list [dir] [flags]  list recent builds (newest first)
   air deploy status [dir] [flags] inspect or watch one build
   air status [dir] [flags]        inspect selected deployment/runtime readiness
-  air resources list|inspect|request|mcp-tools|mcp-call
-                                  direct-user resources on an explicit remote
+  air resources list [target]     list global resources or an app target's slots
+  air resources inspect|request|mcp-tools|mcp-call ADDRESS
+                                  /global-name or /UUID; target/slot for app bindings
+  air resources mcp-probe URL     public MCP/OAuth diagnostics without credentials
   air resources bindings|bind|fixture|unbind
-                                  server-owned app/target binding selections
+                                  bind target/slot --resource /name; --type disambiguates slots
   air pull [dir] [flags]          fast-forward a local workspace from Airlock
   air clone <agent> <dir> [flags] clone Airlock source without Git
   air remote default <name>       select the default Airlock instance
@@ -658,7 +661,7 @@ func runBuild(dir string) error {
 	if err := buildConnectors(dir, outputDir); err != nil {
 		return err
 	}
-	return nil
+	return checkAppManifest(dir, filepath.Join(outputDir, outputName), os.Stderr)
 }
 
 func cmdStageRuntimeFiles(args []string) error {

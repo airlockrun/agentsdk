@@ -33,9 +33,18 @@ exposes host-attributed claims for app logic, not a transferable user credential
 The source header is not a standalone signed identity token. The public snapshot
 contains no invocation receipts, job lease tokens, or credential coordinates.
 The host must independently authorize app-to-host operations and derive trusted
-origin from host-owned state rather than accepting arbitrary app assertions.
+origin from host-owned state or verified host-signed admission context, never
+arbitrary app assertions.
 
 ## App-To-Host Calls
+
+HTTP routes receive a host-only-signed lazy dispatch proof and absolute deadline,
+not an eagerly persisted run. Caller reads perform no I/O. The first run-required
+SDK operation materializes the same admitted human or anonymous request through
+the current app credential plus this proof. Concurrent calls share one durable
+request UUID fence. The 30-minute window starts at host HTTP admission, not at
+materialization; original interactive token expiry and revocation still apply.
+Logging policy affects retention only; see [Route audit logging](html-ui.md#route-audit-logging).
 
 Pass the handler's context to SDK operations. The SDK carries its admitted run
 and invocation receipt through that context and sends the app bearer credential
@@ -88,12 +97,12 @@ mutating the supplied context. An arbitrary context does not acquire caller
 state merely because it is passed to an SDK operation.
 
 Sync and capability invocation require `wire.AppRuntimeProtocol` equal to
-`airlock.app-runtime.v3`, independently of SDK semver. The manifest includes all
+`airlock.app-runtime.v4`, independently of SDK semver. The manifest includes all
 environment declarations. App-created code/background runs accept only trigger
 metadata, never user, conversation, or access assertions. Runtime origin is
 host-supplied, and upgrades require an existing admitted run ID. An incompatible
 manifest or invocation is rejected and requires rebuilding the app with a
-compatible SDK. There is no mixed v1/v2 runtime compatibility mode.
+compatible SDK. There is no mixed-protocol runtime compatibility mode.
 
 ## HTTP Tests
 

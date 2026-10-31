@@ -2,8 +2,11 @@
 
 ## Asynchronous tools
 
-Foreground Sol steps have 60 seconds total for the model response and the whole
-tool batch, not 60 seconds for each tool. Tools must honor their context. Use
+Sol provider attempts have a 15-minute wall ceiling and five-minute meaningful
+progress inactivity ceiling, including setup and first-token thinking. Each tool
+receives a fresh ten-minute ceiling independent of model time and earlier tools;
+operation-specific, caller and task deadlines can be shorter. Tools must honor
+their context. Use
 `RegisterAsyncTool` for reports, imports, builds, or other potentially long work;
 the tool should return its accepted `AsyncTask` rather than wait for job output.
 Use the existing typed `Job` timeout, attempts, concurrency, progress and effect

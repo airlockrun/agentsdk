@@ -2,15 +2,200 @@ package agentsdk
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/airlockrun/agentsdk/wire"
 )
+
+type generatedUpload struct {
+	left    int64
+	read    atomic.Int64
+	eof     atomic.Bool
+	maxRead atomic.Int64
+}
+
+func (r *generatedUpload) Read(p []byte) (int, error) {
+	if r.left == 0 {
+		r.eof.Store(true)
+		return 0, io.EOF
+	}
+	if int64(len(p)) > r.maxRead.Load() {
+		r.maxRead.Store(int64(len(p)))
+	}
+	n := int(min(int64(len(p)), r.left))
+	for i := range p[:n] {
+		p[i] = 'x'
+	}
+	r.left -= int64(n)
+	r.read.Add(int64(n))
+	return n, nil
+}
+
+func TestWriteFileStreamsUnknownLength(t *testing.T) {
+	const size = 64<<20 + 123
+	source := &generatedUpload{left: size}
+	want := sha256.New()
+	_, _ = io.Copy(want, io.LimitReader(&generatedUpload{left: size}, size))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/agent/storage/docs/data" || r.Header.Get("Content-Type") != "text/plain" || r.Header.Get("Authorization") != "Bearer token" || r.ContentLength != -1 {
+			t.Errorf("request = %s %s %v length=%d", r.Method, r.URL.Path, r.Header, r.ContentLength)
+		}
+		var first [1024]byte
+		if _, err := io.ReadFull(r.Body, first[:]); err != nil {
+			t.Error(err)
+			return
+		}
+		if source.eof.Load() {
+			t.Error("source fully read before HTTP ingress")
+		}
+		hash := sha256.New()
+		_, _ = hash.Write(first[:])
+		n, err := io.Copy(hash, r.Body)
+		if err != nil || n+int64(len(first)) != size || string(hash.Sum(nil)) != string(want.Sum(nil)) {
+			t.Errorf("integrity: n=%d err=%v", n, err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	a := newAgentRegistrationState(Config{Description: "stream test"})
+	a.phase = agentRunning
+	a.client = newAirlockClient(server.URL, "token", server.Client())
+	a.RegisterDirectory("docs", DirectoryOpts{Read: AccessInternal, Write: AccessInternal, List: AccessInternal, Description: "Documents"})
+	before := time.Now()
+	info, err := a.WriteFile(t.Context(), "docs/data", source, "text/plain")
+	if err != nil || info.Size != size || info.Path != "docs/data" || info.Filename != "data" || info.ContentType != "text/plain" || info.LastModified.Before(before) {
+		t.Fatalf("info=%+v err=%v", info, err)
+	}
+	if source.maxRead.Load() > 64<<10 {
+		t.Fatalf("unbounded source read: %d", source.maxRead.Load())
+	}
+}
+
+func TestWriteFileKnownAndEmptyReaders(t *testing.T) {
+	for _, data := range []string{"hello", ""} {
+		t.Run(data, func(t *testing.T) {
+			a, _ := testAgent(t)
+			info, err := a.WriteFile(t.Context(), "tmp/data", strings.NewReader(data), "text/plain")
+			if err != nil || info.Size != int64(len(data)) {
+				t.Fatalf("info=%+v err=%v", info, err)
+			}
+		})
+	}
+}
+
+func TestWriteFileDoesNotFollowRedirects(t *testing.T) {
+	for _, status := range []int{http.StatusMovedPermanently, http.StatusTemporaryRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var redirected atomic.Int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/redirected" {
+					redirected.Add(1)
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.Header().Set("Location", "/redirected")
+				w.WriteHeader(status)
+			}))
+			defer server.Close()
+			a, _ := testAgent(t)
+			a.client = newAirlockClient(server.URL, "token", server.Client())
+			if _, err := a.WriteFile(t.Context(), "tmp/data", strings.NewReader("data"), "text/plain"); err == nil {
+				t.Fatal("redirect reported a committed upload")
+			}
+			if redirected.Load() != 0 {
+				t.Fatal("upload followed a redirect")
+			}
+		})
+	}
+}
+
+type cancelingUploadReader struct{ cancel context.CancelFunc }
+
+func (r cancelingUploadReader) Read([]byte) (int, error) { r.cancel(); return 0, context.Canceled }
+
+func TestWriteFileCancelsDuringStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	a, _ := testAgent(t)
+	a.client = newAirlockClient(server.URL, "token", server.Client())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	source := io.MultiReader(&generatedUpload{left: 2 << 20}, cancelingUploadReader{cancel})
+	if _, err := a.WriteFile(ctx, "tmp/data", source, "text/plain"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+type failingUploadReader struct{ err error }
+
+func (r failingUploadReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestWriteFileFailures(t *testing.T) {
+	sourceErr := errors.New("source failed")
+	for _, tc := range []struct {
+		name     string
+		source   io.Reader
+		status   int
+		consume  bool
+		want     error
+		canceled bool
+	}{
+		{"source error", failingUploadReader{sourceErr}, 204, true, sourceErr, false},
+		{"premature EOF", failingUploadReader{io.ErrUnexpectedEOF}, 204, true, io.ErrUnexpectedEOF, false},
+		{"early success", strings.NewReader("not consumed"), 204, false, io.ErrUnexpectedEOF, false},
+		{"backend error", strings.NewReader("data"), 500, true, nil, false},
+		{"cancel", panicReader{}, 204, false, context.Canceled, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, _ := testAgent(t)
+			var responseRead atomic.Int64
+			a.client.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.GetBody != nil {
+					t.Error("upload must not be replayable")
+				}
+				if tc.consume {
+					_, _ = io.Copy(io.Discard, req.Body)
+				}
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(&observedResponse{read: &responseRead})}, nil
+			})}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			_, err := a.WriteFile(ctx, "tmp/data", tc.source, "text/plain")
+			if err == nil || (tc.want != nil && !errors.Is(err, tc.want)) {
+				t.Fatalf("err=%v want=%v", err, tc.want)
+			}
+			if responseRead.Load() > 64<<10 {
+				t.Fatalf("unbounded error response: %d", responseRead.Load())
+			}
+		})
+	}
+}
+
+type observedResponse struct{ read *atomic.Int64 }
+
+func (r *observedResponse) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 'x'
+	}
+	r.read.Add(int64(len(p)))
+	return len(p), nil
+}
 
 func TestFileRefAndManualIndex(t *testing.T) {
 	ref := FileRef{ID: "entry", ContentID: "content", Name: "report.txt", Path: "/apps/app/docs/report.txt", ContentType: "text/plain", Size: 6}

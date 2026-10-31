@@ -130,21 +130,12 @@ func TestResolveIntegrationTargetRejectsCodegenSelectors(t *testing.T) {
 	}
 }
 
-func TestParseIntegrationTargetFlags(t *testing.T) {
-	flags, err := parseIntegrationTargetFlags([]string{"--remote", "dev", "--url", "https://airlock.example", "--agent", "dev-agent"})
-	if err != nil {
-		t.Fatalf("parseIntegrationTargetFlags: %v", err)
-	}
-	if flags.remote != "dev" || flags.url != "https://airlock.example" || flags.agent != "dev-agent" {
-		t.Fatalf("flags = %#v", flags)
-	}
-	if _, err := parseIntegrationTargetFlags([]string{"--remote", "bad remote"}); err == nil {
-		t.Fatal("parseIntegrationTargetFlags accepted an invalid remote")
-	}
-}
-
 func TestConnectionRequestCodegen(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/codegen/integrations/" {
+			_, _ = w.Write([]byte(`{"integrations":[{"type":"connection","slug":"home","configured":true}]}`))
+			return
+		}
 		if r.URL.Path != "/api/codegen/integrations/connections/home/request" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
@@ -169,7 +160,7 @@ func TestConnectionRequestCodegen(t *testing.T) {
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "integration-token")
 
 	output := captureCommandStdout(t, func() error {
-		return cmdConnection([]string{"request", "home", "--method", "POST", "--path", "/devices", "--data", `{"active":true}`})
+		return cmdResources([]string{"request", "agent-id/home", "--method", "POST", "--path", "/devices", "--data", `{"active":true}`})
 	})
 	if output != `{"ok":true}` {
 		t.Fatalf("stdout = %q", output)
@@ -186,6 +177,10 @@ func TestDeployRejectsIntegrationToken(t *testing.T) {
 
 func TestConnectionRequestReturnsErrorForUpstreamFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/codegen/integrations/" {
+			_, _ = w.Write([]byte(`{"integrations":[{"type":"connection","slug":"home","configured":true}]}`))
+			return
+		}
 		encoded, _ := protojson.Marshal(&airlockv1.InvokeConnectionResponse{StatusCode: http.StatusUnauthorized, Body: []byte("denied")})
 		_, _ = w.Write(encoded)
 	}))
@@ -195,7 +190,7 @@ func TestConnectionRequestReturnsErrorForUpstreamFailure(t *testing.T) {
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "integration-token")
 
 	output, err := captureCommandStdoutResult(t, func() error {
-		return cmdConnection([]string{"request", "home", "--path", "/devices"})
+		return cmdResources([]string{"request", "agent-id/home", "--path", "/devices"})
 	})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
 		t.Fatalf("cmdConnection() error = %v", err)
