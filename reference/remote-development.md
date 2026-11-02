@@ -104,10 +104,17 @@ go tool air agent continue summarize <session-id> --prompt 'Summarize the next i
 go tool air logs <run-id> --target preview
 go tool air stop --target preview
 go tool air start --target preview --wait
+go tool air restart --target preview --wait
 ```
 
 Stop retains target DB/files/bindings; it is not deletion. Deleting a laptop checkout
 emits no server event. Host idle TTL/admin policy handles preview cleanup.
+Hosted developer production `start`, `stop` and `restart` requests require a
+distinct lifecycle approval for the exact action and runtime/configuration state.
+Deployment and production-data approvals do not include lifecycle access.
+Restart uses one host operation, not a stop/start command sequence. A protected
+request returns HTTP 428 before effects; approval wakes fresh reasoning without
+replaying the shell. Production `suspend` is outside developer authority.
 Abandoned laptop previews default to seven-day idle retention under host policy;
 the CLI neither claims deletion nor prevents expiry by having a local config.
 

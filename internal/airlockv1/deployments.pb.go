@@ -63,8 +63,10 @@ type DeploymentInfo struct {
 	// Metadata-only presence: configured empty strings and nonempty defaults count
 	// as present. Empty declaration defaults represent no default in the SDK schema.
 	UnconfiguredEnvCount *int64 `protobuf:"varint,28,opt,name=unconfigured_env_count,json=unconfiguredEnvCount,proto3,oneof" json:"unconfigured_env_count,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Immutable candidate of the current queued/running build, not the deployed source.
+	PendingCandidateRevisionId string `protobuf:"bytes,29,opt,name=pending_candidate_revision_id,json=pendingCandidateRevisionId,proto3" json:"pending_candidate_revision_id,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *DeploymentInfo) Reset() {
@@ -291,6 +293,13 @@ func (x *DeploymentInfo) GetUnconfiguredEnvCount() int64 {
 		return *x.UnconfiguredEnvCount
 	}
 	return 0
+}
+
+func (x *DeploymentInfo) GetPendingCandidateRevisionId() string {
+	if x != nil {
+		return x.PendingCandidateRevisionId
+	}
+	return ""
 }
 
 type ConfigurationReadiness struct {
@@ -874,7 +883,8 @@ var File_airlock_v1_deployments_proto protoreflect.FileDescriptor
 const file_airlock_v1_deployments_proto_rawDesc = "" +
 	"\n" +
 	"\x1cairlock/v1/deployments.proto\x12\n" +
-	"airlock.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16airlock/v1/types.proto\"\xde\t\n" +
+	"airlock.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16airlock/v1/types.proto\"\xa1\n" +
+	"\n" +
 	"\x0eDeploymentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x15\n" +
 	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12\x12\n" +
@@ -907,7 +917,8 @@ const file_airlock_v1_deployments_proto_rawDesc = "" +
 	"\x17env_configuration_state\x18\x19 \x01(\tR\x15envConfigurationState\x12)\n" +
 	"\x10restart_required\x18\x1a \x01(\bR\x0frestartRequired\x12[\n" +
 	"\x17configuration_readiness\x18\x1b \x01(\v2\".airlock.v1.ConfigurationReadinessR\x16configurationReadiness\x129\n" +
-	"\x16unconfigured_env_count\x18\x1c \x01(\x03H\x02R\x14unconfiguredEnvCount\x88\x01\x01B\n" +
+	"\x16unconfigured_env_count\x18\x1c \x01(\x03H\x02R\x14unconfiguredEnvCount\x88\x01\x01\x12A\n" +
+	"\x1dpending_candidate_revision_id\x18\x1d \x01(\tR\x1apendingCandidateRevisionIdB\n" +
 	"\n" +
 	"\b_runningB\x17\n" +
 	"\x15_applied_env_revisionB\x19\n" +

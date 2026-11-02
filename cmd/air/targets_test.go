@@ -34,6 +34,50 @@ func TestTargetStatusJSONIncludesEnvironmentRevisionsOnly(t *testing.T) {
 	}
 }
 
+func TestHostedRestartUsesOneExplicitLifecycleRequest(t *testing.T) {
+	for _, status := range []int{204, 403, 401} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
+			t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", previewWorkspaceID)
+			t.Setenv("AIRLOCK_APP_ID", testBuildAgentID)
+			t.Setenv("AIRLOCK_AGENT_ID", previewRuntimeID)
+			t.Setenv("AIRLOCK_DEPLOYMENT_TARGET", previewName)
+			t.Setenv("AIRLOCK_DEVELOPER_SESSION_ID", previewWorkspaceID)
+			t.Setenv("AIRLOCK_TOKEN", testAccessToken)
+			posts := 0
+			prefix := "/api/v1/agents/" + testBuildAgentID + "/deployments/production"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer "+testAccessToken {
+					t.Error("lost execution credential")
+				}
+				switch r.Method + " " + r.URL.Path {
+				case "GET " + prefix:
+					fmt.Fprintf(w, `{"deployment":{"id":%q,"runtimeAgentId":%q,"appId":%q,"kind":"production","name":"production","running":true}}`, testBuildAgentID, testBuildAgentID, testBuildAgentID)
+				case "POST " + prefix + "/restart":
+					posts++
+					w.WriteHeader(status)
+				default:
+					t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(500)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("AIRLOCK_API_URL", server.URL)
+			err := run([]string{"restart", "--target", "production", "--dir", t.TempDir()})
+			if status == 204 && err != nil {
+				t.Fatal(err)
+			}
+			if status != 204 && !hasHTTPStatus(err, status) {
+				t.Fatalf("status not preserved: %v", err)
+			}
+			if posts != 1 {
+				t.Fatalf("restart issued %d lifecycle requests", posts)
+			}
+		})
+	}
+}
+
 func TestHostedDeploymentUsesInjectedConcreteIdentity(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")

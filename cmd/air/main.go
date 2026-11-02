@@ -108,7 +108,7 @@ func run(args []string) error {
 		return cmdDeploy(args[1:])
 	case "status":
 		return cmdTargetStatus(args[1:])
-	case "start", "stop", "suspend":
+	case "start", "stop", "restart", "suspend":
 		return cmdTargetLifecycle(args[0], args[1:])
 	case "request", "tools", "agent", "logs":
 		return cmdOperation(args[0], args[1:])
@@ -144,7 +144,7 @@ Usage:
   air tools list|invoke <name>    inspect or invoke registered app tools
   air agent start|get|list|wait|cancel|continue operate a registered agent on the real host
   air logs <run-UUID>             read a selected target's run log snapshot
-  air start|stop|suspend          operate a selected target's runtime
+  air start|stop|restart|suspend  operate a selected target's runtime
   air env list [flags]            list agent environment variable declarations
   air env get <slug> [flags]      print one configured non-secret value
   air env set <slug> <value> [flags]
