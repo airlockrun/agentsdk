@@ -421,7 +421,7 @@ func cmdTargetLifecycle(action string, args []string) error {
 	if err := doProto(ctx, s.baseURL, http.MethodPost, s.path("/"+action), s.token, nil, nil); err != nil {
 		return err
 	}
-	if action == "start" && f.wait {
+	if (action == "start" || action == "restart") && f.wait {
 		if err := s.waitRunning(ctx, 2*time.Second); err != nil {
 			return err
 		}

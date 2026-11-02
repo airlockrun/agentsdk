@@ -28,6 +28,34 @@ func deploymentResponse(w http.ResponseWriter) {
 	fmt.Fprintf(w, `{"deployment":{"id":%q,"appId":%q,"runtimeAgentId":%q,"kind":"personal_preview","name":"p-random","ownerUserId":%q,"sourceRevisionId":%q,"status":"active","running":true}}`, runtimeID, appID, runtimeID, ownerID, revisionID)
 }
 
+func TestLifecycleRestartIsOneTargetOperation(t *testing.T) {
+	base := "/api/v1/agents/" + appID + "/deployments/p-random"
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET " + base:
+			deploymentResponse(w)
+		case "POST " + base + "/restart":
+			posts++
+			w.WriteHeader(204)
+		default:
+			t.Errorf("unexpected operation: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(500)
+		}
+	}))
+	defer server.Close()
+	client, err := New(configFor(server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Lifecycle(t.Context(), "restart"); err != nil {
+		t.Fatal(err)
+	}
+	if posts != 1 {
+		t.Fatalf("restart requests=%d", posts)
+	}
+}
+
 func TestExplicitConfigAndRevision(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { deploymentResponse(w) }))
 	defer server.Close()

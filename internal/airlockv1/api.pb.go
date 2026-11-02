@@ -4553,8 +4553,11 @@ type TaskResponse struct {
 	CancelRequested bool                   `protobuf:"varint,4,opt,name=cancel_requested,json=cancelRequested,proto3" json:"cancel_requested,omitempty"`
 	Settling        bool                   `protobuf:"varint,5,opt,name=settling,proto3" json:"settling,omitempty"`
 	Description     string                 `protobuf:"bytes,6,opt,name=description,proto3" json:"description,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// The settled shell was stopped for a verified host operation challenge.
+	// This records interruption, not whether approval is currently pending.
+	StoppedForApproval bool `protobuf:"varint,7,opt,name=stopped_for_approval,json=stoppedForApproval,proto3" json:"stopped_for_approval,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TaskResponse) Reset() {
@@ -4627,6 +4630,13 @@ func (x *TaskResponse) GetDescription() string {
 		return x.Description
 	}
 	return ""
+}
+
+func (x *TaskResponse) GetStoppedForApproval() bool {
+	if x != nil {
+		return x.StoppedForApproval
+	}
+	return false
 }
 
 type ListAgentsResponse struct {
@@ -6396,7 +6406,9 @@ type PendingConfirmation struct {
 	RunId string `protobuf:"bytes,7,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	// description is the plain-language summary a run_js call carries, shown in
 	// the confirmation card in place of the raw code/permission when present.
-	Description   string `protobuf:"bytes,8,opt,name=description,proto3" json:"description,omitempty"`
+	Description string `protobuf:"bytes,8,opt,name=description,proto3" json:"description,omitempty"`
+	// Immutable approval-request time for placement in human history.
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6464,6 +6476,13 @@ func (x *PendingConfirmation) GetDescription() string {
 		return x.Description
 	}
 	return ""
+}
+
+func (x *PendingConfirmation) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
 }
 
 type PromptRequest struct {
@@ -17562,14 +17581,15 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"slugIntentJ\x04\b\r\x10\x0e\"[\n" +
 	"\x13CreateAgentResponse\x12+\n" +
 	"\x05agent\x18\x01 \x01(\v2\x15.airlock.v1.AgentInfoR\x05agent\x12\x17\n" +
-	"\atask_id\x18\x02 \x01(\tR\x06taskId\"\xb3\x01\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\"\xe5\x01\n" +
 	"\fTaskResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x16\n" +
 	"\x06status\x18\x03 \x01(\tR\x06status\x12)\n" +
 	"\x10cancel_requested\x18\x04 \x01(\bR\x0fcancelRequested\x12\x1a\n" +
 	"\bsettling\x18\x05 \x01(\bR\bsettling\x12 \n" +
-	"\vdescription\x18\x06 \x01(\tR\vdescription\"\x8a\x01\n" +
+	"\vdescription\x18\x06 \x01(\tR\vdescription\x120\n" +
+	"\x14stopped_for_approval\x18\a \x01(\bR\x12stoppedForApproval\"\x8a\x01\n" +
 	"\x12ListAgentsResponse\x12-\n" +
 	"\x06agents\x18\x01 \x03(\v2\x15.airlock.v1.AgentInfoR\x06agents\x12E\n" +
 	"\rpreview_links\x18\x02 \x03(\v2 .airlock.v1.WorkspacePreviewLinkR\fpreviewLinks\"\x97\x01\n" +
@@ -17703,14 +17723,16 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x10in_flight_run_id\x18\x05 \x01(\tR\rinFlightRunId\"p\n" +
 	"\x19PaginatedMessagesResponse\x128\n" +
 	"\bmessages\x18\x01 \x03(\v2\x1c.airlock.v1.AgentMessageInfoR\bmessages\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"\xd1\x01\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"\x8c\x02\n" +
 	"\x13PendingConfirmation\x12 \n" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x14\n" +
 	"\x05input\x18\x03 \x01(\tR\x05input\x12\x15\n" +
 	"\x06run_id\x18\a \x01(\tR\x05runId\x12 \n" +
-	"\vdescription\x18\b \x01(\tR\vdescriptionJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\n" +
+	"\vdescription\x18\b \x01(\tR\vdescription\x129\n" +
+	"\n" +
+	"created_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAtJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\x06\x10\aR\n" +
 	"permissionR\bpatternsR\x04code\"\xe2\x01\n" +
 	"\rPromptRequest\x12'\n" +
 	"\x0fconversation_id\x18\x01 \x01(\tR\x0econversationId\x12\x18\n" +
@@ -19013,136 +19035,137 @@ var file_airlock_v1_api_proto_depIdxs = []int32{
 	294, // 72: airlock.v1.GetConversationResponse.messages:type_name -> airlock.v1.AgentMessageInfo
 	100, // 73: airlock.v1.GetConversationResponse.pending_confirmation:type_name -> airlock.v1.PendingConfirmation
 	294, // 74: airlock.v1.PaginatedMessagesResponse.messages:type_name -> airlock.v1.AgentMessageInfo
-	100, // 75: airlock.v1.LinkedDeveloperPermission.confirmation:type_name -> airlock.v1.PendingConfirmation
-	276, // 76: airlock.v1.LinkedDeveloperPermission.valid_until:type_name -> google.protobuf.Timestamp
-	103, // 77: airlock.v1.ListDeveloperPermissionsResponse.permissions:type_name -> airlock.v1.LinkedDeveloperPermission
-	276, // 78: airlock.v1.ListDeveloperPermissionsResponse.observed_at:type_name -> google.protobuf.Timestamp
-	100, // 79: airlock.v1.DeveloperPermissionDecision.confirmation:type_name -> airlock.v1.PendingConfirmation
-	100, // 80: airlock.v1.DeveloperSessionInfo.pending_confirmation:type_name -> airlock.v1.PendingConfirmation
-	276, // 81: airlock.v1.DeveloperSessionInfo.created_at:type_name -> google.protobuf.Timestamp
-	276, // 82: airlock.v1.DeveloperSessionInfo.updated_at:type_name -> google.protobuf.Timestamp
-	276, // 83: airlock.v1.DeveloperSessionInfo.closed_at:type_name -> google.protobuf.Timestamp
-	114, // 84: airlock.v1.DeveloperSessionInfo.preview:type_name -> airlock.v1.DeveloperPreviewInfo
-	112, // 85: airlock.v1.DeveloperSessionInfo.pending_question:type_name -> airlock.v1.PendingQuestion
-	112, // 86: airlock.v1.DeveloperSessionInfo.answered_questions:type_name -> airlock.v1.PendingQuestion
-	106, // 87: airlock.v1.DeveloperSessionInfo.permission_decisions:type_name -> airlock.v1.DeveloperPermissionDecision
-	114, // 88: airlock.v1.DeveloperSessionInfo.production_release:type_name -> airlock.v1.DeveloperPreviewInfo
-	108, // 89: airlock.v1.DeveloperSessionInfo.production_release_state:type_name -> airlock.v1.DeveloperProductionReleaseState
-	110, // 90: airlock.v1.QuestionInfo.options:type_name -> airlock.v1.QuestionOption
-	111, // 91: airlock.v1.PendingQuestion.questions:type_name -> airlock.v1.QuestionInfo
-	113, // 92: airlock.v1.PendingQuestion.answers:type_name -> airlock.v1.QuestionAnswer
-	107, // 93: airlock.v1.LaunchDeveloperPreviewResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
-	277, // 94: airlock.v1.CreateDeveloperSessionRequest.files:type_name -> airlock.v1.FileRef
-	107, // 95: airlock.v1.CreateDeveloperSessionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
-	107, // 96: airlock.v1.GetDeveloperSessionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
-	294, // 97: airlock.v1.GetDeveloperSessionResponse.messages:type_name -> airlock.v1.AgentMessageInfo
-	277, // 98: airlock.v1.SendDeveloperSessionMessageRequest.files:type_name -> airlock.v1.FileRef
-	107, // 99: airlock.v1.SendDeveloperSessionMessageResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
-	294, // 100: airlock.v1.SendDeveloperSessionMessageResponse.message:type_name -> airlock.v1.AgentMessageInfo
-	277, // 101: airlock.v1.DeveloperAttachmentInfo.file:type_name -> airlock.v1.FileRef
-	122, // 102: airlock.v1.ListDeveloperAttachmentsResponse.attachments:type_name -> airlock.v1.DeveloperAttachmentInfo
-	113, // 103: airlock.v1.AnswerDeveloperSessionQuestionRequest.answers:type_name -> airlock.v1.QuestionAnswer
-	107, // 104: airlock.v1.AnswerDeveloperSessionQuestionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
-	107, // 105: airlock.v1.ResolveDeveloperSessionConfirmationResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
-	107, // 106: airlock.v1.CloseDeveloperSessionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
-	276, // 107: airlock.v1.DeveloperResourceRequestInfo.created_at:type_name -> google.protobuf.Timestamp
-	276, // 108: airlock.v1.DeveloperResourceRequestInfo.updated_at:type_name -> google.protobuf.Timestamp
-	129, // 109: airlock.v1.CreateDeveloperResourceRequestResponse.request:type_name -> airlock.v1.DeveloperResourceRequestInfo
-	129, // 110: airlock.v1.ListDeveloperResourceRequestsResponse.requests:type_name -> airlock.v1.DeveloperResourceRequestInfo
-	129, // 111: airlock.v1.BindDeveloperResourceRequestResponse.request:type_name -> airlock.v1.DeveloperResourceRequestInfo
-	271, // 112: airlock.v1.CallDeveloperResourceRequest.headers:type_name -> airlock.v1.CallDeveloperResourceRequest.HeadersEntry
-	272, // 113: airlock.v1.CallDeveloperResourceResponse.headers:type_name -> airlock.v1.CallDeveloperResourceResponse.HeadersEntry
-	289, // 114: airlock.v1.ListWebhooksResponse.webhooks:type_name -> airlock.v1.WebhookInfo
-	290, // 115: airlock.v1.ListSchedulesResponse.schedules:type_name -> airlock.v1.ScheduleInfo
-	296, // 116: airlock.v1.ListToolsResponse.tools:type_name -> airlock.v1.ToolInfo
-	276, // 117: airlock.v1.AgentMemberInfo.created_at:type_name -> google.protobuf.Timestamp
-	141, // 118: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo
-	288, // 119: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
-	276, // 120: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
-	157, // 121: airlock.v1.BridgeMiniAppsResponse.apps:type_name -> airlock.v1.BridgeMiniApp
-	297, // 122: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
-	155, // 123: airlock.v1.ListBridgesResponse.platforms:type_name -> airlock.v1.BridgePlatform
-	298, // 124: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
-	299, // 125: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
-	300, // 126: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
-	301, // 127: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
-	302, // 128: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	302, // 129: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
-	302, // 130: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
-	303, // 131: airlock.v1.ListGitCredentialsResponse.credentials:type_name -> airlock.v1.GitCredential
-	304, // 132: airlock.v1.ListPasskeysResponse.passkeys:type_name -> airlock.v1.Passkey
-	304, // 133: airlock.v1.RegisterPasskeyResponse.passkey:type_name -> airlock.v1.Passkey
-	305, // 134: airlock.v1.ConnectAgentGitResponse.config:type_name -> airlock.v1.AgentGitConfig
-	305, // 135: airlock.v1.GetAgentGitConfigResponse.config:type_name -> airlock.v1.AgentGitConfig
-	306, // 136: airlock.v1.ListMCPServersResponse.mcp_servers:type_name -> airlock.v1.MCPServerInfo
-	307, // 137: airlock.v1.MCPCredentialStatusResponse.status:type_name -> airlock.v1.MCPStatusInfo
-	276, // 138: airlock.v1.MCPMemberCredentialInfo.created_at:type_name -> google.protobuf.Timestamp
-	276, // 139: airlock.v1.MCPMemberCredentialInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	276, // 140: airlock.v1.MCPMemberCredentialInfo.revoked_at:type_name -> google.protobuf.Timestamp
-	180, // 141: airlock.v1.ListMCPMemberCredentialsResponse.credentials:type_name -> airlock.v1.MCPMemberCredentialInfo
-	180, // 142: airlock.v1.MCPMemberCredentialResponse.credential:type_name -> airlock.v1.MCPMemberCredentialInfo
-	276, // 143: airlock.v1.MCPCredentialModeAuditEntry.occurred_at:type_name -> google.protobuf.Timestamp
-	186, // 144: airlock.v1.ListMCPCredentialModeAuditResponse.entries:type_name -> airlock.v1.MCPCredentialModeAuditEntry
-	308, // 145: airlock.v1.ListEnvVarsResponse.env_vars:type_name -> airlock.v1.EnvVarInfo
-	309, // 146: airlock.v1.ConnectionSetupStatusResponse.counts:type_name -> airlock.v1.SetupCountsInfo
-	310, // 147: airlock.v1.ListJobHandlersResponse.handlers:type_name -> airlock.v1.JobHandlerInfo
-	311, // 148: airlock.v1.ListJobsResponse.jobs:type_name -> airlock.v1.JobInfo
-	311, // 149: airlock.v1.GetJobResponse.job:type_name -> airlock.v1.JobInfo
-	312, // 150: airlock.v1.GetJobResponse.attempts:type_name -> airlock.v1.JobAttemptInfo
-	311, // 151: airlock.v1.RetryJobResponse.job:type_name -> airlock.v1.JobInfo
-	199, // 152: airlock.v1.ListModelGrantsResponse.grants:type_name -> airlock.v1.ModelGrantInfo
-	202, // 153: airlock.v1.ListAllowedModelsResponse.models:type_name -> airlock.v1.AllowedModel
-	276, // 154: airlock.v1.OwnedResourceInfo.created_at:type_name -> google.protobuf.Timestamp
-	276, // 155: airlock.v1.OwnedResourceInfo.last_used_at:type_name -> google.protobuf.Timestamp
-	205, // 156: airlock.v1.OwnedResourceInfo.connector_status:type_name -> airlock.v1.ConnectorResourceStatusInfo
-	276, // 157: airlock.v1.ConnectorResourceStatusInfo.last_heartbeat_at:type_name -> google.protobuf.Timestamp
-	204, // 158: airlock.v1.ListOwnedResourcesResponse.resources:type_name -> airlock.v1.OwnedResourceInfo
-	210, // 159: airlock.v1.ListResourceConsumersResponse.consumers:type_name -> airlock.v1.ResourceConsumerInfo
-	276, // 160: airlock.v1.ResourceGrantInfo.created_at:type_name -> google.protobuf.Timestamp
-	212, // 161: airlock.v1.ListResourceGrantsResponse.grants:type_name -> airlock.v1.ResourceGrantInfo
-	216, // 162: airlock.v1.GetUsageResponse.summary:type_name -> airlock.v1.UsageSummary
-	217, // 163: airlock.v1.GetUsageResponse.by_agent:type_name -> airlock.v1.UsageByAgent
-	219, // 164: airlock.v1.GetUsageResponse.by_model:type_name -> airlock.v1.UsageByModel
-	218, // 165: airlock.v1.GetUsageResponse.by_user:type_name -> airlock.v1.UsageByUser
-	221, // 166: airlock.v1.NeedInfo.connector_required_commands:type_name -> airlock.v1.ConnectorNeedCommandInfo
-	222, // 167: airlock.v1.NeedInfo.connector_required_directories:type_name -> airlock.v1.ConnectorNeedDirectoryInfo
-	223, // 168: airlock.v1.ListNeedsResponse.needs:type_name -> airlock.v1.NeedInfo
-	225, // 169: airlock.v1.ListIntegrationsResponse.integrations:type_name -> airlock.v1.IntegrationInfo
-	273, // 170: airlock.v1.InvokeConnectionRequest.headers:type_name -> airlock.v1.InvokeConnectionRequest.HeadersEntry
-	227, // 171: airlock.v1.InvokeConnectionResponse.headers:type_name -> airlock.v1.IntegrationHTTPHeader
-	230, // 172: airlock.v1.ListIntegrationMCPToolsResponse.tools:type_name -> airlock.v1.IntegrationMCPTool
-	233, // 173: airlock.v1.InvokeMCPToolResponse.content:type_name -> airlock.v1.IntegrationMCPContent
-	235, // 174: airlock.v1.ListCandidatesResponse.candidates:type_name -> airlock.v1.CandidateInfo
-	313, // 175: airlock.v1.ListConnectorsResponse.connectors:type_name -> airlock.v1.ConnectorInfo
-	313, // 176: airlock.v1.GetConnectorResponse.connector:type_name -> airlock.v1.ConnectorInfo
-	244, // 177: airlock.v1.GetConnectorResponse.grants:type_name -> airlock.v1.ConnectorResourceGrantInfo
-	210, // 178: airlock.v1.GetConnectorResponse.consumers:type_name -> airlock.v1.ResourceConsumerInfo
-	274, // 179: airlock.v1.SetConnectorLabelsRequest.labels:type_name -> airlock.v1.SetConnectorLabelsRequest.LabelsEntry
-	314, // 180: airlock.v1.ListHostsResponse.hosts:type_name -> airlock.v1.HostInfo
-	314, // 181: airlock.v1.GetHostResponse.host:type_name -> airlock.v1.HostInfo
-	313, // 182: airlock.v1.GetHostResponse.connectors:type_name -> airlock.v1.ConnectorInfo
-	315, // 183: airlock.v1.GetHostResponse.management_jobs:type_name -> airlock.v1.HostManagementJobInfo
-	276, // 184: airlock.v1.HostEnrollmentInfo.expires_at:type_name -> google.protobuf.Timestamp
-	275, // 185: airlock.v1.RequestHostShellRequest.environment:type_name -> airlock.v1.RequestHostShellRequest.EnvironmentEntry
-	315, // 186: airlock.v1.HostManagementJobResponse.job:type_name -> airlock.v1.HostManagementJobInfo
-	315, // 187: airlock.v1.GetHostManagementJobResponse.job:type_name -> airlock.v1.HostManagementJobInfo
-	316, // 188: airlock.v1.GetHostManagementJobResponse.events:type_name -> airlock.v1.HostManagementEventInfo
-	317, // 189: airlock.v1.ListConnectorArtifactsResponse.artifact_sets:type_name -> airlock.v1.ConnectorArtifactSetInfo
-	318, // 190: airlock.v1.ListConnectorArtifactsResponse.versions:type_name -> airlock.v1.ConnectorArtifactVersionInfo
-	276, // 191: airlock.v1.DownloadConnectorArtifactResponse.expires_at:type_name -> google.protobuf.Timestamp
-	319, // 192: airlock.v1.ListConnectorTargetGroupsResponse.groups:type_name -> airlock.v1.ConnectorTargetGroupInfo
-	319, // 193: airlock.v1.ConnectorTargetGroupCandidateInfo.group:type_name -> airlock.v1.ConnectorTargetGroupInfo
-	264, // 194: airlock.v1.ListConnectorTargetGroupCandidatesResponse.candidates:type_name -> airlock.v1.ConnectorTargetGroupCandidateInfo
-	276, // 195: airlock.v1.CreateConnectorOrchestrationRequest.deadline_at:type_name -> google.protobuf.Timestamp
-	320, // 196: airlock.v1.ConnectorOrchestrationResponse.orchestration:type_name -> airlock.v1.ConnectorOrchestrationInfo
-	321, // 197: airlock.v1.ConnectorOrchestrationResponse.jobs:type_name -> airlock.v1.ConnectorJobInfo
-	3,   // 198: airlock.v1.FileSidebarResponse.entries:type_name -> airlock.v1.FileEntryInfo
-	85,  // 199: airlock.v1.AgentModelConfig.SystemDefaultsEntry.value:type_name -> airlock.v1.ModelRef
-	200, // [200:200] is the sub-list for method output_type
-	200, // [200:200] is the sub-list for method input_type
-	200, // [200:200] is the sub-list for extension type_name
-	200, // [200:200] is the sub-list for extension extendee
-	0,   // [0:200] is the sub-list for field type_name
+	276, // 75: airlock.v1.PendingConfirmation.created_at:type_name -> google.protobuf.Timestamp
+	100, // 76: airlock.v1.LinkedDeveloperPermission.confirmation:type_name -> airlock.v1.PendingConfirmation
+	276, // 77: airlock.v1.LinkedDeveloperPermission.valid_until:type_name -> google.protobuf.Timestamp
+	103, // 78: airlock.v1.ListDeveloperPermissionsResponse.permissions:type_name -> airlock.v1.LinkedDeveloperPermission
+	276, // 79: airlock.v1.ListDeveloperPermissionsResponse.observed_at:type_name -> google.protobuf.Timestamp
+	100, // 80: airlock.v1.DeveloperPermissionDecision.confirmation:type_name -> airlock.v1.PendingConfirmation
+	100, // 81: airlock.v1.DeveloperSessionInfo.pending_confirmation:type_name -> airlock.v1.PendingConfirmation
+	276, // 82: airlock.v1.DeveloperSessionInfo.created_at:type_name -> google.protobuf.Timestamp
+	276, // 83: airlock.v1.DeveloperSessionInfo.updated_at:type_name -> google.protobuf.Timestamp
+	276, // 84: airlock.v1.DeveloperSessionInfo.closed_at:type_name -> google.protobuf.Timestamp
+	114, // 85: airlock.v1.DeveloperSessionInfo.preview:type_name -> airlock.v1.DeveloperPreviewInfo
+	112, // 86: airlock.v1.DeveloperSessionInfo.pending_question:type_name -> airlock.v1.PendingQuestion
+	112, // 87: airlock.v1.DeveloperSessionInfo.answered_questions:type_name -> airlock.v1.PendingQuestion
+	106, // 88: airlock.v1.DeveloperSessionInfo.permission_decisions:type_name -> airlock.v1.DeveloperPermissionDecision
+	114, // 89: airlock.v1.DeveloperSessionInfo.production_release:type_name -> airlock.v1.DeveloperPreviewInfo
+	108, // 90: airlock.v1.DeveloperSessionInfo.production_release_state:type_name -> airlock.v1.DeveloperProductionReleaseState
+	110, // 91: airlock.v1.QuestionInfo.options:type_name -> airlock.v1.QuestionOption
+	111, // 92: airlock.v1.PendingQuestion.questions:type_name -> airlock.v1.QuestionInfo
+	113, // 93: airlock.v1.PendingQuestion.answers:type_name -> airlock.v1.QuestionAnswer
+	107, // 94: airlock.v1.LaunchDeveloperPreviewResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
+	277, // 95: airlock.v1.CreateDeveloperSessionRequest.files:type_name -> airlock.v1.FileRef
+	107, // 96: airlock.v1.CreateDeveloperSessionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
+	107, // 97: airlock.v1.GetDeveloperSessionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
+	294, // 98: airlock.v1.GetDeveloperSessionResponse.messages:type_name -> airlock.v1.AgentMessageInfo
+	277, // 99: airlock.v1.SendDeveloperSessionMessageRequest.files:type_name -> airlock.v1.FileRef
+	107, // 100: airlock.v1.SendDeveloperSessionMessageResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
+	294, // 101: airlock.v1.SendDeveloperSessionMessageResponse.message:type_name -> airlock.v1.AgentMessageInfo
+	277, // 102: airlock.v1.DeveloperAttachmentInfo.file:type_name -> airlock.v1.FileRef
+	122, // 103: airlock.v1.ListDeveloperAttachmentsResponse.attachments:type_name -> airlock.v1.DeveloperAttachmentInfo
+	113, // 104: airlock.v1.AnswerDeveloperSessionQuestionRequest.answers:type_name -> airlock.v1.QuestionAnswer
+	107, // 105: airlock.v1.AnswerDeveloperSessionQuestionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
+	107, // 106: airlock.v1.ResolveDeveloperSessionConfirmationResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
+	107, // 107: airlock.v1.CloseDeveloperSessionResponse.session:type_name -> airlock.v1.DeveloperSessionInfo
+	276, // 108: airlock.v1.DeveloperResourceRequestInfo.created_at:type_name -> google.protobuf.Timestamp
+	276, // 109: airlock.v1.DeveloperResourceRequestInfo.updated_at:type_name -> google.protobuf.Timestamp
+	129, // 110: airlock.v1.CreateDeveloperResourceRequestResponse.request:type_name -> airlock.v1.DeveloperResourceRequestInfo
+	129, // 111: airlock.v1.ListDeveloperResourceRequestsResponse.requests:type_name -> airlock.v1.DeveloperResourceRequestInfo
+	129, // 112: airlock.v1.BindDeveloperResourceRequestResponse.request:type_name -> airlock.v1.DeveloperResourceRequestInfo
+	271, // 113: airlock.v1.CallDeveloperResourceRequest.headers:type_name -> airlock.v1.CallDeveloperResourceRequest.HeadersEntry
+	272, // 114: airlock.v1.CallDeveloperResourceResponse.headers:type_name -> airlock.v1.CallDeveloperResourceResponse.HeadersEntry
+	289, // 115: airlock.v1.ListWebhooksResponse.webhooks:type_name -> airlock.v1.WebhookInfo
+	290, // 116: airlock.v1.ListSchedulesResponse.schedules:type_name -> airlock.v1.ScheduleInfo
+	296, // 117: airlock.v1.ListToolsResponse.tools:type_name -> airlock.v1.ToolInfo
+	276, // 118: airlock.v1.AgentMemberInfo.created_at:type_name -> google.protobuf.Timestamp
+	141, // 119: airlock.v1.ListAgentMembersResponse.members:type_name -> airlock.v1.AgentMemberInfo
+	288, // 120: airlock.v1.ListConnectionsResponse.connections:type_name -> airlock.v1.ConnectionInfo
+	276, // 121: airlock.v1.CredentialStatusResponse.token_expires_at:type_name -> google.protobuf.Timestamp
+	157, // 122: airlock.v1.BridgeMiniAppsResponse.apps:type_name -> airlock.v1.BridgeMiniApp
+	297, // 123: airlock.v1.ListBridgesResponse.bridges:type_name -> airlock.v1.BridgeInfo
+	155, // 124: airlock.v1.ListBridgesResponse.platforms:type_name -> airlock.v1.BridgePlatform
+	298, // 125: airlock.v1.ListCapabilitiesResponse.providers:type_name -> airlock.v1.ProviderCapabilityInfo
+	299, // 126: airlock.v1.ListPlatformIdentitiesResponse.identities:type_name -> airlock.v1.PlatformIdentityInfo
+	300, // 127: airlock.v1.ListFilesResponse.files:type_name -> airlock.v1.FileInfo
+	301, // 128: airlock.v1.ListTopicsResponse.topics:type_name -> airlock.v1.TopicInfo
+	302, // 129: airlock.v1.GetSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	302, // 130: airlock.v1.UpdateSystemSettingsRequest.settings:type_name -> airlock.v1.SystemSettingsInfo
+	302, // 131: airlock.v1.UpdateSystemSettingsResponse.settings:type_name -> airlock.v1.SystemSettingsInfo
+	303, // 132: airlock.v1.ListGitCredentialsResponse.credentials:type_name -> airlock.v1.GitCredential
+	304, // 133: airlock.v1.ListPasskeysResponse.passkeys:type_name -> airlock.v1.Passkey
+	304, // 134: airlock.v1.RegisterPasskeyResponse.passkey:type_name -> airlock.v1.Passkey
+	305, // 135: airlock.v1.ConnectAgentGitResponse.config:type_name -> airlock.v1.AgentGitConfig
+	305, // 136: airlock.v1.GetAgentGitConfigResponse.config:type_name -> airlock.v1.AgentGitConfig
+	306, // 137: airlock.v1.ListMCPServersResponse.mcp_servers:type_name -> airlock.v1.MCPServerInfo
+	307, // 138: airlock.v1.MCPCredentialStatusResponse.status:type_name -> airlock.v1.MCPStatusInfo
+	276, // 139: airlock.v1.MCPMemberCredentialInfo.created_at:type_name -> google.protobuf.Timestamp
+	276, // 140: airlock.v1.MCPMemberCredentialInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	276, // 141: airlock.v1.MCPMemberCredentialInfo.revoked_at:type_name -> google.protobuf.Timestamp
+	180, // 142: airlock.v1.ListMCPMemberCredentialsResponse.credentials:type_name -> airlock.v1.MCPMemberCredentialInfo
+	180, // 143: airlock.v1.MCPMemberCredentialResponse.credential:type_name -> airlock.v1.MCPMemberCredentialInfo
+	276, // 144: airlock.v1.MCPCredentialModeAuditEntry.occurred_at:type_name -> google.protobuf.Timestamp
+	186, // 145: airlock.v1.ListMCPCredentialModeAuditResponse.entries:type_name -> airlock.v1.MCPCredentialModeAuditEntry
+	308, // 146: airlock.v1.ListEnvVarsResponse.env_vars:type_name -> airlock.v1.EnvVarInfo
+	309, // 147: airlock.v1.ConnectionSetupStatusResponse.counts:type_name -> airlock.v1.SetupCountsInfo
+	310, // 148: airlock.v1.ListJobHandlersResponse.handlers:type_name -> airlock.v1.JobHandlerInfo
+	311, // 149: airlock.v1.ListJobsResponse.jobs:type_name -> airlock.v1.JobInfo
+	311, // 150: airlock.v1.GetJobResponse.job:type_name -> airlock.v1.JobInfo
+	312, // 151: airlock.v1.GetJobResponse.attempts:type_name -> airlock.v1.JobAttemptInfo
+	311, // 152: airlock.v1.RetryJobResponse.job:type_name -> airlock.v1.JobInfo
+	199, // 153: airlock.v1.ListModelGrantsResponse.grants:type_name -> airlock.v1.ModelGrantInfo
+	202, // 154: airlock.v1.ListAllowedModelsResponse.models:type_name -> airlock.v1.AllowedModel
+	276, // 155: airlock.v1.OwnedResourceInfo.created_at:type_name -> google.protobuf.Timestamp
+	276, // 156: airlock.v1.OwnedResourceInfo.last_used_at:type_name -> google.protobuf.Timestamp
+	205, // 157: airlock.v1.OwnedResourceInfo.connector_status:type_name -> airlock.v1.ConnectorResourceStatusInfo
+	276, // 158: airlock.v1.ConnectorResourceStatusInfo.last_heartbeat_at:type_name -> google.protobuf.Timestamp
+	204, // 159: airlock.v1.ListOwnedResourcesResponse.resources:type_name -> airlock.v1.OwnedResourceInfo
+	210, // 160: airlock.v1.ListResourceConsumersResponse.consumers:type_name -> airlock.v1.ResourceConsumerInfo
+	276, // 161: airlock.v1.ResourceGrantInfo.created_at:type_name -> google.protobuf.Timestamp
+	212, // 162: airlock.v1.ListResourceGrantsResponse.grants:type_name -> airlock.v1.ResourceGrantInfo
+	216, // 163: airlock.v1.GetUsageResponse.summary:type_name -> airlock.v1.UsageSummary
+	217, // 164: airlock.v1.GetUsageResponse.by_agent:type_name -> airlock.v1.UsageByAgent
+	219, // 165: airlock.v1.GetUsageResponse.by_model:type_name -> airlock.v1.UsageByModel
+	218, // 166: airlock.v1.GetUsageResponse.by_user:type_name -> airlock.v1.UsageByUser
+	221, // 167: airlock.v1.NeedInfo.connector_required_commands:type_name -> airlock.v1.ConnectorNeedCommandInfo
+	222, // 168: airlock.v1.NeedInfo.connector_required_directories:type_name -> airlock.v1.ConnectorNeedDirectoryInfo
+	223, // 169: airlock.v1.ListNeedsResponse.needs:type_name -> airlock.v1.NeedInfo
+	225, // 170: airlock.v1.ListIntegrationsResponse.integrations:type_name -> airlock.v1.IntegrationInfo
+	273, // 171: airlock.v1.InvokeConnectionRequest.headers:type_name -> airlock.v1.InvokeConnectionRequest.HeadersEntry
+	227, // 172: airlock.v1.InvokeConnectionResponse.headers:type_name -> airlock.v1.IntegrationHTTPHeader
+	230, // 173: airlock.v1.ListIntegrationMCPToolsResponse.tools:type_name -> airlock.v1.IntegrationMCPTool
+	233, // 174: airlock.v1.InvokeMCPToolResponse.content:type_name -> airlock.v1.IntegrationMCPContent
+	235, // 175: airlock.v1.ListCandidatesResponse.candidates:type_name -> airlock.v1.CandidateInfo
+	313, // 176: airlock.v1.ListConnectorsResponse.connectors:type_name -> airlock.v1.ConnectorInfo
+	313, // 177: airlock.v1.GetConnectorResponse.connector:type_name -> airlock.v1.ConnectorInfo
+	244, // 178: airlock.v1.GetConnectorResponse.grants:type_name -> airlock.v1.ConnectorResourceGrantInfo
+	210, // 179: airlock.v1.GetConnectorResponse.consumers:type_name -> airlock.v1.ResourceConsumerInfo
+	274, // 180: airlock.v1.SetConnectorLabelsRequest.labels:type_name -> airlock.v1.SetConnectorLabelsRequest.LabelsEntry
+	314, // 181: airlock.v1.ListHostsResponse.hosts:type_name -> airlock.v1.HostInfo
+	314, // 182: airlock.v1.GetHostResponse.host:type_name -> airlock.v1.HostInfo
+	313, // 183: airlock.v1.GetHostResponse.connectors:type_name -> airlock.v1.ConnectorInfo
+	315, // 184: airlock.v1.GetHostResponse.management_jobs:type_name -> airlock.v1.HostManagementJobInfo
+	276, // 185: airlock.v1.HostEnrollmentInfo.expires_at:type_name -> google.protobuf.Timestamp
+	275, // 186: airlock.v1.RequestHostShellRequest.environment:type_name -> airlock.v1.RequestHostShellRequest.EnvironmentEntry
+	315, // 187: airlock.v1.HostManagementJobResponse.job:type_name -> airlock.v1.HostManagementJobInfo
+	315, // 188: airlock.v1.GetHostManagementJobResponse.job:type_name -> airlock.v1.HostManagementJobInfo
+	316, // 189: airlock.v1.GetHostManagementJobResponse.events:type_name -> airlock.v1.HostManagementEventInfo
+	317, // 190: airlock.v1.ListConnectorArtifactsResponse.artifact_sets:type_name -> airlock.v1.ConnectorArtifactSetInfo
+	318, // 191: airlock.v1.ListConnectorArtifactsResponse.versions:type_name -> airlock.v1.ConnectorArtifactVersionInfo
+	276, // 192: airlock.v1.DownloadConnectorArtifactResponse.expires_at:type_name -> google.protobuf.Timestamp
+	319, // 193: airlock.v1.ListConnectorTargetGroupsResponse.groups:type_name -> airlock.v1.ConnectorTargetGroupInfo
+	319, // 194: airlock.v1.ConnectorTargetGroupCandidateInfo.group:type_name -> airlock.v1.ConnectorTargetGroupInfo
+	264, // 195: airlock.v1.ListConnectorTargetGroupCandidatesResponse.candidates:type_name -> airlock.v1.ConnectorTargetGroupCandidateInfo
+	276, // 196: airlock.v1.CreateConnectorOrchestrationRequest.deadline_at:type_name -> google.protobuf.Timestamp
+	320, // 197: airlock.v1.ConnectorOrchestrationResponse.orchestration:type_name -> airlock.v1.ConnectorOrchestrationInfo
+	321, // 198: airlock.v1.ConnectorOrchestrationResponse.jobs:type_name -> airlock.v1.ConnectorJobInfo
+	3,   // 199: airlock.v1.FileSidebarResponse.entries:type_name -> airlock.v1.FileEntryInfo
+	85,  // 200: airlock.v1.AgentModelConfig.SystemDefaultsEntry.value:type_name -> airlock.v1.ModelRef
+	201, // [201:201] is the sub-list for method output_type
+	201, // [201:201] is the sub-list for method input_type
+	201, // [201:201] is the sub-list for extension type_name
+	201, // [201:201] is the sub-list for extension extendee
+	0,   // [0:201] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_api_proto_init() }

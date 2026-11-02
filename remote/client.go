@@ -169,8 +169,8 @@ func (c *Client) SetPolicy(ctx context.Context, policy *Policy) (*Deployment, er
 // Lifecycle changes only the selected deployment. Data/bindings are retained by
 // the host. Refresh Get separately to inspect actual running state.
 func (c *Client) Lifecycle(ctx context.Context, action string) error {
-	if action != "start" && action != "stop" && action != "suspend" {
-		return errors.New("remote: lifecycle action must be start, stop or suspend")
+	if action != "start" && action != "stop" && action != "restart" && action != "suspend" {
+		return errors.New("remote: lifecycle action must be start, stop, restart or suspend")
 	}
 	if _, err := c.Get(ctx); err != nil {
 		return err
