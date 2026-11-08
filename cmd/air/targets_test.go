@@ -2,14 +2,83 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 )
+
+func TestRestartPreservesTargetAndApproval(t *testing.T) {
+	for _, tc := range []struct {
+		target string
+		denied bool
+	}{
+		{previewName, false}, {previewName, true},
+		{"production", false}, {"production", true},
+	} {
+		t.Run(fmt.Sprintf("%s/approval=%t", tc.target, tc.denied), func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
+			t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", previewWorkspaceID)
+			t.Setenv("AIRLOCK_DEVELOPER_SESSION_ID", previewWorkspaceID)
+			t.Setenv("AIRLOCK_APP_ID", testBuildAgentID)
+			t.Setenv("AIRLOCK_AGENT_ID", previewRuntimeID)
+			t.Setenv("AIRLOCK_DEPLOYMENT_TARGET", previewName)
+			t.Setenv("AIRLOCK_TOKEN", testAccessToken)
+			t.Setenv("SOL_COMMAND_CONTROL_SOCKET", "")
+			posts, reads := 0, 0
+			base := "/api/v1/agents/" + testBuildAgentID + "/deployments/" + tc.target
+			runtimeID, kind := previewRuntimeID, "personal_preview"
+			if tc.target == "production" {
+				runtimeID, kind = testBuildAgentID, "production"
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer "+testAccessToken {
+					t.Error("restart lost authentication")
+				}
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == base+"/restart":
+					posts++
+					if tc.denied {
+						w.Header().Set("Airlock-Operation-Challenge", previewTaskID)
+						w.WriteHeader(http.StatusPreconditionRequired)
+						return
+					}
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodGet && r.URL.Path == base:
+					reads++
+					fmt.Fprintf(w, `{"deployment":{"id":%q,"runtimeAgentId":%q,"appId":%q,"kind":%q,"name":%q,"ownerWorkspaceId":%q,"status":"active","running":true,"imageRef":"test-image"}}`, runtimeID, runtimeID, testBuildAgentID, kind, tc.target, previewWorkspaceID)
+				default:
+					t.Errorf("unexpected restart request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			t.Setenv("AIRLOCK_API_URL", server.URL)
+			var result error
+			captureCommandStdout(t, func() error {
+				result = run([]string{"restart", "--dir", t.TempDir(), "--target", tc.target, "--wait", "--timeout", time.Second.String()})
+				return nil
+			})
+			if tc.denied {
+				var approval *approvalRequiredError
+				if !errors.As(result, &approval) || approval.id != previewTaskID || reads != 1 {
+					t.Fatalf("approval result=%v reads=%d", result, reads)
+				}
+			} else if result != nil || reads != 2 {
+				t.Fatalf("restart result=%v reads=%d", result, reads)
+			}
+			if posts != 1 {
+				t.Fatalf("restart submitted %d times", posts)
+			}
+		})
+	}
+}
 
 func TestTargetStatusJSONIncludesEnvironmentRevisionsOnly(t *testing.T) {
 	applied := int64(7)

@@ -79,7 +79,7 @@ func cmdCandidateConfiguration(args []string) error {
 		}
 		input = &airlockv1.SetCandidateConfigurationRequest{}
 		for _, entry := range config.Selections {
-			input.Selections = append(input.Selections, &airlockv1.CandidateSelection{Type: entry.Type, Slug: entry.Slug, ResourceId: entry.ResourceID, FixtureName: entry.FixtureName})
+			input.Selections = append(input.Selections, &airlockv1.CandidateSelection{Type: entry.Type, Slug: entry.Slug, ResourceId: entry.ResourceID, FixtureName: entry.FixtureName, AcknowledgedFingerprint: entry.AcknowledgedFingerprint})
 		}
 		method = http.MethodPut
 	}
@@ -265,7 +265,11 @@ func candidateConfigHeader(binds, fixtures []string) (string, error) {
 			}
 			entry := wire.CandidateSelection{Type: typ, Slug: slot}
 			if kind == 0 {
-				entry.ResourceID = selection
+				var acknowledged bool
+				entry.ResourceID, entry.AcknowledgedFingerprint, acknowledged = strings.Cut(selection, "@")
+				if acknowledged && entry.AcknowledgedFingerprint == "" {
+					return "", errors.New("resource acknowledgment fingerprint is required after @")
+				}
 			} else {
 				entry.FixtureName = selection
 			}

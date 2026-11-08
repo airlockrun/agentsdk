@@ -486,7 +486,7 @@ goai is distributed. See LICENSE for the full license text.
 
 
 ================================================================================
-github.com/airlockrun/sol v0.1.19
+github.com/airlockrun/sol v0.1.20
 ================================================================================
 Copyright 2026 Oleg Karpov
 

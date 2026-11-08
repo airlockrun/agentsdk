@@ -64,7 +64,8 @@ type DeploymentInfo struct {
 	// as present. Empty declaration defaults represent no default in the SDK schema.
 	UnconfiguredEnvCount *int64 `protobuf:"varint,28,opt,name=unconfigured_env_count,json=unconfiguredEnvCount,proto3,oneof" json:"unconfigured_env_count,omitempty"`
 	// Immutable candidate of the current queued/running build, not the deployed source.
-	PendingCandidateRevisionId string `protobuf:"bytes,29,opt,name=pending_candidate_revision_id,json=pendingCandidateRevisionId,proto3" json:"pending_candidate_revision_id,omitempty"`
+	PendingCandidateRevisionId string               `protobuf:"bytes,29,opt,name=pending_candidate_revision_id,json=pendingCandidateRevisionId,proto3" json:"pending_candidate_revision_id,omitempty"`
+	BrowserCapabilities        *BrowserCapabilities `protobuf:"bytes,30,opt,name=browser_capabilities,json=browserCapabilities,proto3" json:"browser_capabilities,omitempty"`
 	unknownFields              protoimpl.UnknownFields
 	sizeCache                  protoimpl.SizeCache
 }
@@ -300,6 +301,13 @@ func (x *DeploymentInfo) GetPendingCandidateRevisionId() string {
 		return x.PendingCandidateRevisionId
 	}
 	return ""
+}
+
+func (x *DeploymentInfo) GetBrowserCapabilities() *BrowserCapabilities {
+	if x != nil {
+		return x.BrowserCapabilities
+	}
+	return nil
 }
 
 type ConfigurationReadiness struct {
@@ -883,7 +891,7 @@ var File_airlock_v1_deployments_proto protoreflect.FileDescriptor
 const file_airlock_v1_deployments_proto_rawDesc = "" +
 	"\n" +
 	"\x1cairlock/v1/deployments.proto\x12\n" +
-	"airlock.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16airlock/v1/types.proto\"\xa1\n" +
+	"airlock.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x16airlock/v1/types.proto\"\xf5\n" +
 	"\n" +
 	"\x0eDeploymentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x15\n" +
@@ -918,7 +926,8 @@ const file_airlock_v1_deployments_proto_rawDesc = "" +
 	"\x10restart_required\x18\x1a \x01(\bR\x0frestartRequired\x12[\n" +
 	"\x17configuration_readiness\x18\x1b \x01(\v2\".airlock.v1.ConfigurationReadinessR\x16configurationReadiness\x129\n" +
 	"\x16unconfigured_env_count\x18\x1c \x01(\x03H\x02R\x14unconfiguredEnvCount\x88\x01\x01\x12A\n" +
-	"\x1dpending_candidate_revision_id\x18\x1d \x01(\tR\x1apendingCandidateRevisionIdB\n" +
+	"\x1dpending_candidate_revision_id\x18\x1d \x01(\tR\x1apendingCandidateRevisionId\x12R\n" +
+	"\x14browser_capabilities\x18\x1e \x01(\v2\x1f.airlock.v1.BrowserCapabilitiesR\x13browserCapabilitiesB\n" +
 	"\n" +
 	"\b_runningB\x17\n" +
 	"\x15_applied_env_revisionB\x19\n" +
@@ -989,23 +998,25 @@ var file_airlock_v1_deployments_proto_goTypes = []any{
 	(*ListDeploymentAgentRunsResponse)(nil), // 10: airlock.v1.ListDeploymentAgentRunsResponse
 	(*ContinueDeploymentAgentRequest)(nil),  // 11: airlock.v1.ContinueDeploymentAgentRequest
 	(AgentBuildDeploymentPhase)(0),          // 12: airlock.v1.AgentBuildDeploymentPhase
-	(*structpb.Value)(nil),                  // 13: google.protobuf.Value
-	(*structpb.Struct)(nil),                 // 14: google.protobuf.Struct
+	(*BrowserCapabilities)(nil),             // 13: airlock.v1.BrowserCapabilities
+	(*structpb.Value)(nil),                  // 14: google.protobuf.Value
+	(*structpb.Struct)(nil),                 // 15: google.protobuf.Struct
 }
 var file_airlock_v1_deployments_proto_depIdxs = []int32{
 	12, // 0: airlock.v1.DeploymentInfo.build_phase:type_name -> airlock.v1.AgentBuildDeploymentPhase
 	1,  // 1: airlock.v1.DeploymentInfo.configuration_readiness:type_name -> airlock.v1.ConfigurationReadiness
-	0,  // 2: airlock.v1.GetDeploymentResponse.deployment:type_name -> airlock.v1.DeploymentInfo
-	0,  // 3: airlock.v1.ListDeploymentsResponse.deployments:type_name -> airlock.v1.DeploymentInfo
-	13, // 4: airlock.v1.InvokeDeploymentToolRequest.input:type_name -> google.protobuf.Value
-	13, // 5: airlock.v1.StartDeploymentAgentRequest.input:type_name -> google.protobuf.Value
-	14, // 6: airlock.v1.DeploymentAgentRunResponse.run:type_name -> google.protobuf.Struct
-	14, // 7: airlock.v1.ListDeploymentAgentRunsResponse.runs:type_name -> google.protobuf.Struct
-	8,  // [8:8] is the sub-list for method output_type
-	8,  // [8:8] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	13, // 2: airlock.v1.DeploymentInfo.browser_capabilities:type_name -> airlock.v1.BrowserCapabilities
+	0,  // 3: airlock.v1.GetDeploymentResponse.deployment:type_name -> airlock.v1.DeploymentInfo
+	0,  // 4: airlock.v1.ListDeploymentsResponse.deployments:type_name -> airlock.v1.DeploymentInfo
+	14, // 5: airlock.v1.InvokeDeploymentToolRequest.input:type_name -> google.protobuf.Value
+	14, // 6: airlock.v1.StartDeploymentAgentRequest.input:type_name -> google.protobuf.Value
+	15, // 7: airlock.v1.DeploymentAgentRunResponse.run:type_name -> google.protobuf.Struct
+	15, // 8: airlock.v1.ListDeploymentAgentRunsResponse.runs:type_name -> google.protobuf.Struct
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_deployments_proto_init() }

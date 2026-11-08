@@ -46,6 +46,56 @@ agent.RegisterStaticAsset(&agentsdk.StaticAsset{
 
 ## WebUI integration
 
+### Application features
+
+Declare the features your application needs, independently of the host platform:
+
+```go
+agent := agentsdk.New(agentsdk.Config{
+    Description: "Camera and voice notes",
+    Capabilities: agentsdk.Capabilities{
+        Camera: true,
+        Microphone: true,
+    },
+})
+```
+
+The six supported boolean fields are `Microphone`, `Camera`, `Geolocation`,
+`DisplayCapture`, `Fullscreen`, and `ClipboardWrite`. Each defaults to false.
+The declaration is frozen with the canonical offline/runtime manifest as flat
+JSON fields under `capabilities`, for example
+`"capabilities":{"camera":true,"microphone":true}`. Names describe application
+requirements, not a particular permission API. A platform may not support a
+declared feature; this API does not provide a native implementation.
+
+Airlock's web adapter maps these declarations to Permissions Policy. It derives
+the selected production or personal-preview response policy and exact-origin
+iframe delegation from that runtime's current declaration. HTML, URL parameters,
+and WebUI messages cannot request additional eligibility. App settings display the
+selected runtime's declarations; they are not permission-grant controls.
+
+A declaration is eligibility, not permission. Call browser APIs from appropriate
+user actions, handle permission denial, unsupported devices/browsers, and API errors,
+and use a secure context. Camera/microphone still require browser consent; display
+capture requires an explicit user gesture and browser chooser. Fullscreen and
+clipboard writes remain subject to browser gesture rules. Ordinary user-initiated
+paste does not require `clipboard-read`, which is not a supported declaration.
+
+Feature declarations require a host that supports this manifest extension. Strict
+hosts reject unknown declaration fields; do not remove the declaration to bypass
+an incompatibility error. The optional extension uses `airlock.app-runtime.v4`;
+apps without declarations omit the field. Upgrade the host and rebuild the app
+when its SDK declaration is unsupported.
+Locally built apps emitting a nested `capabilities.browser` object require a
+rebuild with the host's SDK. The host rejects that shape, including stored runtime
+manifests, with a rebuild diagnostic rather than discarding declared features.
+
+An ancestor policy can only restrict access: Telegram/MAX webviews, their enclosing
+pages, or an external reverse proxy may deny a feature that Airlock delegates.
+Airlock cannot override those restrictions. Operators must remove conflicting
+`Permissions-Policy` directives such as `microphone=()` from their external proxy
+for supported app routes; never replace them with wildcard feature grants.
+
 Include `@agentsdk.WebUI(agentsdk.WebUIOptions{})` once in each full-page templ
 layout head, not in partial responses. The scaffold includes it. It renders an
 external SDK script and presentation stylesheet, with typed options encoded as HTML data attributes and no

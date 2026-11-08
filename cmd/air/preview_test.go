@@ -18,6 +18,20 @@ import (
 )
 
 const previewRuntimeID = "22222222-2222-2222-2222-222222222222"
+
+func TestCandidateAcknowledgmentSyntax(t *testing.T) {
+	id, fingerprint := "11111111-1111-4111-8111-111111111111", strings.Repeat("a", 64)
+	header, err := candidateConfigHeader([]string{"connection:crm=" + id + "@" + fingerprint}, nil)
+	if err != nil || !strings.Contains(header, `"resourceId":"`+id+`"`) || !strings.Contains(header, `"acknowledgedFingerprint":"`+fingerprint+`"`) {
+		t.Fatal("candidate acknowledgment did not survive typed serialization", err)
+	}
+	for _, suffix := range []string{"@", "@short", "@" + strings.Repeat("A", 64)} {
+		if _, err := candidateConfigHeader([]string{"crm=" + id + suffix}, nil); err == nil {
+			t.Fatal("invalid acknowledgment accepted", suffix)
+		}
+	}
+}
+
 const previewOwnerID = "55555555-5555-5555-5555-555555555555"
 const previewTaskID = "66666666-6666-6666-6666-666666666666"
 const previewWorkspaceID = "77777777-7777-7777-7777-777777777777"

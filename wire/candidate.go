@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"github.com/google/uuid"
@@ -17,10 +18,11 @@ type CandidateConfig struct {
 	Selections []CandidateSelection `json:"selections"`
 }
 type CandidateSelection struct {
-	Type        string `json:"type"`
-	Slug        string `json:"slug"`
-	ResourceID  string `json:"resourceId,omitempty"`
-	FixtureName string `json:"fixtureName,omitempty"`
+	Type                    string `json:"type"`
+	Slug                    string `json:"slug"`
+	ResourceID              string `json:"resourceId,omitempty"`
+	FixtureName             string `json:"fixtureName,omitempty"`
+	AcknowledgedFingerprint string `json:"acknowledgedFingerprint,omitempty"`
 }
 
 var candidateName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
@@ -42,6 +44,12 @@ func (c CandidateConfig) HeaderValue() (string, error) {
 			id, err := uuid.Parse(s.ResourceID)
 			if err != nil || id == uuid.Nil || id.String() != s.ResourceID {
 				return "", errors.New("candidate resource ID must be canonical non-nil UUID")
+			}
+		}
+		if s.AcknowledgedFingerprint != "" {
+			decoded, err := hex.DecodeString(s.AcknowledgedFingerprint)
+			if s.ResourceID == "" || err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != s.AcknowledgedFingerprint {
+				return "", errors.New("resource acknowledgment requires a canonical SHA-256 fingerprint and resource selection")
 			}
 		}
 	}

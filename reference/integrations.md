@@ -20,8 +20,10 @@ human display name or a provider name. `/UUID` selects the stable resource ID;
 UUID-shaped selectors always mean IDs. Bare names/UUIDs are rejected, never
 guessed. Names such as `/preview` and `/production` are ordinary global names.
 The list contains only resources visible under your ownership/grants,
-not every user's resources. Inspect requires view access; calls require live use
-access. Credentials stay in Airlock's shared resource transport. HTTP requests
+not every user's resources. Inspect requires Read (`view`); calls require Bind
+(`use`) and, for ordinary system runtime, the enabled direct-runtime setting. Manage does not imply
+Bind, and ownership cannot bypass the system-runtime switch. Credentials stay
+in Airlock's shared resource transport. HTTP requests
 default to GET. These are real provider calls; only perform the authorized
 operation, and never repeat an interrupted call just to discover its outcome.
 
@@ -34,6 +36,15 @@ and selected/default remote; `--remote <name>` selects another saved remote.
 Hosted remotes must match the injected host; credentials cannot be forwarded to
 an arbitrary `--url`. Global addresses reject `--agent` and `--target`.
 Build-bound codegen integration tokens cannot use direct resources.
+
+Hosted developer calls use a separate durable approval for the exact resource,
+user, credential origin and developer workspace. Approval lasts one hour from
+the decision. Matching calls reuse it silently without extending expiry.
+Denial, expiry or revocation requires a fresh human instruction. Approval never
+replays the blocked shell command; inspect state before issuing a fresh command.
+The ordinary runtime switch does not gate that developer approval or its use.
+An app execution approval does not authorize direct resources. Do not create an
+app binding or change resource settings to evade a direct-use restriction.
 
 ## Verify an app's declared slots
 
@@ -78,6 +89,24 @@ go tool air resources unbind preview/spotify
 
 Binding compatibility and live resource use are checked by the host.
 `resources bind` changes the selected deployed target, not a pending source candidate.
+
+Inspect the server's matching and other candidates before choosing a resource:
+
+```bash
+go tool air resources candidates preview/spotify --type connection
+go tool air resources candidates preview/spotify --type connection --revision CANDIDATE_UUID
+```
+
+Configuration differences require explicit human confirmation of the current
+server-generated `compatibility.overrideFingerprint`. Submit it with
+`resources bind preview/spotify --resource /personal_spotify --acknowledge FINGERPRINT`
+or select a pending resource with `--bind connection:spotify=UUID@FINGERPRINT`.
+The fingerprint belongs to that exact resource, declaration and deployment;
+preview acknowledgment cannot authorize production. Relevant configuration
+changes require reconfirmation. Type, authentication availability, required OAuth
+scopes and live permissions cannot be overridden. Acknowledged differences remain
+visible warnings. A no-auth declaration uses its declared endpoint without a
+resource unless an explicit resource, fixture or unbound selection exists.
 Missing, incompatible or ambiguous resources require user input, not guessing or borrowing
 another user's connection. Production live binding edits remain protected
 configuration administration, outside a production execution grant in hosted

@@ -7,6 +7,9 @@ completion, durable permission checkpoints, and conversation serialization.
 Required input:
 
 - `Model stream.Model` and explicit `ModelLimits session.ModelLimits`.
+- `ContextLimit` optionally triggers automatic compaction at a total context
+  token count, independently of model capacities. Zero uses only the model's
+  compaction budget; negative values are invalid.
 - `SessionStore session.SessionStore`, scoped to the conversation.
 - `MaxSteps`, a positive run budget.
 - `Sink eventstream.Sink`, receiving Sol text, tool, permission, compaction, and
