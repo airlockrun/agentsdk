@@ -21,18 +21,77 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type TargetBindingInfo_SourceKind int32
+
+const (
+	TargetBindingInfo_UNSPECIFIED TargetBindingInfo_SourceKind = 0
+	TargetBindingInfo_DECLARED    TargetBindingInfo_SourceKind = 1 // automatic no-auth declared endpoint, no stored override
+	TargetBindingInfo_RESOURCE    TargetBindingInfo_SourceKind = 2
+	TargetBindingInfo_FIXTURE     TargetBindingInfo_SourceKind = 3
+	TargetBindingInfo_UNBOUND     TargetBindingInfo_SourceKind = 4 // explicit blocked-unbound override or missing required binding
+)
+
+// Enum value maps for TargetBindingInfo_SourceKind.
+var (
+	TargetBindingInfo_SourceKind_name = map[int32]string{
+		0: "UNSPECIFIED",
+		1: "DECLARED",
+		2: "RESOURCE",
+		3: "FIXTURE",
+		4: "UNBOUND",
+	}
+	TargetBindingInfo_SourceKind_value = map[string]int32{
+		"UNSPECIFIED": 0,
+		"DECLARED":    1,
+		"RESOURCE":    2,
+		"FIXTURE":     3,
+		"UNBOUND":     4,
+	}
+)
+
+func (x TargetBindingInfo_SourceKind) Enum() *TargetBindingInfo_SourceKind {
+	p := new(TargetBindingInfo_SourceKind)
+	*p = x
+	return p
+}
+
+func (x TargetBindingInfo_SourceKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TargetBindingInfo_SourceKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_airlock_v1_bindings_proto_enumTypes[0].Descriptor()
+}
+
+func (TargetBindingInfo_SourceKind) Type() protoreflect.EnumType {
+	return &file_airlock_v1_bindings_proto_enumTypes[0]
+}
+
+func (x TargetBindingInfo_SourceKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TargetBindingInfo_SourceKind.Descriptor instead.
+func (TargetBindingInfo_SourceKind) EnumDescriptor() ([]byte, []int) {
+	return file_airlock_v1_bindings_proto_rawDescGZIP(), []int{0, 0}
+}
+
 type TargetBindingInfo struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Type             string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
-	Slug             string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	BindingMode      string                 `protobuf:"bytes,3,opt,name=binding_mode,json=bindingMode,proto3" json:"binding_mode,omitempty"`
-	Selection        string                 `protobuf:"bytes,4,opt,name=selection,proto3" json:"selection,omitempty"`
-	ResourceId       string                 `protobuf:"bytes,5,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
-	ResourceVisible  bool                   `protobuf:"varint,6,opt,name=resource_visible,json=resourceVisible,proto3" json:"resource_visible,omitempty"`
-	FixtureName      string                 `protobuf:"bytes,7,opt,name=fixture_name,json=fixtureName,proto3" json:"fixture_name,omitempty"`
-	SourceRevisionId string                 `protobuf:"bytes,8,opt,name=source_revision_id,json=sourceRevisionId,proto3" json:"source_revision_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state                protoimpl.MessageState           `protogen:"open.v1"`
+	Type                 string                           `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Slug                 string                           `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	BindingMode          string                           `protobuf:"bytes,3,opt,name=binding_mode,json=bindingMode,proto3" json:"binding_mode,omitempty"`
+	Selection            string                           `protobuf:"bytes,4,opt,name=selection,proto3" json:"selection,omitempty"` // declared | resource | fixture | unbound
+	ResourceId           string                           `protobuf:"bytes,5,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	ResourceVisible      bool                             `protobuf:"varint,6,opt,name=resource_visible,json=resourceVisible,proto3" json:"resource_visible,omitempty"`
+	FixtureName          string                           `protobuf:"bytes,7,opt,name=fixture_name,json=fixtureName,proto3" json:"fixture_name,omitempty"`
+	SourceRevisionId     string                           `protobuf:"bytes,8,opt,name=source_revision_id,json=sourceRevisionId,proto3" json:"source_revision_id,omitempty"`
+	Compatibility        *ResourceConfigurationComparison `protobuf:"bytes,9,opt,name=compatibility,proto3" json:"compatibility,omitempty"`
+	OverrideAcknowledged bool                             `protobuf:"varint,10,opt,name=override_acknowledged,json=overrideAcknowledged,proto3" json:"override_acknowledged,omitempty"`
+	OverrideStale        bool                             `protobuf:"varint,11,opt,name=override_stale,json=overrideStale,proto3" json:"override_stale,omitempty"`
+	SourceKind           TargetBindingInfo_SourceKind     `protobuf:"varint,12,opt,name=source_kind,json=sourceKind,proto3,enum=airlock.v1.TargetBindingInfo_SourceKind" json:"source_kind,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *TargetBindingInfo) Reset() {
@@ -121,13 +180,45 @@ func (x *TargetBindingInfo) GetSourceRevisionId() string {
 	return ""
 }
 
+func (x *TargetBindingInfo) GetCompatibility() *ResourceConfigurationComparison {
+	if x != nil {
+		return x.Compatibility
+	}
+	return nil
+}
+
+func (x *TargetBindingInfo) GetOverrideAcknowledged() bool {
+	if x != nil {
+		return x.OverrideAcknowledged
+	}
+	return false
+}
+
+func (x *TargetBindingInfo) GetOverrideStale() bool {
+	if x != nil {
+		return x.OverrideStale
+	}
+	return false
+}
+
+func (x *TargetBindingInfo) GetSourceKind() TargetBindingInfo_SourceKind {
+	if x != nil {
+		return x.SourceKind
+	}
+	return TargetBindingInfo_UNSPECIFIED
+}
+
 type ListTargetBindingsResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	RuntimeAgentId string                 `protobuf:"bytes,1,opt,name=runtime_agent_id,json=runtimeAgentId,proto3" json:"runtime_agent_id,omitempty"`
 	ConfigRevision int64                  `protobuf:"varint,2,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
 	Bindings       []*TargetBindingInfo   `protobuf:"bytes,3,rep,name=bindings,proto3" json:"bindings,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Included only when include_fixtures=true for a personal preview.
+	// Names and slots come from its server-resolved immutable source.
+	Fixtures                []*PreviewFixtureOption `protobuf:"bytes,4,rep,name=fixtures,proto3" json:"fixtures,omitempty"`
+	FixtureSourceRevisionId string                  `protobuf:"bytes,5,opt,name=fixture_source_revision_id,json=fixtureSourceRevisionId,proto3" json:"fixture_source_revision_id,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *ListTargetBindingsResponse) Reset() {
@@ -181,18 +272,85 @@ func (x *ListTargetBindingsResponse) GetBindings() []*TargetBindingInfo {
 	return nil
 }
 
+func (x *ListTargetBindingsResponse) GetFixtures() []*PreviewFixtureOption {
+	if x != nil {
+		return x.Fixtures
+	}
+	return nil
+}
+
+func (x *ListTargetBindingsResponse) GetFixtureSourceRevisionId() string {
+	if x != nil {
+		return x.FixtureSourceRevisionId
+	}
+	return ""
+}
+
+type PreviewFixtureOption struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Slot          string                 `protobuf:"bytes,2,opt,name=slot,proto3" json:"slot,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PreviewFixtureOption) Reset() {
+	*x = PreviewFixtureOption{}
+	mi := &file_airlock_v1_bindings_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PreviewFixtureOption) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PreviewFixtureOption) ProtoMessage() {}
+
+func (x *PreviewFixtureOption) ProtoReflect() protoreflect.Message {
+	mi := &file_airlock_v1_bindings_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PreviewFixtureOption.ProtoReflect.Descriptor instead.
+func (*PreviewFixtureOption) Descriptor() ([]byte, []int) {
+	return file_airlock_v1_bindings_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *PreviewFixtureOption) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *PreviewFixtureOption) GetSlot() string {
+	if x != nil {
+		return x.Slot
+	}
+	return ""
+}
+
 type SetTargetBindingRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	ResourceId       string                 `protobuf:"bytes,1,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
-	FixtureName      string                 `protobuf:"bytes,2,opt,name=fixture_name,json=fixtureName,proto3" json:"fixture_name,omitempty"`
-	SourceRevisionId string                 `protobuf:"bytes,3,opt,name=source_revision_id,json=sourceRevisionId,proto3" json:"source_revision_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	ResourceId              string                 `protobuf:"bytes,1,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	FixtureName             string                 `protobuf:"bytes,2,opt,name=fixture_name,json=fixtureName,proto3" json:"fixture_name,omitempty"`
+	SourceRevisionId        string                 `protobuf:"bytes,3,opt,name=source_revision_id,json=sourceRevisionId,proto3" json:"source_revision_id,omitempty"`
+	AcknowledgedFingerprint string                 `protobuf:"bytes,4,opt,name=acknowledged_fingerprint,json=acknowledgedFingerprint,proto3" json:"acknowledged_fingerprint,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *SetTargetBindingRequest) Reset() {
 	*x = SetTargetBindingRequest{}
-	mi := &file_airlock_v1_bindings_proto_msgTypes[2]
+	mi := &file_airlock_v1_bindings_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -204,7 +362,7 @@ func (x *SetTargetBindingRequest) String() string {
 func (*SetTargetBindingRequest) ProtoMessage() {}
 
 func (x *SetTargetBindingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_airlock_v1_bindings_proto_msgTypes[2]
+	mi := &file_airlock_v1_bindings_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -217,7 +375,7 @@ func (x *SetTargetBindingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetTargetBindingRequest.ProtoReflect.Descriptor instead.
 func (*SetTargetBindingRequest) Descriptor() ([]byte, []int) {
-	return file_airlock_v1_bindings_proto_rawDescGZIP(), []int{2}
+	return file_airlock_v1_bindings_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SetTargetBindingRequest) GetResourceId() string {
@@ -241,12 +399,19 @@ func (x *SetTargetBindingRequest) GetSourceRevisionId() string {
 	return ""
 }
 
+func (x *SetTargetBindingRequest) GetAcknowledgedFingerprint() string {
+	if x != nil {
+		return x.AcknowledgedFingerprint
+	}
+	return ""
+}
+
 var File_airlock_v1_bindings_proto protoreflect.FileDescriptor
 
 const file_airlock_v1_bindings_proto_rawDesc = "" +
 	"\n" +
 	"\x19airlock/v1/bindings.proto\x12\n" +
-	"airlock.v1\"\x99\x02\n" +
+	"airlock.v1\x1a\x1aairlock/v1/resources.proto\"\xe8\x04\n" +
 	"\x11TargetBindingInfo\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12!\n" +
@@ -256,16 +421,35 @@ const file_airlock_v1_bindings_proto_rawDesc = "" +
 	"resourceId\x12)\n" +
 	"\x10resource_visible\x18\x06 \x01(\bR\x0fresourceVisible\x12!\n" +
 	"\ffixture_name\x18\a \x01(\tR\vfixtureName\x12,\n" +
-	"\x12source_revision_id\x18\b \x01(\tR\x10sourceRevisionId\"\xaa\x01\n" +
+	"\x12source_revision_id\x18\b \x01(\tR\x10sourceRevisionId\x12Q\n" +
+	"\rcompatibility\x18\t \x01(\v2+.airlock.v1.ResourceConfigurationComparisonR\rcompatibility\x123\n" +
+	"\x15override_acknowledged\x18\n" +
+	" \x01(\bR\x14overrideAcknowledged\x12%\n" +
+	"\x0eoverride_stale\x18\v \x01(\bR\roverrideStale\x12I\n" +
+	"\vsource_kind\x18\f \x01(\x0e2(.airlock.v1.TargetBindingInfo.SourceKindR\n" +
+	"sourceKind\"S\n" +
+	"\n" +
+	"SourceKind\x12\x0f\n" +
+	"\vUNSPECIFIED\x10\x00\x12\f\n" +
+	"\bDECLARED\x10\x01\x12\f\n" +
+	"\bRESOURCE\x10\x02\x12\v\n" +
+	"\aFIXTURE\x10\x03\x12\v\n" +
+	"\aUNBOUND\x10\x04\"\xa5\x02\n" +
 	"\x1aListTargetBindingsResponse\x12(\n" +
 	"\x10runtime_agent_id\x18\x01 \x01(\tR\x0eruntimeAgentId\x12'\n" +
 	"\x0fconfig_revision\x18\x02 \x01(\x03R\x0econfigRevision\x129\n" +
-	"\bbindings\x18\x03 \x03(\v2\x1d.airlock.v1.TargetBindingInfoR\bbindings\"\x8b\x01\n" +
+	"\bbindings\x18\x03 \x03(\v2\x1d.airlock.v1.TargetBindingInfoR\bbindings\x12<\n" +
+	"\bfixtures\x18\x04 \x03(\v2 .airlock.v1.PreviewFixtureOptionR\bfixtures\x12;\n" +
+	"\x1afixture_source_revision_id\x18\x05 \x01(\tR\x17fixtureSourceRevisionId\">\n" +
+	"\x14PreviewFixtureOption\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04slot\x18\x02 \x01(\tR\x04slot\"\xc6\x01\n" +
 	"\x17SetTargetBindingRequest\x12\x1f\n" +
 	"\vresource_id\x18\x01 \x01(\tR\n" +
 	"resourceId\x12!\n" +
 	"\ffixture_name\x18\x02 \x01(\tR\vfixtureName\x12,\n" +
-	"\x12source_revision_id\x18\x03 \x01(\tR\x10sourceRevisionIdB8Z6github.com/airlockrun/airlock/gen/airlock/v1;airlockv1b\x06proto3"
+	"\x12source_revision_id\x18\x03 \x01(\tR\x10sourceRevisionId\x129\n" +
+	"\x18acknowledged_fingerprint\x18\x04 \x01(\tR\x17acknowledgedFingerprintB8Z6github.com/airlockrun/airlock/gen/airlock/v1;airlockv1b\x06proto3"
 
 var (
 	file_airlock_v1_bindings_proto_rawDescOnce sync.Once
@@ -279,19 +463,26 @@ func file_airlock_v1_bindings_proto_rawDescGZIP() []byte {
 	return file_airlock_v1_bindings_proto_rawDescData
 }
 
-var file_airlock_v1_bindings_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_airlock_v1_bindings_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_airlock_v1_bindings_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_airlock_v1_bindings_proto_goTypes = []any{
-	(*TargetBindingInfo)(nil),          // 0: airlock.v1.TargetBindingInfo
-	(*ListTargetBindingsResponse)(nil), // 1: airlock.v1.ListTargetBindingsResponse
-	(*SetTargetBindingRequest)(nil),    // 2: airlock.v1.SetTargetBindingRequest
+	(TargetBindingInfo_SourceKind)(0),       // 0: airlock.v1.TargetBindingInfo.SourceKind
+	(*TargetBindingInfo)(nil),               // 1: airlock.v1.TargetBindingInfo
+	(*ListTargetBindingsResponse)(nil),      // 2: airlock.v1.ListTargetBindingsResponse
+	(*PreviewFixtureOption)(nil),            // 3: airlock.v1.PreviewFixtureOption
+	(*SetTargetBindingRequest)(nil),         // 4: airlock.v1.SetTargetBindingRequest
+	(*ResourceConfigurationComparison)(nil), // 5: airlock.v1.ResourceConfigurationComparison
 }
 var file_airlock_v1_bindings_proto_depIdxs = []int32{
-	0, // 0: airlock.v1.ListTargetBindingsResponse.bindings:type_name -> airlock.v1.TargetBindingInfo
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	5, // 0: airlock.v1.TargetBindingInfo.compatibility:type_name -> airlock.v1.ResourceConfigurationComparison
+	0, // 1: airlock.v1.TargetBindingInfo.source_kind:type_name -> airlock.v1.TargetBindingInfo.SourceKind
+	1, // 2: airlock.v1.ListTargetBindingsResponse.bindings:type_name -> airlock.v1.TargetBindingInfo
+	3, // 3: airlock.v1.ListTargetBindingsResponse.fixtures:type_name -> airlock.v1.PreviewFixtureOption
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_bindings_proto_init() }
@@ -299,18 +490,20 @@ func file_airlock_v1_bindings_proto_init() {
 	if File_airlock_v1_bindings_proto != nil {
 		return
 	}
+	file_airlock_v1_resources_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_airlock_v1_bindings_proto_rawDesc), len(file_airlock_v1_bindings_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   3,
+			NumEnums:      1,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_airlock_v1_bindings_proto_goTypes,
 		DependencyIndexes: file_airlock_v1_bindings_proto_depIdxs,
+		EnumInfos:         file_airlock_v1_bindings_proto_enumTypes,
 		MessageInfos:      file_airlock_v1_bindings_proto_msgTypes,
 	}.Build()
 	File_airlock_v1_bindings_proto = out.File

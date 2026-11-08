@@ -15,6 +15,7 @@ func TestResourceBindingCLI(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Chdir(t.TempDir())
 	const resourceID = "11111111-1111-4111-8111-111111111111"
+	acknowledgment := strings.Repeat("a", 64)
 	for _, typ := range []string{"connection", "mcp_server"} {
 		t.Run(typ, func(t *testing.T) {
 			bound := false
@@ -33,11 +34,14 @@ func TestResourceBindingCLI(t *testing.T) {
 					fmt.Fprintf(w, `{"runtimeAgentId":%q,"bindings":[{"type":"connection","slug":"provider_slot"},{"type":"mcp_server","slug":"provider_slot"}]}`, testBuildAgentID)
 				case "GET /api/v1/resources/resolve/production":
 					fmt.Fprintf(w, `{"id":%q,"type":%q}`, resourceID, typ)
+				case "GET " + root + "/bindings/" + typ + "/provider_slot/candidates", "GET " + root + "/candidates/" + resourceID + "/resources/" + typ + "/next_slot":
+					fmt.Fprintf(w, `{"candidates":[{"resourceId":%q,"eligible":true,"canOverride":true,"compatibility":{"matching":false,"overrideFingerprint":%q,"differences":[{"field":"base_url","actualJson":"\"https://selected.example\""}],"detailsVisible":true}}]}`, resourceID, acknowledgment)
 				case "PUT " + root + "/bindings/" + typ + "/provider_slot":
 					var input struct {
-						ResourceID string `json:"resourceId"`
+						ResourceID              string `json:"resourceId"`
+						AcknowledgedFingerprint string `json:"acknowledgedFingerprint"`
 					}
-					if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.ResourceID != resourceID {
+					if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.ResourceID != resourceID || input.AcknowledgedFingerprint != acknowledgment {
 						t.Errorf("binding payload = %+v, error = %v", input, err)
 					}
 					bound = true
@@ -58,11 +62,19 @@ func TestResourceBindingCLI(t *testing.T) {
 			if bound {
 				t.Fatal("ambiguous slot mutated binding")
 			}
-			if err := cmdResources(append(args, "--type", typ)); err != nil {
+			if err := cmdResources(append(args, "--type", typ, "--acknowledge", acknowledgment)); err != nil {
 				t.Fatal(err)
 			}
 			if !bound {
 				t.Fatal("binding PUT not sent")
+			}
+			for _, candidateArgs := range [][]string{
+				{"candidates", "production/provider_slot", "--type", typ, "--url", server.URL, "--agent", testBuildAgentID},
+				{"candidates", "production/next_slot", "--revision", resourceID, "--type", typ, "--url", server.URL, "--agent", testBuildAgentID},
+			} {
+				if err := cmdResources(candidateArgs); err != nil {
+					t.Fatal("typed candidate discovery failed", err)
+				}
 			}
 		})
 	}

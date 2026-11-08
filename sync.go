@@ -221,6 +221,7 @@ func (a *Agent) buildManifest() wire.AgentManifest {
 	}
 
 	return wire.AgentManifest{
+		Capabilities:      a.capabilityManifest(),
 		SuggestedPrompts:  a.suggestedPromptManifest(),
 		RuntimeProtocol:   wire.AppRuntimeProtocol,
 		EnvConfigProtocol: wire.EnvConfigProtocol,

@@ -7,6 +7,24 @@ complete final migration from earlier stable and prerelease SDKs. Apply only the
 instructions relevant to the application's source. An application already on
 v0.8.1 receives no instructions when rebuilding against v0.8.1.
 
+## v0.8.3
+
+Applications using microphone, camera, geolocation, display capture, fullscreen,
+or clipboard writes declare the required features in `agentsdk.Config.Capabilities`
+using `agentsdk.Capabilities`. Set only the features the application needs.
+Declarations establish eligibility, not browser permission; retain user gestures,
+consent and denial handling. A host supporting the flat `capabilities` manifest
+extension under `airlock.app-runtime.v4` is required. Rebuild the application
+with the compatible host SDK. See [`reference/html-ui.md`](reference/html-ui.md).
+
+Resource selections with server-reported compatibility differences require the
+exact acknowledgment fingerprint. CLI scripts use `air resources candidates`
+to inspect choices, then `air resources bind ... --acknowledge FINGERPRINT`, or
+candidate `--bind [type:]slot=UUID@FINGERPRINT`. Native callers set
+`wire.CandidateSelection.AcknowledgedFingerprint` to that reported value. Do not
+invent fingerprints or acknowledge a changed resource without inspection. See
+[`reference/integrations.md`](reference/integrations.md).
+
 ## v0.8.1
 
 Environment handles read an immutable process-start configuration snapshot.

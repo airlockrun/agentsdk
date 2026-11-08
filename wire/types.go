@@ -306,6 +306,7 @@ type MCPResourceContent struct {
 // except Instructions, StartupHooks, and SuggestedPrompts, whose registration
 // order is semantic.
 type AgentManifest struct {
+	Capabilities      *AppCapabilities   `json:"capabilities,omitempty"`
 	EnvConfigProtocol string             `json:"envConfigProtocol"`
 	SuggestedPrompts  []SuggestedPrompt  `json:"suggestedPrompts,omitempty"`
 	RuntimeProtocol   string             `json:"runtimeProtocol"`

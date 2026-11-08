@@ -251,6 +251,14 @@ execution in the hook context; use jobs for durable work.
 `AIRLOCK_AGENT_MODE=manifest` emits it offline; normally `Serve` freezes,
 starts, migrates, syncs, runs hooks, and serves.
 
+`Config.Capabilities` declares default-deny application feature requirements
+with typed booleans `Microphone`, `Camera`, `Geolocation`, `DisplayCapture`,
+`Fullscreen`, and `ClipboardWrite`. These platform-neutral declarations do not
+grant permission or guarantee platform support. The web adapter maps them to
+Permissions Policy; browser consent and user gestures remain required. See
+[application features](reference/html-ui.md#application-features) for the
+configuration example and host/embedding requirements.
+
 `Config.Icon` accepts one emoji today, including multi-codepoint sequences;
 image URLs, HTML, and icon-library names are not supported. Its generic name
 describes app identity independently of the supported representation. The

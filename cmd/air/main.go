@@ -203,7 +203,7 @@ Deploy flags:
   --target <name>             deployment: production (default), saved preview, or named target
   --wait                     wait for the build and actual running app
   --timeout <duration>        bound observation (default 10m)
-  --bind [type:]slot=<UUID>   attach a server-stored candidate resource selection
+  --bind [type:]slot=<UUID>[@<fingerprint>]   select a resource; acknowledge exact server-reported differences
   --fixture slot=<name>      attach a source-owned candidate HTTP fixture selection
   --create                   create a draft agent before uploading source
   --slug <slug>              agent slug for --create (derived from --name or dir if omitted)

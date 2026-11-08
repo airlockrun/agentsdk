@@ -266,13 +266,14 @@ func (x *DeploymentTestRunResponse) GetTest() *DeploymentTestRunInfo {
 }
 
 type CandidateSelection struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Type          string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
-	Slug          string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
-	ResourceId    string                 `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
-	FixtureName   string                 `protobuf:"bytes,4,opt,name=fixture_name,json=fixtureName,proto3" json:"fixture_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	Type                    string                 `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
+	Slug                    string                 `protobuf:"bytes,2,opt,name=slug,proto3" json:"slug,omitempty"`
+	ResourceId              string                 `protobuf:"bytes,3,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	FixtureName             string                 `protobuf:"bytes,4,opt,name=fixture_name,json=fixtureName,proto3" json:"fixture_name,omitempty"`
+	AcknowledgedFingerprint string                 `protobuf:"bytes,5,opt,name=acknowledged_fingerprint,json=acknowledgedFingerprint,proto3" json:"acknowledged_fingerprint,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *CandidateSelection) Reset() {
@@ -329,6 +330,13 @@ func (x *CandidateSelection) GetResourceId() string {
 func (x *CandidateSelection) GetFixtureName() string {
 	if x != nil {
 		return x.FixtureName
+	}
+	return ""
+}
+
+func (x *CandidateSelection) GetAcknowledgedFingerprint() string {
+	if x != nil {
+		return x.AcknowledgedFingerprint
 	}
 	return ""
 }
@@ -471,13 +479,14 @@ const file_airlock_v1_testing_proto_rawDesc = "" +
 	"\texit_code\x18\f \x01(\x05R\bexitCode\x12\x17\n" +
 	"\atask_id\x18\r \x01(\tR\x06taskId\"R\n" +
 	"\x19DeploymentTestRunResponse\x125\n" +
-	"\x04test\x18\x01 \x01(\v2!.airlock.v1.DeploymentTestRunInfoR\x04test\"\x80\x01\n" +
+	"\x04test\x18\x01 \x01(\v2!.airlock.v1.DeploymentTestRunInfoR\x04test\"\xbb\x01\n" +
 	"\x12CandidateSelection\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x1f\n" +
 	"\vresource_id\x18\x03 \x01(\tR\n" +
 	"resourceId\x12!\n" +
-	"\ffixture_name\x18\x04 \x01(\tR\vfixtureName\"b\n" +
+	"\ffixture_name\x18\x04 \x01(\tR\vfixtureName\x129\n" +
+	"\x18acknowledged_fingerprint\x18\x05 \x01(\tR\x17acknowledgedFingerprint\"b\n" +
 	" SetCandidateConfigurationRequest\x12>\n" +
 	"\n" +
 	"selections\x18\x01 \x03(\v2\x1e.airlock.v1.CandidateSelectionR\n" +

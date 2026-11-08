@@ -17,7 +17,7 @@ import (
 // require app+target; neither operation establishes a developer session.
 func cmdResources(args []string) error {
 	if len(args) == 0 {
-		return errors.New("resources requires list, inspect, request, mcp-tools, mcp-call, mcp-probe, bindings, bind, fixture or unbind")
+		return errors.New("resources requires list, inspect, request, mcp-tools, mcp-call, mcp-probe, bindings, candidates, bind, fixture or unbind")
 	}
 	command := args[0]
 	if command == "mcp-probe" {
@@ -26,15 +26,15 @@ func cmdResources(args []string) error {
 		}
 		return probeMCP(args[1])
 	}
-	resource, fixture, revision, data, method, path, tool := "", "", "", "", "GET", "", ""
+	resource, fixture, revision, data, method, path, tool, acknowledgment := "", "", "", "", "GET", "", "", ""
 	typ := ""
 	headers := map[string]string{}
 	var targetArgs []string
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--resource", "--fixture", "--revision", "--data", "--method", "--path", "--tool", "--type", "--header":
+		case "--resource", "--fixture", "--revision", "--data", "--method", "--path", "--tool", "--type", "--header", "--acknowledge":
 			key := args[i]
-			allowed := key == "--type" || key == "--resource" && command == "bind" || (key == "--fixture" || key == "--revision") && command == "fixture" || key == "--data" && (command == "request" || command == "mcp-call") || (key == "--method" || key == "--path" || key == "--header") && command == "request" || key == "--tool" && command == "mcp-call"
+			allowed := key == "--type" || (key == "--resource" || key == "--acknowledge") && command == "bind" || (key == "--fixture" || key == "--revision") && command == "fixture" || key == "--revision" && command == "candidates" || key == "--data" && (command == "request" || command == "mcp-call") || (key == "--method" || key == "--path" || key == "--header") && command == "request" || key == "--tool" && command == "mcp-call"
 			if !allowed {
 				return fmt.Errorf("%s is not supported by resources %s; pending candidate selections use preview/deploy --bind", key, command)
 			}
@@ -53,6 +53,8 @@ func cmdResources(args []string) error {
 				typ = args[i]
 			case "--resource":
 				resource = args[i]
+			case "--acknowledge":
+				acknowledgment = args[i]
 			case "--fixture":
 				fixture = args[i]
 			case "--revision":
@@ -70,7 +72,7 @@ func cmdResources(args []string) error {
 			targetArgs = append(targetArgs, args[i])
 		}
 	}
-	isBinding := command == "bindings" || command == "bind" || command == "fixture" || command == "unbind"
+	isBinding := command == "bindings" || command == "candidates" || command == "bind" || command == "fixture" || command == "unbind"
 	f, positional, err := parseSelectionFlags(targetArgs)
 	if err != nil {
 		return err
@@ -140,6 +142,26 @@ func cmdResources(args []string) error {
 			}
 			return writeProtoJSON(&response)
 		}
+		if command == "candidates" {
+			var endpoint string
+			if revision != "" {
+				if !deployUUIDRe.MatchString(revision) || (typ != "connection" && typ != "mcp_server") {
+					return errors.New("candidate resources require --revision UUID and --type connection|mcp_server")
+				}
+				endpoint = s.path("/candidates/" + revision + "/resources/" + typ + "/" + url.PathEscape(address.slot))
+			} else {
+				slot, err := resourceSlot(ctx, s, address.slot, typ)
+				if err != nil {
+					return err
+				}
+				endpoint = s.path("/bindings/" + url.PathEscape(slot.Type) + "/" + url.PathEscape(address.slot) + "/candidates")
+			}
+			var response airlockv1.ListCandidatesResponse
+			if err := doProto(ctx, s.baseURL, http.MethodGet, endpoint, s.token, nil, &response); err != nil {
+				return err
+			}
+			return writeProtoJSON(&response)
+		}
 		if os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" && f.target == "production" {
 			return errors.New("production binding changes require an approved immutable deployment candidate; prepare selections with deploy --bind/--fixture, not a production execution grant")
 		}
@@ -162,7 +184,7 @@ func cmdResources(args []string) error {
 			if resolved.Type != slot.Type {
 				return errors.New("resource type does not match the declared slot")
 			}
-			input = &airlockv1.SetTargetBindingRequest{ResourceId: resolved.Id}
+			input = &airlockv1.SetTargetBindingRequest{ResourceId: resolved.Id, AcknowledgedFingerprint: acknowledgment}
 		case "fixture":
 			if fixture == "" || !deployUUIDRe.MatchString(revision) || resource != "" {
 				return errors.New("fixture requires --fixture <name> --revision <candidate UUID>, without --resource")

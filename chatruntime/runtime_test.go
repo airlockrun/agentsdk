@@ -175,6 +175,7 @@ func TestRunValidationPreventsWork(t *testing.T) {
 	}{
 		{"model", func(in *chatruntime.Input) { in.Model = nil }},
 		{"limits", func(in *chatruntime.Input) { in.ModelLimits = session.ModelLimits{} }},
+		{"negative context trigger", func(in *chatruntime.Input) { in.ContextLimit = -1 }},
 		{"store", func(in *chatruntime.Input) { in.SessionStore = nil }},
 		{"backend", func(in *chatruntime.Input) { in.Backend = nil }},
 		{"sink", func(in *chatruntime.Input) { in.Sink = nil }},

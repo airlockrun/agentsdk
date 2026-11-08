@@ -27,7 +27,8 @@ type Config struct {
 	// It accepts one emoji, including multi-codepoint sequences, not an image
 	// URL, HTML, or an icon-library name. Choose an emoji for the app's domain.
 	// Empty or invalid values leave the stored icon unchanged during sync.
-	Icon string
+	Icon         string
+	Capabilities Capabilities
 }
 
 type agentPhase uint8
@@ -46,13 +47,14 @@ type Agent struct {
 	phaseM sync.RWMutex
 	phase  agentPhase
 
-	agentID     string
-	apiURL      string
-	token       string
-	description string
-	icon        string
-	httpClient  *http.Client
-	client      *airlockClient
+	agentID      string
+	apiURL       string
+	token        string
+	description  string
+	icon         string
+	capabilities Capabilities
+	httpClient   *http.Client
+	client       *airlockClient
 
 	db               *AgentDB
 	uiChangeTopics   map[string]struct{}
@@ -187,6 +189,7 @@ func newAgentRegistrationState(cfg Config) *Agent {
 		phase:            agentDefining,
 		description:      cfg.Description,
 		icon:             cfg.Icon,
+		capabilities:     cfg.Capabilities,
 		sensitiveSet:     make(map[string]struct{}),
 		tools:            make(map[string]*registeredTool),
 		agentDefinitions: make(map[string]*registeredAgent),

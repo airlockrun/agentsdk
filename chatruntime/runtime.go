@@ -59,6 +59,9 @@ type Input struct {
 	AutoConfirm     bool
 	Redactor        func(string) string
 	ForceCompact    bool
+	// ContextLimit is an independent automatic-compaction trigger. Zero uses
+	// only ModelLimits; it does not disable model-capacity enforcement.
+	ContextLimit int
 	// JavaScriptPrelude defines host-authored convenience bindings inside each
 	// script. It carries no credentials and is not supplied by model input.
 	JavaScriptPrelude string
@@ -80,6 +83,9 @@ func Run(ctx context.Context, in Input) (result *sol.RunResult, err error) {
 	}
 	if err := in.ModelLimits.Validate(true); err != nil {
 		return nil, fmt.Errorf("chatruntime: %w", err)
+	}
+	if in.ContextLimit < 0 {
+		return nil, errors.New("chatruntime: ContextLimit must be nonnegative")
 	}
 	if !in.DirectTools && in.ExecutorFactory == nil {
 		return nil, errors.New("chatruntime: ExecutorFactory is required for JavaScript")
@@ -115,7 +121,7 @@ func Run(ctx context.Context, in Input) (result *sol.RunResult, err error) {
 		},
 		Model: in.Model, ModelLimits: in.ModelLimits, SessionStore: in.SessionStore,
 		Bus: b, Quiet: true, ToolCallExecutionMode: stream.ToolCallExecutionSync,
-		CompactionConfig: &session.CompactionConfig{Auto: true, Prune: true, PrunedMessage: func(info session.PrunedInfo) string {
+		CompactionConfig: &session.CompactionConfig{Auto: true, Prune: true, ContextLimit: in.ContextLimit, PrunedMessage: func(info session.PrunedInfo) string {
 			key := info.Source
 			if key == "" {
 				key = info.Filename
