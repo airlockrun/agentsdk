@@ -22,6 +22,32 @@ const supportsNavigation = !disableNavigation && !!window.navigation &&
 const features = ["location", "auth-recovery"];
 if (supportsNavigation) features.push("navigation");
 
+// Link policy is a UI convention, not a sandbox for application JavaScript.
+function targetLink(event) {
+  if (!nonce || event.defaultPrevented) return;
+  const link = event.target?.closest?.("a[href], area[href]");
+  if (!link) return;
+  let url;
+  try { url = new URL(link.getAttribute("href"), document.baseURI); } catch { return; }
+  if (!["http:", "https:"].includes(url.protocol)) return;
+  // Block host-origin activations, including modifiers, middle-click and
+  // download attributes. A cross-origin download attribute is not a guarantee
+  // that the browser downloads rather than navigates to the host UI.
+  if (url.origin === trustedParentOrigin && [0, 1].includes(event.button)) {
+    event.preventDefault();
+    return;
+  }
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey ||
+      link.hasAttribute("download") || url.username || url.password) return;
+  if (url.origin === location.origin) link.setAttribute("target", "_self");
+  else {
+    link.setAttribute("target", "_blank");
+    link.relList.add("noopener", "noreferrer");
+  }
+}
+document.addEventListener("click", targetLink);
+document.addEventListener("auxclick", targetLink);
+
 // Navigation entries expose actual same-origin history, including full-page,
 // hash, htmx and pushState navigation. Never traverse into an auth/bootstrap page.
 function previousEntry() {

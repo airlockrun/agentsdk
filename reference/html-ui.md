@@ -118,6 +118,36 @@ dashboard accepts messages only from its retained iframe at the exact app origin
 No referrer, query parameter, wildcard target origin or message-provided origin
 establishes trust.
 
+### Embedded link destinations
+
+After the trusted parent probe, ordinary unmodified HTTP(S) links at the current
+app origin navigate in the same iframe (`_self`). Links to other origins open a
+new window/tab (`_blank`, `noopener noreferrer`). URLs are parsed relative to
+the document base URL; sibling apps, different ports/schemes and lookalike hosts
+are distinct origins, not dashboard aliases.
+
+Links at the exact authenticated Airlock dashboard origin are blocked, with no
+host-navigation message or route exception. This includes modified primary
+clicks, middle-clicks, credential-bearing URLs and links with download attributes:
+a cross-origin download attribute cannot guarantee a download instead of host
+navigation. This origin-wide rule also covers host file URLs; it does not infer
+whether a host route serves UI or a file. App/external downloads, modified clicks,
+non-HTTP(S) actions and events already cancelled before the SDK document listener
+retain native/app behavior. Same-app/external navigation remains cancellable by
+later app click handlers. Standalone and unrelated embedded documents are not
+retargeted. Link targeting does not require the Navigation API; `DisableNavigation`
+controls Back capability only.
+
+This is a link UX policy, not authorization or isolation for app-controlled
+JavaScript. Forms, programmatic redirects, app handlers, context-menu navigation,
+shadow-DOM links and redirect chains are not comprehensively intercepted. The
+host does not accept an app message requesting dashboard navigation. Keep
+server-side authorization and iframe/browser security constraints in force;
+blocking these links does not prevent all phishing or arbitrary app behavior.
+
+Apps adopt this behavior by rebuilding with SDK 0.8.4 or later and including
+`WebUI` in each full-page layout. Existing WebUI layouts need no source migration.
+
 Its companion `/__air/assets/web-ui-v1.css` is also served with `no-store` and
 contains only the embedded presentation rule, not app layout or theme styles.
 
