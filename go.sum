@@ -2,10 +2,10 @@ github.com/BurntSushi/toml v1.6.0 h1:dRaEfpa2VI55EwlIW72hMRHdWouJeRF7TPYhI+AUQjk
 github.com/BurntSushi/toml v1.6.0/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
 github.com/a-h/templ v0.3.1020 h1:ypAT/L5ySWEnZ6Zft/5yfoWXYYkhFNvEFOeeqecg4tw=
 github.com/a-h/templ v0.3.1020/go.mod h1:A2DlK61v+K+NRoGnhmYbNYVmtYHcFO5/AisMvBdDxTM=
-github.com/airlockrun/goai v0.3.2 h1:aOWSgDs5CmOb4mzTG6J2STy69tyLl7AB3R5fQg1cJy4=
-github.com/airlockrun/goai v0.3.2/go.mod h1:hiTAAqBar3Kcr68fyGbNgV9FJa2voB5d0f1OWjd5sp4=
-github.com/airlockrun/sol v0.1.20 h1:Uh8kakyfXWmCvgT7Oo5Y0CnAEth7ksbgWjN7LMSwD2E=
-github.com/airlockrun/sol v0.1.20/go.mod h1:rJ5hspvPtcyk/++729w02sxAU4EBeFwuhSWUZoVBn34=
+github.com/airlockrun/goai v0.3.3 h1:U+kcRukVDkZtVhhz5waoQzZjkS3ya7oS38k2jyCxMwY=
+github.com/airlockrun/goai v0.3.3/go.mod h1:ZVJYtUi3A8lUDVtB7yFUB2Xhz8DIzgts984NO0ZaY/I=
+github.com/airlockrun/sol v0.1.22 h1:x8H7/J8EqYJLJOSr37IqobHV2O7MtTd+zcotD1N2U5s=
+github.com/airlockrun/sol v0.1.22/go.mod h1:UvBluODTlh7qO3inPYxlDzEF2Hi5zbdDTFQIIP1BXYY=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
 github.com/gofrs/flock v0.13.1 h1:jjREztyBeSKBZYAC+mgc1laB+xsgy4kYMf3FbKF2UBo=

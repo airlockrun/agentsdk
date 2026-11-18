@@ -14,11 +14,83 @@ import (
 	"github.com/airlockrun/agentsdk/capability"
 	"github.com/airlockrun/agentsdk/jsexec"
 	goaierrors "github.com/airlockrun/goai/errors"
+	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/provider/openai"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/goai/testutil"
+	"github.com/airlockrun/sol/provider"
 	"golang.org/x/net/http2"
 )
+
+func TestModelCapturePreservesFileAndMessageValidation(t *testing.T) {
+	model := openai.NewResponsesModel("gpt-6.1-sol", openai.ResponsesConfig{
+		Provider: "openai", URL: "https://fixture.invalid/responses",
+		ConfigureRequest: func(*http.Request) error { return errors.New("validation must not send a request") },
+	})
+	capture := &modelCapture{Model: model}
+	file := message.FilePart{MimeType: "image/png", Data: message.FileDataBytes{Data: "aW1hZ2U="}}
+	for _, test := range []struct {
+		name  string
+		role  message.Role
+		file  message.FilePart
+		valid bool
+	}{
+		{name: "user-image", role: message.RoleUser, file: file, valid: true},
+		{name: "tool-image", role: message.RoleTool, file: file, valid: true},
+		{name: "assistant-denied", role: message.RoleAssistant, file: file},
+		{name: "mime-denied", role: message.RoleUser, file: message.FilePart{MimeType: "video/mp4", Data: file.Data}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := model.ValidateFile(test.role, test.file)
+			got := capture.ValidateFile(test.role, test.file)
+			if (got == nil) != test.valid || !errors.Is(got, want) {
+				t.Fatalf("ValidateFile: got %v, adapter %v", got, want)
+			}
+		})
+	}
+	result := message.ToolResultPart{ToolCallID: "call", ToolName: "fixture", Output: message.TextOutput{Value: "ok"}}
+	for _, test := range []struct {
+		name     string
+		messages []message.Message
+		valid    bool
+	}{
+		{name: "user-image", messages: []message.Message{message.NewUserMessageWithParts(file)}, valid: true},
+		{name: "tool-file-placement", messages: []message.Message{{Role: message.RoleTool, Content: message.Content{Parts: []message.Part{result, file}}}}, valid: true},
+		{name: "tool-sibling-text-denied", messages: []message.Message{{Role: message.RoleTool, Content: message.Content{Parts: []message.Part{result, message.TextPart{Text: "sibling"}}}}}},
+		{name: "assistant-result-placement-denied", messages: []message.Message{{Role: message.RoleAssistant, Content: message.Content{Parts: []message.Part{result}}}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			want := model.ValidateMessages(test.messages)
+			got := capture.ValidateMessages(test.messages)
+			if (got == nil) != test.valid || !errors.Is(got, want) {
+				t.Fatalf("ValidateMessages: got %v, adapter %v", got, want)
+			}
+		})
+	}
+}
+
+func TestModelCaptureUnknownValidationContract(t *testing.T) {
+	_, model := input(batch(complete("done")))
+	capture := &modelCapture{Model: model}
+	file := message.FilePart{MimeType: "image/png", Data: message.FileDataBytes{Data: "aW1hZ2U="}}
+	if err := capture.ValidateFile(message.RoleUser, file); err == nil {
+		t.Fatal("unknown adapter admitted a file")
+	}
+	text := []message.Message{message.NewUserMessageWithParts(message.TextPart{Text: "ordinary"})}
+	if err := capture.ValidateMessages(text); err == nil {
+		t.Fatal("unknown adapter declared complete-message support")
+	}
+	if err := provider.ValidateRequestMessages(capture, text); err != nil {
+		t.Fatalf("upstream ordinary-text policy was lost: %v", err)
+	}
+	if err := provider.ValidateRequestMessages(capture, []message.Message{message.NewUserMessageWithParts(file)}); err == nil {
+		t.Fatal("unknown adapter admitted file-bearing messages")
+	}
+	structured := []message.Message{{Role: message.RoleAssistant, Content: message.Content{Parts: []message.Part{message.ReasoningPart{Text: "structured"}}}}}
+	if err := provider.ValidateRequestMessages(capture, structured); err == nil {
+		t.Fatal("unknown adapter admitted structured replay")
+	}
+}
 
 func transientStreamError() error {
 	return goaierrors.NewAPICallError(goaierrors.APICallErrorOptions{

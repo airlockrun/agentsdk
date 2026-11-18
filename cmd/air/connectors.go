@@ -16,6 +16,9 @@ import (
 )
 
 func cmdConnectors(args []string) error {
+	if len(args) > 0 && (args[0] == "install" || args[0] == "update") {
+		return cmdConnectorManagement(args)
+	}
 	if len(args) == 0 || (args[0] != "list" && args[0] != "inspect") {
 		return errors.New("connectors requires: list [--url <url>] [--json] or inspect <id> [--url <url>] [--json]")
 	}

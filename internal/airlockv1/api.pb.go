@@ -3508,10 +3508,12 @@ func (x *ListUserSessionsResponse) GetSessions() []*UserSession {
 }
 
 type ListUsersResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Users         []*User                `protobuf:"bytes,1,rep,name=users,proto3" json:"users,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Users []*User                `protobuf:"bytes,1,rep,name=users,proto3" json:"users,omitempty"`
+	// Deployment policy only; creating an account also requires tenant.user.manage.
+	LocalUserCreationEnabled bool `protobuf:"varint,2,opt,name=local_user_creation_enabled,json=localUserCreationEnabled,proto3" json:"local_user_creation_enabled,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *ListUsersResponse) Reset() {
@@ -3551,6 +3553,13 @@ func (x *ListUsersResponse) GetUsers() []*User {
 	return nil
 }
 
+func (x *ListUsersResponse) GetLocalUserCreationEnabled() bool {
+	if x != nil {
+		return x.LocalUserCreationEnabled
+	}
+	return false
+}
+
 // MeResponse is the /api/v1/me payload. tenant_permissions enumerates
 // every tenant-axis Action (from airlock/authz/policy.go) the caller's
 // tenant role currently satisfies — the frontend uses this as the single
@@ -3559,6 +3568,7 @@ type MeResponse struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	User              *User                  `protobuf:"bytes,1,opt,name=user,proto3" json:"user,omitempty"`
 	TenantPermissions []string               `protobuf:"bytes,2,rep,name=tenant_permissions,json=tenantPermissions,proto3" json:"tenant_permissions,omitempty"`
+	FullAdministrator bool                   `protobuf:"varint,3,opt,name=full_administrator,json=fullAdministrator,proto3" json:"full_administrator,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -3605,6 +3615,13 @@ func (x *MeResponse) GetTenantPermissions() []string {
 		return x.TenantPermissions
 	}
 	return nil
+}
+
+func (x *MeResponse) GetFullAdministrator() bool {
+	if x != nil {
+		return x.FullAdministrator
+	}
+	return false
 }
 
 type ListSelectableUsersResponse struct {
@@ -9138,7 +9155,7 @@ func (x *FireScheduleResponse) GetJobId() string {
 
 type AddAgentMemberRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"` // grantee principal id: a user, or the built-in `user` group (All users)
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"` // grantee principal id: user or distribution-supported sharing group
 	Role          string                 `protobuf:"bytes,2,opt,name=role,proto3" json:"role,omitempty"`                   // "admin" or "user"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -16701,6 +16718,7 @@ type RequestHostShellRequest struct {
 	Stdin            []byte                 `protobuf:"bytes,4,opt,name=stdin,proto3" json:"stdin,omitempty"`
 	TimeoutSeconds   int32                  `protobuf:"varint,5,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	Arguments        []string               `protobuf:"bytes,6,rep,name=arguments,proto3" json:"arguments,omitempty"`
+	RequestId        string                 `protobuf:"bytes,7,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -16777,6 +16795,13 @@ func (x *RequestHostShellRequest) GetArguments() []string {
 	return nil
 }
 
+func (x *RequestHostShellRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type RequestConnectorInstallRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	AgentId        string                 `protobuf:"bytes,1,opt,name=agent_id,json=agentId,proto3" json:"agent_id,omitempty"`
@@ -16785,6 +16810,7 @@ type RequestConnectorInstallRequest struct {
 	DisplayName    string                 `protobuf:"bytes,4,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	SettingsJson   string                 `protobuf:"bytes,5,opt,name=settings_json,json=settingsJson,proto3" json:"settings_json,omitempty"`
 	TimeoutSeconds int32                  `protobuf:"varint,6,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	RequestId      string                 `protobuf:"bytes,7,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -16861,11 +16887,19 @@ func (x *RequestConnectorInstallRequest) GetTimeoutSeconds() int32 {
 	return 0
 }
 
+func (x *RequestConnectorInstallRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
 type RequestConnectorUpdateRequest struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	ArtifactFileId string                 `protobuf:"bytes,1,opt,name=artifact_file_id,json=artifactFileId,proto3" json:"artifact_file_id,omitempty"`
 	TimeoutSeconds int32                  `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
 	SettingsJson   string                 `protobuf:"bytes,3,opt,name=settings_json,json=settingsJson,proto3" json:"settings_json,omitempty"`
+	RequestId      string                 `protobuf:"bytes,4,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -16917,6 +16951,13 @@ func (x *RequestConnectorUpdateRequest) GetTimeoutSeconds() int32 {
 func (x *RequestConnectorUpdateRequest) GetSettingsJson() string {
 	if x != nil {
 		return x.SettingsJson
+	}
+	return ""
+}
+
+func (x *RequestConnectorUpdateRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
 	}
 	return ""
 }
@@ -18258,13 +18299,15 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\faccess_token\x18\x01 \x01(\tR\vaccessToken\x12#\n" +
 	"\rrefresh_token\x18\x02 \x01(\tR\frefreshToken\"O\n" +
 	"\x18ListUserSessionsResponse\x123\n" +
-	"\bsessions\x18\x01 \x03(\v2\x17.airlock.v1.UserSessionR\bsessions\";\n" +
+	"\bsessions\x18\x01 \x03(\v2\x17.airlock.v1.UserSessionR\bsessions\"z\n" +
 	"\x11ListUsersResponse\x12&\n" +
-	"\x05users\x18\x01 \x03(\v2\x10.airlock.v1.UserR\x05users\"a\n" +
+	"\x05users\x18\x01 \x03(\v2\x10.airlock.v1.UserR\x05users\x12=\n" +
+	"\x1blocal_user_creation_enabled\x18\x02 \x01(\bR\x18localUserCreationEnabled\"\x90\x01\n" +
 	"\n" +
 	"MeResponse\x12$\n" +
 	"\x04user\x18\x01 \x01(\v2\x10.airlock.v1.UserR\x04user\x12-\n" +
-	"\x12tenant_permissions\x18\x02 \x03(\tR\x11tenantPermissions\"L\n" +
+	"\x12tenant_permissions\x18\x02 \x03(\tR\x11tenantPermissions\x12-\n" +
+	"\x12full_administrator\x18\x03 \x01(\bR\x11fullAdministrator\"L\n" +
 	"\x1bListSelectableUsersResponse\x12-\n" +
 	"\x05users\x18\x01 \x03(\v2\x17.airlock.v1.UserSummaryR\x05users\"8\n" +
 	"\x15UpdateUserRoleRequest\x12\x1f\n" +
@@ -19350,28 +19393,34 @@ const file_airlock_v1_api_proto_rawDesc = "" +
 	"\x1cApproveHostEnrollmentRequest\x12\x1b\n" +
 	"\tuser_code\x18\x01 \x01(\tR\buserCode\"8\n" +
 	"\x19DenyHostEnrollmentRequest\x12\x1b\n" +
-	"\tuser_code\x18\x01 \x01(\tR\buserCode\"\xd5\x02\n" +
+	"\tuser_code\x18\x01 \x01(\tR\buserCode\"\xf4\x02\n" +
 	"\x17RequestHostShellRequest\x12\x18\n" +
 	"\acommand\x18\x01 \x01(\tR\acommand\x12V\n" +
 	"\venvironment\x18\x02 \x03(\v24.airlock.v1.RequestHostShellRequest.EnvironmentEntryR\venvironment\x12+\n" +
 	"\x11working_directory\x18\x03 \x01(\tR\x10workingDirectory\x12\x14\n" +
 	"\x05stdin\x18\x04 \x01(\fR\x05stdin\x12'\n" +
 	"\x0ftimeout_seconds\x18\x05 \x01(\x05R\x0etimeoutSeconds\x12\x1c\n" +
-	"\targuments\x18\x06 \x03(\tR\targuments\x1a>\n" +
+	"\targuments\x18\x06 \x03(\tR\targuments\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\a \x01(\tR\trequestId\x1a>\n" +
 	"\x10EnvironmentEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xf3\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x92\x02\n" +
 	"\x1eRequestConnectorInstallRequest\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12\x1b\n" +
 	"\tneed_slug\x18\x02 \x01(\tR\bneedSlug\x12(\n" +
 	"\x10artifact_file_id\x18\x03 \x01(\tR\x0eartifactFileId\x12!\n" +
 	"\fdisplay_name\x18\x04 \x01(\tR\vdisplayName\x12#\n" +
 	"\rsettings_json\x18\x05 \x01(\tR\fsettingsJson\x12'\n" +
-	"\x0ftimeout_seconds\x18\x06 \x01(\x05R\x0etimeoutSeconds\"\x97\x01\n" +
+	"\x0ftimeout_seconds\x18\x06 \x01(\x05R\x0etimeoutSeconds\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\a \x01(\tR\trequestId\"\xb6\x01\n" +
 	"\x1dRequestConnectorUpdateRequest\x12(\n" +
 	"\x10artifact_file_id\x18\x01 \x01(\tR\x0eartifactFileId\x12'\n" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\x12#\n" +
-	"\rsettings_json\x18\x03 \x01(\tR\fsettingsJson\"H\n" +
+	"\rsettings_json\x18\x03 \x01(\tR\fsettingsJson\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x04 \x01(\tR\trequestId\"H\n" +
 	"\x1dRequestConnectorRemoveRequest\x12'\n" +
 	"\x0ftimeout_seconds\x18\x01 \x01(\x05R\x0etimeoutSeconds\"J\n" +
 	"\x1fRequestConnectorRollbackRequest\x12'\n" +

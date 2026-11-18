@@ -8,7 +8,9 @@ import (
 	"time"
 
 	goaierrors "github.com/airlockrun/goai/errors"
+	"github.com/airlockrun/goai/message"
 	"github.com/airlockrun/goai/stream"
+	"github.com/airlockrun/sol/provider"
 )
 
 // modelCapture retries only uncommitted model responses. Native tools are
@@ -23,6 +25,19 @@ type modelCapture struct {
 }
 
 const modelStreamRetries = 2
+
+var _ provider.ModelValidator = (*modelCapture)(nil)
+
+// ValidateFile preserves the selected adapter's role-aware transport contract.
+func (m *modelCapture) ValidateFile(role message.Role, file message.FilePart) error {
+	return provider.Validator(m.Model).ValidateFile(role, file)
+}
+
+// ValidateMessages preserves complete-message placement and unknown-contract
+// behavior independently of stream capture and retries.
+func (m *modelCapture) ValidateMessages(messages []message.Message) error {
+	return provider.Validator(m.Model).ValidateMessages(messages)
+}
 
 func modelStreamBackoff(attempt int) time.Duration {
 	base := time.Second << attempt
