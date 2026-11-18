@@ -251,7 +251,7 @@ func (r *Runtime) RunContext(ctx context.Context, args []string) error {
 	case "manifest":
 		return json.NewEncoder(r.config.Output).Encode(r.Manifest())
 	case "version":
-		_, err := fmt.Fprintf(r.config.Output, "%s %s protocol %d.%d host-child %d\n", r.config.Kind, r.config.ArtifactVersion, protocol.Major, protocol.Minor, protocol.HostProtocolVersion)
+		_, err := fmt.Fprintf(r.config.Output, "%s %s protocol %d.%d host-child %d\n", r.config.Kind, r.config.ArtifactVersion, protocol.Major, protocol.Minor, protocol.ChildProtocolVersion)
 		return err
 	case "validate":
 		r.freeze()
@@ -279,8 +279,8 @@ func (r *Runtime) runHosted(ctx context.Context) error {
 		return errors.New("connector: first child message must initialize the runtime")
 	}
 	init := first.Initialize
-	if init.ProtocolVersion != protocol.HostProtocolVersion {
-		return fmt.Errorf("connector: unsupported host protocol version %d", init.ProtocolVersion)
+	if init.ProtocolVersion != protocol.ChildProtocolVersion {
+		return fmt.Errorf("connector: unsupported child protocol version %d", init.ProtocolVersion)
 	}
 	if strings.TrimSpace(init.InstallationID) == "" || !filepath.IsAbs(init.StateDirectory) {
 		return errors.New("connector: initialization requires an installation ID and absolute state directory")
@@ -358,7 +358,7 @@ func (r *Runtime) runHosted(ctx context.Context) error {
 }
 
 func (r *Runtime) sendReady(readiness protocol.Readiness, readyErr error) error {
-	ready := protocol.ChildReady{ProtocolVersion: protocol.HostProtocolVersion, Manifest: r.Manifest(), Readiness: readiness}
+	ready := protocol.ChildReady{ProtocolVersion: protocol.ChildProtocolVersion, Manifest: r.Manifest(), Readiness: readiness}
 	if readyErr != nil {
 		ready.Error = boundedError(readyErr)
 	}

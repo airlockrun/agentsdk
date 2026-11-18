@@ -1291,8 +1291,11 @@ type AgentInfo struct {
 	// Preview configuration never contributes to this logical app-list flag.
 	RestartRequired     bool                 `protobuf:"varint,26,opt,name=restart_required,json=restartRequired,proto3" json:"restart_required,omitempty"`
 	BrowserCapabilities *BrowserCapabilities `protobuf:"bytes,27,opt,name=browser_capabilities,json=browserCapabilities,proto3" json:"browser_capabilities,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Caller-owned reusable development session presence on authorized app lists.
+	// Includes unattached sessions; this hint grants no development authority.
+	HasDevelopmentSession bool `protobuf:"varint,28,opt,name=has_development_session,json=hasDevelopmentSession,proto3" json:"has_development_session,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *AgentInfo) Reset() {
@@ -1505,6 +1508,13 @@ func (x *AgentInfo) GetBrowserCapabilities() *BrowserCapabilities {
 		return x.BrowserCapabilities
 	}
 	return nil
+}
+
+func (x *AgentInfo) GetHasDevelopmentSession() bool {
+	if x != nil {
+		return x.HasDevelopmentSession
+	}
+	return false
 }
 
 // Declaration eligibility only; browser consent and ancestor restrictions apply.
@@ -6082,24 +6092,32 @@ func (x *HostManagementEventInfo) GetCreatedAt() *timestamppb.Timestamp {
 }
 
 type HostManagementJobInfo struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Id                string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	HostId            string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
-	ConnectorId       string                 `protobuf:"bytes,3,opt,name=connector_id,json=connectorId,proto3" json:"connector_id,omitempty"`
-	RequestedByUserId string                 `protobuf:"bytes,4,opt,name=requested_by_user_id,json=requestedByUserId,proto3" json:"requested_by_user_id,omitempty"`
-	Kind              string                 `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
-	ArtifactFileId    string                 `protobuf:"bytes,6,opt,name=artifact_file_id,json=artifactFileId,proto3" json:"artifact_file_id,omitempty"`
-	InputJson         string                 `protobuf:"bytes,7,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
-	Status            string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
-	OutputJson        string                 `protobuf:"bytes,9,opt,name=output_json,json=outputJson,proto3" json:"output_json,omitempty"`
-	ErrorMessage      string                 `protobuf:"bytes,10,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	DeadlineAt        *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=deadline_at,json=deadlineAt,proto3" json:"deadline_at,omitempty"`
-	StartedAt         *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	CompletedAt       *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
-	CreatedAt         *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt         *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	Id                      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	HostId                  string                 `protobuf:"bytes,2,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	ConnectorId             string                 `protobuf:"bytes,3,opt,name=connector_id,json=connectorId,proto3" json:"connector_id,omitempty"`
+	RequestedByUserId       string                 `protobuf:"bytes,4,opt,name=requested_by_user_id,json=requestedByUserId,proto3" json:"requested_by_user_id,omitempty"`
+	Kind                    string                 `protobuf:"bytes,5,opt,name=kind,proto3" json:"kind,omitempty"`
+	ArtifactFileId          string                 `protobuf:"bytes,6,opt,name=artifact_file_id,json=artifactFileId,proto3" json:"artifact_file_id,omitempty"`
+	InputJson               string                 `protobuf:"bytes,7,opt,name=input_json,json=inputJson,proto3" json:"input_json,omitempty"`
+	Status                  string                 `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
+	OutputJson              string                 `protobuf:"bytes,9,opt,name=output_json,json=outputJson,proto3" json:"output_json,omitempty"`
+	ErrorMessage            string                 `protobuf:"bytes,10,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	DeadlineAt              *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=deadline_at,json=deadlineAt,proto3" json:"deadline_at,omitempty"`
+	StartedAt               *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	CompletedAt             *timestamppb.Timestamp `protobuf:"bytes,13,opt,name=completed_at,json=completedAt,proto3" json:"completed_at,omitempty"`
+	CreatedAt               *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt               *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	RequestId               string                 `protobuf:"bytes,16,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	InventoryRevision       *int64                 `protobuf:"varint,17,opt,name=inventory_revision,json=inventoryRevision,proto3,oneof" json:"inventory_revision,omitempty"`
+	InventoryAcknowledgedAt *timestamppb.Timestamp `protobuf:"bytes,18,opt,name=inventory_acknowledged_at,json=inventoryAcknowledgedAt,proto3" json:"inventory_acknowledged_at,omitempty"`
+	VerificationPending     bool                   `protobuf:"varint,19,opt,name=verification_pending,json=verificationPending,proto3" json:"verification_pending,omitempty"`
+	CancelRequestedAt       *timestamppb.Timestamp `protobuf:"bytes,20,opt,name=cancel_requested_at,json=cancelRequestedAt,proto3" json:"cancel_requested_at,omitempty"`
+	// A newer acknowledged local transition replaces this unverified result.
+	// Supersession is not verification of this operation.
+	InventorySupersededAt *timestamppb.Timestamp `protobuf:"bytes,21,opt,name=inventory_superseded_at,json=inventorySupersededAt,proto3" json:"inventory_superseded_at,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *HostManagementJobInfo) Reset() {
@@ -6233,6 +6251,48 @@ func (x *HostManagementJobInfo) GetCreatedAt() *timestamppb.Timestamp {
 func (x *HostManagementJobInfo) GetUpdatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *HostManagementJobInfo) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *HostManagementJobInfo) GetInventoryRevision() int64 {
+	if x != nil && x.InventoryRevision != nil {
+		return *x.InventoryRevision
+	}
+	return 0
+}
+
+func (x *HostManagementJobInfo) GetInventoryAcknowledgedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.InventoryAcknowledgedAt
+	}
+	return nil
+}
+
+func (x *HostManagementJobInfo) GetVerificationPending() bool {
+	if x != nil {
+		return x.VerificationPending
+	}
+	return false
+}
+
+func (x *HostManagementJobInfo) GetCancelRequestedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CancelRequestedAt
+	}
+	return nil
+}
+
+func (x *HostManagementJobInfo) GetInventorySupersededAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.InventorySupersededAt
 	}
 	return nil
 }
@@ -8115,7 +8175,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	" \x01(\tR\x04kind\x12\x12\n" +
 	"\x04caps\x18\v \x03(\tR\x04caps\x12,\n" +
 	"\x12provider_config_id\x18\f \x01(\tR\x10providerConfigId\x12-\n" +
-	"\x12structured_outputs\x18\r \x01(\bR\x11structuredOutputs\"\xe9\a\n" +
+	"\x12structured_outputs\x18\r \x01(\bR\x11structuredOutputs\"\xa1\b\n" +
 	"\tAgentInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04slug\x18\x02 \x01(\tR\x04slug\x12\x12\n" +
@@ -8150,7 +8210,8 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\x14home_route_available\x18\x19 \x01(\bR\x12homeRouteAvailable\x12H\n" +
 	"\x11suggested_prompts\x18\x18 \x03(\v2\x1b.airlock.v1.SuggestedPromptR\x10suggestedPrompts\x12)\n" +
 	"\x10restart_required\x18\x1a \x01(\bR\x0frestartRequired\x12R\n" +
-	"\x14browser_capabilities\x18\x1b \x01(\v2\x1f.airlock.v1.BrowserCapabilitiesR\x13browserCapabilitiesJ\x04\b\x16\x10\x17R\vbuiltin_key\"\xe1\x01\n" +
+	"\x14browser_capabilities\x18\x1b \x01(\v2\x1f.airlock.v1.BrowserCapabilitiesR\x13browserCapabilities\x126\n" +
+	"\x17has_development_session\x18\x1c \x01(\bR\x15hasDevelopmentSessionJ\x04\b\x16\x10\x17R\vbuiltin_key\"\xe1\x01\n" +
 	"\x13BrowserCapabilities\x12\x1e\n" +
 	"\n" +
 	"microphone\x18\x01 \x01(\bR\n" +
@@ -8666,7 +8727,7 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"event_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\teventTime\x129\n" +
 	"\n" +
-	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xfc\x04\n" +
+	"created_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\x91\b\n" +
 	"\x15HostManagementJobInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\ahost_id\x18\x02 \x01(\tR\x06hostId\x12!\n" +
@@ -8689,7 +8750,15 @@ const file_airlock_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xef\x01\n" +
+	"updated_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x10 \x01(\tR\trequestId\x122\n" +
+	"\x12inventory_revision\x18\x11 \x01(\x03H\x00R\x11inventoryRevision\x88\x01\x01\x12V\n" +
+	"\x19inventory_acknowledged_at\x18\x12 \x01(\v2\x1a.google.protobuf.TimestampR\x17inventoryAcknowledgedAt\x121\n" +
+	"\x14verification_pending\x18\x13 \x01(\bR\x13verificationPending\x12J\n" +
+	"\x13cancel_requested_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\x11cancelRequestedAt\x12R\n" +
+	"\x17inventory_superseded_at\x18\x15 \x01(\v2\x1a.google.protobuf.TimestampR\x15inventorySupersededAtB\x15\n" +
+	"\x13_inventory_revision\"\xef\x01\n" +
 	"\x19ConnectorArtifactFileInfo\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12\x1a\n" +
@@ -9118,48 +9187,51 @@ var file_airlock_v1_types_proto_depIdxs = []int32{
 	72,  // 71: airlock.v1.HostManagementJobInfo.completed_at:type_name -> google.protobuf.Timestamp
 	72,  // 72: airlock.v1.HostManagementJobInfo.created_at:type_name -> google.protobuf.Timestamp
 	72,  // 73: airlock.v1.HostManagementJobInfo.updated_at:type_name -> google.protobuf.Timestamp
-	58,  // 74: airlock.v1.ConnectorArtifactSetInfo.files:type_name -> airlock.v1.ConnectorArtifactFileInfo
-	72,  // 75: airlock.v1.ConnectorArtifactSetInfo.created_at:type_name -> google.protobuf.Timestamp
-	72,  // 76: airlock.v1.ConnectorArtifactVersionInfo.created_at:type_name -> google.protobuf.Timestamp
-	71,  // 77: airlock.v1.ConnectorArtifactVersionInfo.interface:type_name -> google.protobuf.Struct
-	61,  // 78: airlock.v1.ConnectorArtifactVersionInfo.settings:type_name -> airlock.v1.ConnectorSettingInfo
-	60,  // 79: airlock.v1.ConnectorArtifactVersionInfo.targets:type_name -> airlock.v1.ConnectorArtifactTargetInfo
-	72,  // 80: airlock.v1.ConnectorTargetGroupInfo.created_at:type_name -> google.protobuf.Timestamp
-	72,  // 81: airlock.v1.ConnectorTargetGroupInfo.updated_at:type_name -> google.protobuf.Timestamp
-	72,  // 82: airlock.v1.ConnectorJobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
-	72,  // 83: airlock.v1.ConnectorJobInfo.deadline_at:type_name -> google.protobuf.Timestamp
-	72,  // 84: airlock.v1.ConnectorJobInfo.started_at:type_name -> google.protobuf.Timestamp
-	72,  // 85: airlock.v1.ConnectorJobInfo.completed_at:type_name -> google.protobuf.Timestamp
-	72,  // 86: airlock.v1.ConnectorJobInfo.created_at:type_name -> google.protobuf.Timestamp
-	72,  // 87: airlock.v1.ConnectorJobInfo.updated_at:type_name -> google.protobuf.Timestamp
-	72,  // 88: airlock.v1.ConnectorOrchestrationInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
-	72,  // 89: airlock.v1.ConnectorOrchestrationInfo.deadline_at:type_name -> google.protobuf.Timestamp
-	72,  // 90: airlock.v1.ConnectorOrchestrationInfo.started_at:type_name -> google.protobuf.Timestamp
-	72,  // 91: airlock.v1.ConnectorOrchestrationInfo.completed_at:type_name -> google.protobuf.Timestamp
-	72,  // 92: airlock.v1.ConnectorOrchestrationInfo.created_at:type_name -> google.protobuf.Timestamp
-	72,  // 93: airlock.v1.ConnectorOrchestrationInfo.updated_at:type_name -> google.protobuf.Timestamp
-	71,  // 94: airlock.v1.JobHandlerInfo.input_schema:type_name -> google.protobuf.Struct
-	71,  // 95: airlock.v1.JobHandlerInfo.output_schema:type_name -> google.protobuf.Struct
-	72,  // 96: airlock.v1.JobHandlerInfo.created_at:type_name -> google.protobuf.Timestamp
-	72,  // 97: airlock.v1.JobHandlerInfo.updated_at:type_name -> google.protobuf.Timestamp
-	72,  // 98: airlock.v1.JobProgressInfo.updated_at:type_name -> google.protobuf.Timestamp
-	72,  // 99: airlock.v1.JobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
-	72,  // 100: airlock.v1.JobInfo.started_at:type_name -> google.protobuf.Timestamp
-	72,  // 101: airlock.v1.JobInfo.completed_at:type_name -> google.protobuf.Timestamp
-	72,  // 102: airlock.v1.JobInfo.created_at:type_name -> google.protobuf.Timestamp
-	72,  // 103: airlock.v1.JobInfo.updated_at:type_name -> google.protobuf.Timestamp
-	72,  // 104: airlock.v1.JobInfo.scheduled_at:type_name -> google.protobuf.Timestamp
-	67,  // 105: airlock.v1.JobInfo.progress:type_name -> airlock.v1.JobProgressInfo
-	72,  // 106: airlock.v1.JobInfo.next_attempt_at:type_name -> google.protobuf.Timestamp
-	72,  // 107: airlock.v1.JobAttemptInfo.leased_at:type_name -> google.protobuf.Timestamp
-	72,  // 108: airlock.v1.JobAttemptInfo.started_at:type_name -> google.protobuf.Timestamp
-	72,  // 109: airlock.v1.JobAttemptInfo.completed_at:type_name -> google.protobuf.Timestamp
-	72,  // 110: airlock.v1.JobAttemptInfo.lease_expires_at:type_name -> google.protobuf.Timestamp
-	111, // [111:111] is the sub-list for method output_type
-	111, // [111:111] is the sub-list for method input_type
-	111, // [111:111] is the sub-list for extension type_name
-	111, // [111:111] is the sub-list for extension extendee
-	0,   // [0:111] is the sub-list for field type_name
+	72,  // 74: airlock.v1.HostManagementJobInfo.inventory_acknowledged_at:type_name -> google.protobuf.Timestamp
+	72,  // 75: airlock.v1.HostManagementJobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	72,  // 76: airlock.v1.HostManagementJobInfo.inventory_superseded_at:type_name -> google.protobuf.Timestamp
+	58,  // 77: airlock.v1.ConnectorArtifactSetInfo.files:type_name -> airlock.v1.ConnectorArtifactFileInfo
+	72,  // 78: airlock.v1.ConnectorArtifactSetInfo.created_at:type_name -> google.protobuf.Timestamp
+	72,  // 79: airlock.v1.ConnectorArtifactVersionInfo.created_at:type_name -> google.protobuf.Timestamp
+	71,  // 80: airlock.v1.ConnectorArtifactVersionInfo.interface:type_name -> google.protobuf.Struct
+	61,  // 81: airlock.v1.ConnectorArtifactVersionInfo.settings:type_name -> airlock.v1.ConnectorSettingInfo
+	60,  // 82: airlock.v1.ConnectorArtifactVersionInfo.targets:type_name -> airlock.v1.ConnectorArtifactTargetInfo
+	72,  // 83: airlock.v1.ConnectorTargetGroupInfo.created_at:type_name -> google.protobuf.Timestamp
+	72,  // 84: airlock.v1.ConnectorTargetGroupInfo.updated_at:type_name -> google.protobuf.Timestamp
+	72,  // 85: airlock.v1.ConnectorJobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	72,  // 86: airlock.v1.ConnectorJobInfo.deadline_at:type_name -> google.protobuf.Timestamp
+	72,  // 87: airlock.v1.ConnectorJobInfo.started_at:type_name -> google.protobuf.Timestamp
+	72,  // 88: airlock.v1.ConnectorJobInfo.completed_at:type_name -> google.protobuf.Timestamp
+	72,  // 89: airlock.v1.ConnectorJobInfo.created_at:type_name -> google.protobuf.Timestamp
+	72,  // 90: airlock.v1.ConnectorJobInfo.updated_at:type_name -> google.protobuf.Timestamp
+	72,  // 91: airlock.v1.ConnectorOrchestrationInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	72,  // 92: airlock.v1.ConnectorOrchestrationInfo.deadline_at:type_name -> google.protobuf.Timestamp
+	72,  // 93: airlock.v1.ConnectorOrchestrationInfo.started_at:type_name -> google.protobuf.Timestamp
+	72,  // 94: airlock.v1.ConnectorOrchestrationInfo.completed_at:type_name -> google.protobuf.Timestamp
+	72,  // 95: airlock.v1.ConnectorOrchestrationInfo.created_at:type_name -> google.protobuf.Timestamp
+	72,  // 96: airlock.v1.ConnectorOrchestrationInfo.updated_at:type_name -> google.protobuf.Timestamp
+	71,  // 97: airlock.v1.JobHandlerInfo.input_schema:type_name -> google.protobuf.Struct
+	71,  // 98: airlock.v1.JobHandlerInfo.output_schema:type_name -> google.protobuf.Struct
+	72,  // 99: airlock.v1.JobHandlerInfo.created_at:type_name -> google.protobuf.Timestamp
+	72,  // 100: airlock.v1.JobHandlerInfo.updated_at:type_name -> google.protobuf.Timestamp
+	72,  // 101: airlock.v1.JobProgressInfo.updated_at:type_name -> google.protobuf.Timestamp
+	72,  // 102: airlock.v1.JobInfo.cancel_requested_at:type_name -> google.protobuf.Timestamp
+	72,  // 103: airlock.v1.JobInfo.started_at:type_name -> google.protobuf.Timestamp
+	72,  // 104: airlock.v1.JobInfo.completed_at:type_name -> google.protobuf.Timestamp
+	72,  // 105: airlock.v1.JobInfo.created_at:type_name -> google.protobuf.Timestamp
+	72,  // 106: airlock.v1.JobInfo.updated_at:type_name -> google.protobuf.Timestamp
+	72,  // 107: airlock.v1.JobInfo.scheduled_at:type_name -> google.protobuf.Timestamp
+	67,  // 108: airlock.v1.JobInfo.progress:type_name -> airlock.v1.JobProgressInfo
+	72,  // 109: airlock.v1.JobInfo.next_attempt_at:type_name -> google.protobuf.Timestamp
+	72,  // 110: airlock.v1.JobAttemptInfo.leased_at:type_name -> google.protobuf.Timestamp
+	72,  // 111: airlock.v1.JobAttemptInfo.started_at:type_name -> google.protobuf.Timestamp
+	72,  // 112: airlock.v1.JobAttemptInfo.completed_at:type_name -> google.protobuf.Timestamp
+	72,  // 113: airlock.v1.JobAttemptInfo.lease_expires_at:type_name -> google.protobuf.Timestamp
+	114, // [114:114] is the sub-list for method output_type
+	114, // [114:114] is the sub-list for method input_type
+	114, // [114:114] is the sub-list for extension type_name
+	114, // [114:114] is the sub-list for extension extendee
+	0,   // [0:114] is the sub-list for field type_name
 }
 
 func init() { file_airlock_v1_types_proto_init() }
@@ -9169,6 +9241,7 @@ func file_airlock_v1_types_proto_init() {
 	}
 	file_airlock_v1_types_proto_msgTypes[16].OneofWrappers = []any{}
 	file_airlock_v1_types_proto_msgTypes[34].OneofWrappers = []any{}
+	file_airlock_v1_types_proto_msgTypes[51].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

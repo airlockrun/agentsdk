@@ -173,6 +173,65 @@ credential.
 `go tool air connectors list` and `go tool air connectors inspect <id>` inspect
 visible installed connector resources without executing operations.
 
+An authenticated operator with `manage` access to an enrolled host can run:
+
+```sh
+go tool air hosts exec HOST_UUID --url https://airlock.example --cwd /srv -- /usr/bin/id
+go tool air connectors install --host HOST_UUID --agent APP_UUID --need sensor --artifact ARTIFACT_FILE_UUID --name Sensor
+go tool air connectors update --host HOST_UUID --connector CONNECTOR_UUID --agent APP_UUID --need sensor --artifact ARTIFACT_FILE_UUID
+```
+
+Host targets are exact canonical UUIDs, not hostnames. Installation requires an
+already enrolled host and an explicitly selected retained artifact file for the
+app's declared connector need; it does not bootstrap an unregistered machine.
+The host's local access mode must allow the operation. Ordinary CLI logins do not
+use developer-session grants. Developer execution credentials remain subject to
+the server's independently enforced execution ceiling.
+
+Commands execute as the OS user running `airlock-host`, with executable and argv
+passed separately (use an explicit shell executable for shell syntax). `--cwd`
+sets the host working directory; omission uses the host process directory.
+Repeat `--env KEY=VALUE` for environment overrides; other host environment values
+are inherited. `--stdin-file PATH` supplies at most 1 MiB of input. Output has an
+aggregate 512 KiB bound. `--timeout` bounds execution (default 5m; whole seconds
+from 1s through 24h). Normal command output preserves stdout/stderr and nonzero
+exit status; process/transport errors are failures, not successful empty output.
+
+Commands wait by default. Install/update additionally wait for ready inventory
+with the exact artifact digest and host identity before reporting verification.
+The job's own inventory revision and acknowledgment are required, including for
+same-executable settings updates; an older ready inventory is insufficient.
+`--settings-file PATH` supplies a JSON settings object; update omission retains
+the existing settings. Progress goes to stderr. `--json` emits the generated job
+response on stdout; terminal failures still return a nonzero status.
+`--no-wait` returns the durable job identity without claiming installed/updated
+state. `go tool air hosts job JOB_UUID` inspects a management job (`--wait` waits
+for its terminal status; connector inventory verification belongs to install/update).
+Interrupting observation does not cancel a remote job; its server deadline and
+host lease rules remain active. Observation failures never resubmit commands or
+connector lifecycle operations automatically.
+
+`go tool air hosts cancel JOB_UUID` requests fenced cancellation (`--wait` observes
+settlement). This does not undo effects or assert that a remote process has already
+stopped. Hosts must report management protocol version 2 to accept management work;
+the WSS transport remains `airlock.host.v2` and connector child protocol remains V1.
+Developer execution credentials additionally require one explicit, nonrenewing
+one-hour host-management approval for the exact host, developer workspace and
+verified originating human. That one grant covers commands, installation and
+update; it confers no missing host permissions and does not apply to other hosts.
+Ordinary CLI logins have no developer-session grant requirement.
+
+Every command/install/update admission sends a UUID request identity. The CLI
+prints it before submitting. Preserve `--request-id UUID` and the exact arguments
+after a timeout or lost response; repeating that identity/body returns the original
+durable job, not another execution. A changed payload/host with the same caller's
+identity is a conflict. `go tool air hosts request HOST_UUID REQUEST_UUID --json`
+recovers a committed admission without needing settings or stdin again. A 404
+means not observed, not permission to submit another UUID: an in-flight admission
+can still commit. Host history includes unresolved work beyond its recent window;
+completed-but-unacknowledged lifecycle work remains observable. Correlation records
+are retained for durable idempotency rather than removed by ordinary job cleanup.
+
 ## Lifecycle
 
 `agentsdk.New` creates a definition-only agent. Construct services, wire the

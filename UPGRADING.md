@@ -7,6 +7,27 @@ complete final migration from earlier stable and prerelease SDKs. Apply only the
 instructions relevant to the application's source. An application already on
 v0.8.1 receives no instructions when rebuilding against v0.8.1.
 
+## v0.9.0
+
+Use Go 1.26.11 or later to build the SDK and scaffolded applications.
+
+Host-management integrations use `connector/protocol.HostProtocolVersion = 2`
+and the exact-attempt `HostWorkManagementCancel` work kind. Rebuild and reconnect
+enrolled connector hosts with the compatible SDK before admitting management
+work on a server requiring protocol 2. Host WSS uses `airlock.host.v2`;
+application runtime identity is `airlock.app-runtime.v4`.
+
+Use `connector/protocol.ChildProtocolVersion = 1` in custom connector-child
+initialization/readiness integrations. `HostProtocolVersion` is exclusively the
+host-management version. Connector binaries using child handshake 1 are compatible
+with this host and require no rebuild for the management upgrade. Child framing,
+connector manifest protocol major and application runtime identity are independent
+of the host-management version.
+
+Management cancellation targets the exact job ID and attempt token. Interrupted
+operations can have physical effects; cancellation is not rollback and does not
+authorize automatic replay. Inspect unknown outcomes before issuing fresh work.
+
 ## v0.8.3
 
 Applications using microphone, camera, geolocation, display capture, fullscreen,

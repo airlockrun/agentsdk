@@ -6,6 +6,19 @@ host owns enrollment, the Airlock credential, control-plane HTTP, installation,
 updates, rollback, process supervision, and local access policy. A connector
 binary never connects to Airlock directly and has no standalone service mode.
 
+## Protocol identities
+
+`protocol.HostProtocolVersion` is 2 for host enrollment, synchronization and
+management with exact-attempt cancellation. `protocol.ChildProtocolVersion` is 1
+for connector-child initialization and readiness over framed stdin/stdout.
+The host WSS identity is `airlock.host.v2`; application runtime is
+`airlock.app-runtime.v4`. These identities describe independent contracts.
+
+Hosts send child initialization version 1 and accept readiness version 1.
+Connector runtimes accept initialization version 1 and emit readiness version 1.
+Management version 2 is not a child handshake version. Compatible servers require
+management version 2 independently of the installed connectors' child version.
+
 ## Repository layout
 
 Each immediate child of `connectors/` is a `main` package:

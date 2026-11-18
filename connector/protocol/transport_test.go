@@ -6,6 +6,26 @@ import (
 	"testing"
 )
 
+// Management cancellation has its own work kind so a connector installation ID
+// cannot redirect an admitted host attempt's cancellation.
+func TestManagementCancellationPayload(t *testing.T) {
+	valid := HostMessage{Protocol: HostTransportProtocol, ID: "cancel", Work: &HostWork{Kind: HostWorkManagementCancel, Cancel: &ChildCancel{JobID: "job", AttemptToken: "attempt"}}}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, work := range []HostWork{
+		{Kind: HostWorkManagementCancel},
+		{Kind: HostWorkManagementCancel, Cancel: &ChildCancel{JobID: "job"}},
+		{Kind: HostWorkManagementCancel, ConnectorID: "connector", Cancel: &ChildCancel{JobID: "job", AttemptToken: "attempt"}},
+	} {
+		message := valid
+		message.Work = &work
+		if err := message.Validate(); err == nil {
+			t.Fatalf("invalid management cancellation accepted: %+v", work)
+		}
+	}
+}
+
 func TestHostMessageStrictEnvelope(t *testing.T) {
 	for _, test := range []struct {
 		name, data string

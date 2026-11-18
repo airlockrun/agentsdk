@@ -12,7 +12,7 @@ import (
 
 func TestChildFramesRoundTripAndRejectUnknownFields(t *testing.T) {
 	var stream bytes.Buffer
-	input := ChildInitialize{ProtocolVersion: HostProtocolVersion, InstallationID: "one", StateDirectory: "/state", Settings: []byte(`{}`)}
+	input := ChildInitialize{ProtocolVersion: 1, InstallationID: "one", StateDirectory: "/state", Settings: []byte(`{}`)}
 	if err := NewChildEncoder(&stream).Encode(ChildEnvelope{Type: ChildMessageInitialize, Initialize: &input}); err != nil {
 		t.Fatal(err)
 	}
@@ -32,6 +32,30 @@ func TestChildFramesRoundTripAndRejectUnknownFields(t *testing.T) {
 	stream.Write(body)
 	if err := NewChildDecoder(&stream).Decode(&decoded); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestHostAndChildProtocolVersions(t *testing.T) {
+	if HostProtocolVersion != 2 || ChildProtocolVersion != 1 {
+		t.Fatalf("host = %d, child = %d", HostProtocolVersion, ChildProtocolVersion)
+	}
+	for _, test := range []struct {
+		name    string
+		version int
+		valid   bool
+	}{
+		{name: "management-v2", version: 2, valid: true},
+		{name: "child-v1-not-management", version: 1},
+		{name: "missing", version: 0},
+		{name: "unknown", version: 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := validHostSyncRequest()
+			request.Host.ProtocolVersion = test.version
+			if err := ValidateHostSyncRequest(request); (err == nil) != test.valid {
+				t.Fatalf("ValidateHostSyncRequest(%d): %v", test.version, err)
+			}
+		})
 	}
 }
 

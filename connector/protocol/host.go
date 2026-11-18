@@ -16,8 +16,15 @@ import (
 	"github.com/google/uuid"
 )
 
+// HostProtocolVersion identifies host enrollment, synchronization and management
+// with exact-attempt cancellation over the authenticated host transport.
+const HostProtocolVersion = 2
+
+// ChildProtocolVersion identifies connector-child initialization and readiness
+// over the framed stdin/stdout protocol.
+const ChildProtocolVersion = 1
+
 const (
-	HostProtocolVersion           = 1
 	MaxChildFrameBytes            = 8 << 20
 	MaxHostSyncBytes              = MaxChildFrameBytes
 	MaxHostInventoryMutationBytes = 2*MaxManifestBytes + (64 << 10)
@@ -314,6 +321,7 @@ type HostWorkKind string
 const (
 	HostWorkConnectorJob      HostWorkKind = "connector_job"
 	HostWorkConnectorCancel   HostWorkKind = "connector_cancel"
+	HostWorkManagementCancel  HostWorkKind = "management_cancel"
 	HostWorkShell             HostWorkKind = "shell"
 	HostWorkConnectorInstall  HostWorkKind = "connector_install"
 	HostWorkConnectorUpdate   HostWorkKind = "connector_update"

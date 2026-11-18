@@ -44,7 +44,7 @@ func TestHostedRuntimeHandshakeProgressAndCompletion(t *testing.T) {
 	encoder := protocol.NewChildEncoder(hostWriter)
 	decoder := protocol.NewChildDecoder(hostReader)
 	stateDirectory := filepath.Join(t.TempDir(), "state")
-	initialization := protocol.ChildInitialize{ProtocolVersion: protocol.HostProtocolVersion, InstallationID: "connector-1", StateDirectory: stateDirectory, Settings: json.RawMessage(`{"prefix":"ok:"}`)}
+	initialization := protocol.ChildInitialize{ProtocolVersion: 1, InstallationID: "connector-1", StateDirectory: stateDirectory, Settings: json.RawMessage(`{"prefix":"ok:"}`)}
 	if err := encoder.Encode(protocol.ChildEnvelope{Type: protocol.ChildMessageInitialize, Initialize: &initialization}); err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestHostedRuntimeHandshakeProgressAndCompletion(t *testing.T) {
 	if err := decoder.Decode(&ready); err != nil {
 		t.Fatal(err)
 	}
-	if ready.Ready.Readiness != protocol.ReadinessReady || ready.Ready.ProtocolVersion != protocol.HostProtocolVersion {
+	if ready.Ready.Readiness != protocol.ReadinessReady || ready.Ready.ProtocolVersion != 1 {
 		t.Fatalf("ready = %+v", ready.Ready)
 	}
 	descriptor := command.Descriptor()
@@ -101,7 +101,7 @@ func TestHostedRuntimeCancellation(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- runtime.RunContext(context.Background(), nil) }()
 	encoder, decoder := protocol.NewChildEncoder(hostWriter), protocol.NewChildDecoder(hostReader)
-	initialization := protocol.ChildInitialize{ProtocolVersion: protocol.HostProtocolVersion, InstallationID: "connector-1", StateDirectory: filepath.Join(t.TempDir(), "state"), Settings: json.RawMessage(`{}`)}
+	initialization := protocol.ChildInitialize{ProtocolVersion: protocol.ChildProtocolVersion, InstallationID: "connector-1", StateDirectory: filepath.Join(t.TempDir(), "state"), Settings: json.RawMessage(`{}`)}
 	if err := encoder.Encode(protocol.ChildEnvelope{Type: protocol.ChildMessageInitialize, Initialize: &initialization}); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestHostedRuntimeCancellationWhileWaitingForCapacity(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- runtime.RunContext(context.Background(), nil) }()
 	encoder, decoder := protocol.NewChildEncoder(hostWriter), protocol.NewChildDecoder(hostReader)
-	initialization := protocol.ChildInitialize{ProtocolVersion: protocol.HostProtocolVersion, InstallationID: "connector-1", StateDirectory: filepath.Join(t.TempDir(), "state"), Settings: json.RawMessage(`{}`)}
+	initialization := protocol.ChildInitialize{ProtocolVersion: protocol.ChildProtocolVersion, InstallationID: "connector-1", StateDirectory: filepath.Join(t.TempDir(), "state"), Settings: json.RawMessage(`{}`)}
 	if err := encoder.Encode(protocol.ChildEnvelope{Type: protocol.ChildMessageInitialize, Initialize: &initialization}); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +185,21 @@ func TestHostedRuntimeCancellationWhileWaitingForCapacity(t *testing.T) {
 	_ = hostWriter.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRuntimeRejectsManagementVersionInChildHandshake(t *testing.T) {
+	var input, output bytes.Buffer
+	initialization := protocol.ChildInitialize{ProtocolVersion: 2, InstallationID: "wrong-version", StateDirectory: t.TempDir(), Settings: json.RawMessage(`{}`)}
+	if err := protocol.NewChildEncoder(&input).Encode(protocol.ChildEnvelope{Type: protocol.ChildMessageInitialize, Initialize: &initialization}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := New(Config{Kind: "child-version", Contract: DefineContract("io.airlockrun.child_version"), Name: "Child", Description: "Child handshake validation.", ArtifactVersion: "1", Targets: []string{PlatformLinuxAMD64}, Input: &input, Output: &output})
+	if err := runtime.RunContext(t.Context(), nil); err == nil || !strings.Contains(err.Error(), "unsupported child protocol version 2") {
+		t.Fatalf("management version accepted as child handshake: %v", err)
+	}
+	if output.Len() != 0 {
+		t.Fatal("invalid child initialization emitted readiness")
 	}
 }
 

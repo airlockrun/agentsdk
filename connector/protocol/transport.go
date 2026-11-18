@@ -104,6 +104,10 @@ func (m HostMessage) Validate() error {
 			if work.Cancel == nil || work.ConnectorID == "" {
 				return errors.New("connector protocol: invalid cancellation")
 			}
+		case HostWorkManagementCancel:
+			if work.Cancel == nil || work.Cancel.JobID == "" || work.Cancel.AttemptToken == "" || work.ConnectorID != "" {
+				return errors.New("connector protocol: invalid management cancellation")
+			}
 		case HostWorkShell, HostWorkConnectorInstall, HostWorkConnectorUpdate, HostWorkConnectorRemove, HostWorkConnectorRollback:
 			if work.ManagementJob == nil {
 				return errors.New("connector protocol: invalid management work")

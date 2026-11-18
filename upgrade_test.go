@@ -26,6 +26,10 @@ func TestUpgradeInstructions(t *testing.T) {
 		{name: "browser declarations", from: "0.8.2", to: "0.8.3", wantContains: "agentsdk.Config.Capabilities"},
 		{name: "resource acknowledgment", from: "0.8.2", to: "0.8.3", wantContains: "wire.CandidateSelection.AcknowledgedFingerprint"},
 		{name: "stable browser resource version", from: "0.8.3", to: "0.8.3", wantEmpty: true},
+		{name: "host management protocol", from: "0.8.4", to: "0.9.0", wantContains: "HostProtocolVersion = 2"},
+		{name: "child handshake migration", from: "0.8.4", to: "0.9.0", wantContains: "ChildProtocolVersion = 1"},
+		{name: "host migration target excluded", from: "0.8.4", to: "0.8.5", wantEmpty: true},
+		{name: "host migration source excluded", from: "0.9.0", to: "0.9.1", wantEmpty: true},
 		{name: "same version", from: "0.8.1", to: "v0.8.1", wantEmpty: true},
 		{name: "same-base content addressed prerelease", from: "0.8.1-devabc123", to: "0.8.1", wantContains: "## v0.8.1"},
 		{name: "invalid source", from: "", to: "0.8.1", wantErr: "invalid source SDK version"},
@@ -60,8 +64,8 @@ func TestConsolidatedStableUpgradeInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 || entries[0].version != "v0.8.1" || entries[1].version != "v0.8.3" {
-		t.Fatalf("expected consolidated v0.8.1 and browser/resource v0.8.3 entries, got %#v", entries)
+	if len(entries) != 3 || entries[0].version != "v0.8.1" || entries[1].version != "v0.8.3" || entries[2].version != "v0.9.0" {
+		t.Fatalf("expected v0.8.1, v0.8.3 and v0.9.0 migration entries, got %#v", entries)
 	}
 	for _, from := range []string{"0.7.0", "0.8.1-alpha.7", "0.8.1-alpha.8", "0.8.1-alpha.9", "0.8.1-alpha.12", "0.8.1-alpha.13"} {
 		t.Run(from, func(t *testing.T) {

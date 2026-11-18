@@ -57,6 +57,10 @@ func main() {
 		if errors.As(err, &approval) {
 			os.Exit(77)
 		}
+		var remoteExit *hostCommandExitError
+		if errors.As(err, &remoteExit) {
+			os.Exit(remoteExit.code)
+		}
 		os.Exit(1)
 	}
 }
@@ -100,6 +104,8 @@ func run(args []string) error {
 		return cmdEnv(args[1:])
 	case "connectors":
 		return cmdConnectors(args[1:])
+	case "hosts":
+		return cmdHosts(args[1:])
 	case "login":
 		return cmdLogin(args[1:])
 	case "logout":
@@ -152,6 +158,14 @@ Usage:
   air env clear <slug> [flags]    clear one declared non-secret value
   air connectors list [--json]    list connector resources visible to you
   air connectors inspect <id>     inspect one connector interface
+  air connectors install --host UUID --agent UUID --need SLUG --artifact UUID --name NAME
+  air connectors update --host UUID --connector UUID --agent UUID --need SLUG --artifact UUID
+                                  wait for verified ready inventory; --no-wait submits only
+  air hosts exec <host-UUID> [--wait] -- COMMAND [ARG...]
+                                  execute on the exact managed host as its service OS user
+  air hosts job <job-UUID> [--wait] [--json] inspect a durable host management job
+  air hosts cancel <job-UUID> [--json] request cancellation, not rollback
+  air hosts request <host-UUID> <request-UUID> [--json] recover exact admission
   air login <airlock-url>         store CLI credentials outside the repo
   air logout <airlock-url>        revoke and remove CLI credentials
   air deploy [dir] -m <text>      upload source and start a build
