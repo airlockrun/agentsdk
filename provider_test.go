@@ -3,8 +3,13 @@ package agentsdk
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/airlockrun/agentsdk/wire"
 	"github.com/airlockrun/goai/model"
 	"github.com/airlockrun/goai/stream"
 	"github.com/airlockrun/sol/websearch"
@@ -149,6 +154,53 @@ func TestAgentWebSearch(t *testing.T) {
 	}
 	if body.Query != "golang" {
 		t.Errorf("query = %q, want golang", body.Query)
+	}
+}
+
+func TestAgentWebSearchCarriesExecutionReceipt(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		name := "invocation"
+		if background {
+			name = "background"
+		}
+		t.Run(name, func(t *testing.T) {
+			token := strings.Repeat("ab", 32)
+			var creates, searches atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/agent/run/create":
+					creates.Add(1)
+					_ = json.NewEncoder(w).Encode(wire.CreateRunResponse{RunID: "search-run", InvocationToken: token, Caller: testWireCaller("application", wire.AccessPublic)})
+				case "/api/agent/search":
+					searches.Add(1)
+					if r.Header.Get("X-Airlock-Run-ID") != "search-run" || r.Header.Get(wire.InvocationTokenHeader) != token {
+						t.Error("search lost its admitted run or invocation receipt")
+					}
+					_ = json.NewEncoder(w).Encode(websearch.Response{Provider: "mock"})
+				default:
+					t.Errorf("unexpected request: %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			a := newTestAgent(t, server.URL)
+			a.RegisterModel(&ModelSlot{Slug: "research", Capability: CapSearch, Description: "Search"})
+			ctx := t.Context()
+			if !background {
+				r := newRun(a, "search-run", "", "", ctx)
+				r.invocationToken = token
+				ctx = contextWithRun(ctx, r)
+			}
+			if _, err := a.WebSearch(ctx, "research", websearch.Request{Query: "test"}); err != nil {
+				t.Fatal(err)
+			}
+			if searches.Load() != 1 || background && creates.Load() != 1 || !background && creates.Load() != 0 {
+				t.Fatalf("creates=%d searches=%d", creates.Load(), searches.Load())
+			}
+			if background && runFromContext(ctx) != nil {
+				t.Fatal("search mutated caller context")
+			}
+		})
 	}
 }
 

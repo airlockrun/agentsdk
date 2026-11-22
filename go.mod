@@ -5,8 +5,8 @@ go 1.26.11
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/a-h/templ v0.3.1020
-	github.com/airlockrun/goai v0.3.3
-	github.com/airlockrun/sol v0.1.22
+	github.com/airlockrun/goai v0.3.4
+	github.com/airlockrun/sol v0.1.23
 	github.com/gofrs/flock v0.13.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0

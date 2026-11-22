@@ -7,6 +7,34 @@ complete final migration from earlier stable and prerelease SDKs. Apply only the
 instructions relevant to the application's source. An application already on
 v0.8.1 receives no instructions when rebuilding against v0.8.1.
 
+## v0.10.0
+
+Model-backed Sol web search uses `websearch.NewModelClient(backend, model)` for
+the `openai`, `gemini`, `grok` and `kimi` backends. Construct the model through
+the normal provider factory with the required credentials, configured endpoint
+and HTTP client. `websearch.DefaultModel(backend)` supplies the search model ID
+when an application does not choose one. This applies to every model-backed
+`websearch.NewClient` call, including calls without an explicit model field.
+
+Use `websearch.NewClient(websearch.Options{Provider: backend, APIKey: key,
+BaseURL: baseURL, HTTPClient: client})` only for direct `brave`, `perplexity` and
+`deepseek` search. Remove `websearch.Options.Model`; the model belongs in
+`NewModelClient`. DeepSeek API roots include `/v1`.
+
+Standalone `tools.WebSearch(providerID, opts)` accepts `provider.Options` from
+`github.com/airlockrun/sol/provider`, including `APIKey`, `BaseURL` and
+`HTTPClient`, rather than an API-key string.
+
+`Agent.WebSearch` retains its signature and carries admitted execution receipts
+for application background work. Rebuild applications with this SDK when using
+the host's admitted search endpoint. An SDK change triggers the host's normal
+application rebuild process; publication does not prove running-app adoption.
+
+Provider factories honor the host-supplied HTTP client for ordinary generation
+and model-backed search. Configure a policy-compatible provider endpoint: host
+public-URL restrictions can reject loopback URLs. Do not bypass the injected
+client to reach a restricted endpoint.
+
 ## v0.9.0
 
 Use Go 1.26.11 or later to build the SDK and scaffolded applications.
