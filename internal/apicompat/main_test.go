@@ -1,6 +1,131 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestCheckerScriptWithInheritedGitCoordinates(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars, err := exec.Command("git", "rev-parse", "--local-env-vars").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := map[string]bool{}
+	for _, key := range strings.Fields(string(vars)) {
+		local[key] = true
+	}
+	var env []string
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if !local[key] && !strings.HasPrefix(key, "GIT_CONFIG_KEY_") && !strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
+			env = append(env, entry)
+		}
+	}
+	git := func(dir string, args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir, cmd.Env = dir, env
+		data, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, data)
+		}
+		return data
+	}
+	fixture := filepath.Join(t.TempDir(), "sdk")
+	git(root, "clone", "--shared", root, fixture)
+	// The fixture has an exact stable API baseline, independent of later tags.
+	for _, tag := range strings.Fields(string(git(fixture, "tag", "--list"))) {
+		if tag != "v0.9.0" {
+			git(fixture, "tag", "-d", tag)
+		}
+	}
+	for _, name := range bytes.Split(bytes.TrimRight(git(root, "ls-files", "-z"), "\x00"), []byte{0}) {
+		path := string(name)
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(fixture, path)
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, data, info.Mode().Perm()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	foreign := t.TempDir()
+	git(foreign, "init", "-b", "main")
+	git(foreign, "config", "user.name", "Foreign Fixture")
+	git(foreign, "config", "user.email", "foreign@example.invalid")
+	git(foreign, "-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "foreign")
+	gitDir := filepath.Join(foreign, ".git")
+	// Materialize an index to verify that the caller's staged state is untouched.
+	git(foreign, "read-tree", "HEAD")
+	before := map[string][]byte{}
+	for _, name := range []string{"HEAD", "index", "config", "refs/heads/main"} {
+		data, err := os.ReadFile(filepath.Join(gitDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = data
+	}
+	for _, tc := range []struct {
+		name, version string
+		wantFailure   bool
+	}{
+		{"approved new series", "0.10.0", false},
+		{"stable API violation", "0.9.1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(fixture, "agentsdk.go")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(string(data), "\n")
+			for i, line := range lines {
+				if strings.HasPrefix(line, "const Version = ") {
+					lines[i] = "const Version = \"" + tc.version + "\""
+				}
+			}
+			if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", filepath.Join(fixture, "scripts/check-api-compat.sh"))
+			cmd.Dir = filepath.Join(fixture, "internal/apicompat")
+			cmd.Env = append(append([]string{}, env...), "GIT_DIR="+gitDir, "GIT_WORK_TREE="+foreign,
+				"GIT_COMMON_DIR="+gitDir, "GIT_INDEX_FILE="+filepath.Join(gitDir, "index"), "GIT_PREFIX=foreign/")
+			output, err := cmd.CombinedOutput()
+			if (err != nil) != tc.wantFailure {
+				t.Fatalf("checker error = %v, output: %s", err, output)
+			}
+			if !strings.Contains(string(output), "Options.Model: removed") {
+				t.Fatalf("real incompatible API diagnostic missing: %s", output)
+			}
+			if tc.wantFailure && !strings.Contains(string(output), "incompatible API change(s) in compatibility series v0.9") {
+				t.Fatalf("stable API violation not rejected: %s", output)
+			}
+			for name, want := range before {
+				got, err := os.ReadFile(filepath.Join(gitDir, name))
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("foreign Git %s changed: %v", name, err)
+				}
+			}
+		})
+	}
+}
 
 func TestSelectBaseline(t *testing.T) {
 	tests := []struct {

@@ -175,5 +175,6 @@ func (a *Agent) WebSearch(ctx context.Context, slug string, req websearch.Reques
 		return nil, a.runtimeUnavailable("WebSearch")
 	}
 	a.requireSlot(slug, CapSearch)
+	ctx = contextWithRun(ctx, a.runForCall(ctx))
 	return (&proxySearchClient{client: a.client}).Search(ctx, slug, req)
 }
