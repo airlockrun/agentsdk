@@ -44,6 +44,7 @@ type deployFlags struct {
 	dir           string
 	target        string
 	wait          bool
+	json          bool
 	timeout       time.Duration
 	binds         []string
 	fixtures      []string
@@ -57,12 +58,15 @@ func deployCommand(args []string, ensurePreview bool) error {
 	if os.Getenv("AIRLOCK_INTEGRATION_TOKEN") != "" {
 		return errors.New("deploy is unavailable with a codegen integration token")
 	}
-	f, err := parseDeployFlags(args)
-	if err != nil && len(args) > 0 && (args[0] == "list" || args[0] == "status") {
+	if !ensurePreview && len(args) > 0 && (args[0] == "list" || args[0] == "status") {
 		return cmdDeployBuilds(args[0], args[1:])
 	}
+	f, err := parseDeployFlags(args)
 	if err != nil {
 		return err
+	}
+	if (!ensurePreview && (f.dir == "list" || f.dir == "status")) || (ensurePreview && (f.dir == "select" || f.dir == "configuration")) {
+		return fmt.Errorf("directory name %q is reserved; use ./%s for a directory or put the subcommand immediately after its parent", f.dir, f.dir)
 	}
 	f.ensurePreview = ensurePreview
 	if f.launch && !ensurePreview {
@@ -82,11 +86,15 @@ func deployCommand(args []string, ensurePreview bool) error {
 }
 
 func parseDeployFlags(args []string) (deployFlags, error) {
-	f := deployFlags{dir: ".", timeout: 10 * time.Minute}
+	f := deployFlags{dir: ".", timeout: 10 * time.Minute, json: invocationOutput != nil}
 	var positional []string
 	messageSet := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
 		if a == "-m" {
 			if i+1 >= len(args) {
 				return deployFlags{}, errors.New("flag -m needs a value")
@@ -101,6 +109,10 @@ func parseDeployFlags(args []string) (deployFlags, error) {
 			continue
 		}
 		key := a[2:]
+		if key == "json" {
+			f.json = true
+			continue
+		}
 		if key == "launch" {
 			f.launch = true
 			continue
@@ -294,6 +306,9 @@ func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags)
 	if f.generatedSlug {
 		slugIntent = airlockv1.AppSlugIntent_APP_SLUG_INTENT_GENERATED
 	}
+	if invocationOutput != nil {
+		invocationOutput.Operation = &cliOperation{Kind: "app_create", Admission: "unknown", RequestedSlug: f.slug, RequestedName: name}
+	}
 	err := doProto(ctx, baseURL, http.MethodPost, "/api/v1/agents", token, &airlockv1.CreateAgentRequest{
 		Name:             name,
 		Slug:             f.slug,
@@ -302,12 +317,16 @@ func createDraftAgent(ctx context.Context, baseURL, token string, f deployFlags)
 		SkipInitialBuild: true,
 	}, &resp)
 	if err != nil {
-		return agentRemoteBinding{}, fmt.Errorf("create agent: %w", err)
+		return agentRemoteBinding{}, fmt.Errorf("create agent: %w", admissionFailure(err))
 	}
 	if resp.Agent == nil || resp.Agent.Id == "" {
 		return agentRemoteBinding{}, errors.New("create agent response did not include an agent id")
 	}
-	return agentRemoteBinding{AirlockURL: baseURL, AgentID: resp.Agent.Id, Slug: resp.Agent.Slug}, nil
+	if invocationOutput != nil {
+		invocationOutput.Operation.Admission = "accepted"
+		invocationOutput.Operation.AppID = resp.Agent.Id
+	}
+	return agentRemoteBinding{AirlockURL: baseURL, AgentID: resp.Agent.Id, Slug: resp.Agent.Slug, displayName: resp.Agent.Name}, nil
 }
 
 func resolveAgentTarget(ctx context.Context, baseURL, token, flagAgent, remoteName string, binding agentRemoteBinding) (agentRemoteBinding, error) {
@@ -327,7 +346,7 @@ func resolveAgentTarget(ctx context.Context, baseURL, token, flagAgent, remoteNa
 		if agent.GetId() != target {
 			return agentRemoteBinding{}, fmt.Errorf("resolve agent %q: Airlock returned agent %q", target, agent.GetId())
 		}
-		resolved = agentRemoteBinding{AirlockURL: baseURL, AgentID: agent.GetId(), Slug: agent.GetSlug()}
+		resolved = agentRemoteBinding{AirlockURL: baseURL, AgentID: agent.GetId(), Slug: agent.GetSlug(), displayName: agent.GetName()}
 	} else {
 		var resp airlockv1.ListAgentsResponse
 		if err := doProto(ctx, baseURL, http.MethodGet, "/api/v1/agents", token, nil, &resp); err != nil {
@@ -335,7 +354,7 @@ func resolveAgentTarget(ctx context.Context, baseURL, token, flagAgent, remoteNa
 		}
 		for _, a := range resp.Agents {
 			if a.GetSlug() == target || a.GetId() == target {
-				resolved = agentRemoteBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug()}
+				resolved = agentRemoteBinding{AirlockURL: baseURL, AgentID: a.GetId(), Slug: a.GetSlug(), displayName: a.GetName()}
 				break
 			}
 		}
@@ -511,6 +530,13 @@ func uploadSource(ctx context.Context, baseURL, token, sourcePath, dir, sourceET
 	state, err := sourcebundle.WriteArchive(archive, dir)
 	if err != nil {
 		return acceptedSource{}, err
+	}
+	if invocationOutput != nil {
+		if invocationOutput.Operation == nil || invocationOutput.Operation.Kind != "source_upload" {
+			panic("source upload requires CLI operation coordinates")
+		}
+		invocationOutput.Operation.Admission = "unknown"
+		invocationOutput.Operation.UploadedSourceState = state
 	}
 	resp, err := doAuthenticatedHTTP(ctx, baseURL, token, func(token string) (*http.Request, error) {
 		if _, err := archive.Seek(0, io.SeekStart); err != nil {

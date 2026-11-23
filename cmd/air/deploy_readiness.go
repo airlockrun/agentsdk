@@ -17,18 +17,37 @@ func reportDeploymentReadiness(ctx context.Context, target selectedDeployment, r
 	var response airlockv1.GetDeploymentResponse
 	path := target.path("") + "?candidate_revision_id=" + url.QueryEscape(revision)
 	if err := doProto(ctx, target.baseURL, http.MethodGet, path, target.token, nil, &response); err != nil {
+		if invocationOutput != nil {
+			invocationOutput.Configuration = map[string]string{"availability": "inspection_failed"}
+		}
 		fmt.Fprintln(os.Stderr, "Configuration readiness could not be inspected; deployment submission is unchanged.")
-		fmt.Fprintf(os.Stderr, "Environment settings: %s\n", envSettingsURL(target))
 		return
 	}
-	readiness := response.GetDeployment().GetConfigurationReadiness()
+	deployment := response.GetDeployment()
+	if deployment == nil || deployment.Id != target.info.Id || deployment.AppId != target.app.AgentID || deployment.RuntimeAgentId != target.info.Id {
+		if invocationOutput != nil {
+			invocationOutput.Configuration = map[string]string{"availability": "inspection_failed"}
+		}
+		fmt.Fprintln(os.Stderr, "Configuration inspection returned inconsistent deployment identity; deployment submission is unchanged.")
+		return
+	}
+	readiness := deployment.GetConfigurationReadiness()
 	if readiness == nil {
-		fmt.Fprintln(os.Stderr, "Configuration readiness is unavailable from this host; inspect target settings after deployment exists.")
-		fmt.Fprintf(os.Stderr, "Environment settings: %s\n", envSettingsURL(target))
+		if invocationOutput != nil {
+			invocationOutput.Configuration = map[string]string{"availability": "unknown"}
+		}
 		return
 	}
+	if invocationOutput != nil {
+		source := "current"
+		if readiness.CandidateDeclarationsAvailable {
+			source = "candidate"
+		}
+		invocationOutput.Configuration = map[string]any{"requestedCandidateRevisionId": revision, "currentSourceRevisionId": deployment.SourceRevisionId, "declarationSource": source, "candidateDeclarationsAvailable": readiness.CandidateDeclarationsAvailable, "unboundResources": readiness.UnboundResources, "unsetEnvVars": readiness.UnsetEnvVars, "unsetSecrets": readiness.UnsetSecrets}
+	}
+	source := "Candidate"
 	if !readiness.CandidateDeclarationsAvailable {
-		fmt.Fprintln(os.Stderr, "Candidate declarations are not yet available; configuration report uses current target declarations.")
+		source = "Current target (candidate declarations unavailable)"
 	}
 	for _, entry := range []struct {
 		label string
@@ -39,11 +58,25 @@ func reportDeploymentReadiness(ctx context.Context, target selectedDeployment, r
 			for i, slot := range entry.slots {
 				slots[i] = safeTableCell(slot)
 			}
-			fmt.Fprintf(os.Stderr, "Configuration notice — %s: %s\n", entry.label, strings.Join(slots, ", "))
+			fmt.Fprintf(os.Stderr, "%s — %s: %s\n", source, entry.label, strings.Join(slots, ", "))
 		}
 	}
-	if !readiness.CandidateDeclarationsAvailable || len(readiness.UnboundResources)+len(readiness.UnsetEnvVars)+len(readiness.UnsetSecrets) > 0 {
-		fmt.Fprintln(os.Stderr, "Configuration is available only after the target deployment exists. These notices do not block deployment; saving configuration does not restart a running target.")
-		fmt.Fprintf(os.Stderr, "Environment settings: %s\nResource settings: %s/agents/%s?view=advanced&target=%s#connections\n", envSettingsURL(target), target.baseURL, url.PathEscape(target.app.AgentID), url.QueryEscape(target.info.Id))
+	if len(readiness.UnboundResources)+len(readiness.UnsetEnvVars)+len(readiness.UnsetSecrets) > 0 {
+		command := "env list"
+		if len(readiness.UnsetEnvVars)+len(readiness.UnsetSecrets) == 0 {
+			command = "resources bindings"
+		}
+		action := selectedAction(target, command, "Review current target declarations; pending candidate requirements may differ")
+		action.Kind = "configure"
+		if invocationOutput != nil {
+			invocationOutput.Guidance = append(invocationOutput.Guidance, action)
+		}
+		fmt.Fprintf(os.Stderr, "Review current declarations: %s\n", shellCommand(action))
+		if link := envSettingsURL(target); link != "" {
+			fmt.Fprintf(os.Stderr, "Environment settings: %s\n", link)
+		}
+		if link := workspaceSettingsURL(target, "main"); link != "" {
+			fmt.Fprintf(os.Stderr, "Resource settings: %s\n", link)
+		}
 	}
 }

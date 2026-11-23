@@ -28,6 +28,30 @@ func deploymentResponse(w http.ResponseWriter) {
 	fmt.Fprintf(w, `{"deployment":{"id":%q,"appId":%q,"runtimeAgentId":%q,"kind":"personal_preview","name":"p-random","ownerUserId":%q,"sourceRevisionId":%q,"status":"active","running":true}}`, runtimeID, appID, runtimeID, ownerID, revisionID)
 }
 
+func TestHTTPFailureRetainsRequestMethodAndStatus(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != method {
+					t.Errorf("method = %s", r.Method)
+				}
+				http.Error(w, "fixture denied", http.StatusForbidden)
+			}))
+			defer server.Close()
+			client, err := New(configFor(server))
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = client.call(t.Context(), method, client.path(), nil, nil)
+			var status *HTTPError
+			var request interface{ RequestMethod() string }
+			if !errors.As(err, &status) || status.StatusCode != 403 || !errors.As(err, &request) || request.RequestMethod() != method {
+				t.Fatalf("request provenance lost: %v", err)
+			}
+		})
+	}
+}
+
 func TestLifecycleRestartIsOneTargetOperation(t *testing.T) {
 	base := "/api/v1/agents/" + appID + "/deployments/p-random"
 	posts := 0

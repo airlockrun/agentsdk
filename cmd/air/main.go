@@ -51,23 +51,34 @@ const (
 )
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "air: %v\n", err)
-		var approval *approvalRequiredError
-		if errors.As(err, &approval) {
-			os.Exit(77)
+	if err := invokeCLI(os.Args[1:], os.Stdout); err != nil {
+		if !jsonRequested(os.Args[1:]) {
+			fmt.Fprintf(os.Stderr, "air: %v\n", err)
 		}
-		var remoteExit *hostCommandExitError
-		if errors.As(err, &remoteExit) {
-			os.Exit(remoteExit.code)
-		}
-		os.Exit(1)
+		os.Exit(exitCode(err))
 	}
 }
 
 func run(args []string) error {
+	if path, ok := helpRequest(args); ok {
+		return printHelp(os.Stdout, path, false)
+	}
+	args = normalizeOptions(args)
+	if command, consumed, ok := findPublicCommand(args); ok {
+		if err := validateCommandFlags(command, args[consumed:]); err != nil {
+			return err
+		}
+	} else if len(args) > 0 && knownHelp(args[0]) {
+		if len(args) > 1 {
+			if args[0] == "connectors" {
+				return fmt.Errorf("unknown connectors subcommand %q; discover resources with 'go tool air resources list' (global) or 'go tool air resources list preview' (app slots); run 'air help connectors' for installation management", args[1])
+			}
+			return fmt.Errorf("unknown %s subcommand %q; run 'air help %s'", args[0], args[1], args[0])
+		}
+		return fmt.Errorf("%s requires a subcommand; run 'air help %s'", args[0], args[0])
+	}
 	if len(args) == 0 {
-		usage(os.Stderr)
+		_ = printHelp(os.Stderr, "", false)
 		return errors.New("no subcommand given")
 	}
 
@@ -78,10 +89,10 @@ func run(args []string) error {
 		}
 		fmt.Println("airlock-operation-challenges.v1")
 		return nil
-	case "-h", "--help", "help":
-		usage(os.Stdout)
-		return nil
 	case "--version", "version":
+		if len(args) != 1 {
+			return errors.New("version takes no arguments")
+		}
 		fmt.Printf("air v%s\n", agentsdk.Version)
 		return nil
 	case "init":
@@ -114,6 +125,8 @@ func run(args []string) error {
 		return cmdDeploy(args[1:])
 	case "status":
 		return cmdTargetStatus(args[1:])
+	case "inspect":
+		return cmdTargetInspect(args[1:])
 	case "start", "stop", "restart", "suspend":
 		return cmdTargetLifecycle(args[0], args[1:])
 	case "request", "tools", "agent", "logs":
@@ -131,176 +144,6 @@ func run(args []string) error {
 	}
 }
 
-func usage(w io.Writer) {
-	fmt.Fprintf(w, `air v%s - author an Airlock agent repo outside airlock
-
-Usage:
-  air version                     print the selected CLI version
-  air init <dir> [flags]          scaffold a new agent into <dir>
-  air update [dir]                update module pins, managed files, and toolchain
-  air toolchain install           ensure the pinned build tools and references
-  air build [dir]                 run the local build chain
-  air test [dir]                 run deterministic local tests without infrastructure
-  air preview [dir] -m <text>     create/update the saved real preview
-                                   --launch starts the preview after source admission
-  air preview select <target>    explicitly share an existing preview reference
-  air preview configuration <revision> inspect/set pending candidate selections
-  air context delete --remote NAME request deletion of that remote's owned workspace
-  air request METHOD /path       request app HTTP (production by default)
-  air tools list|invoke <name>    inspect or invoke registered app tools
-  air agent start|get|list|wait|cancel|continue operate a registered agent on the real host
-  air logs <run-UUID>             read a selected target's run log snapshot
-  air start|stop|restart|suspend  operate a selected target's runtime
-  air env list [flags]            list agent environment variable declarations
-  air env get <slug> [flags]      print one configured non-secret value
-  air env set <slug> <value> [flags]
-                                   set one declared non-secret value
-  air env clear <slug> [flags]    clear one declared non-secret value
-  air connectors list [--json]    list connector resources visible to you
-  air connectors inspect <id>     inspect one connector interface
-  air connectors install --host UUID --agent UUID --need SLUG --artifact UUID --name NAME
-  air connectors update --host UUID --connector UUID --agent UUID --need SLUG --artifact UUID
-                                  wait for verified ready inventory; --no-wait submits only
-  air hosts exec <host-UUID> [--wait] -- COMMAND [ARG...]
-                                  execute on the exact managed host as its service OS user
-  air hosts job <job-UUID> [--wait] [--json] inspect a durable host management job
-  air hosts cancel <job-UUID> [--json] request cancellation, not rollback
-  air hosts request <host-UUID> <request-UUID> [--json] recover exact admission
-  air login <airlock-url>         store CLI credentials outside the repo
-  air logout <airlock-url>        revoke and remove CLI credentials
-  air deploy [dir] -m <text>      upload source and start a build
-  air deploy list [dir] [flags]  list recent builds (newest first)
-  air deploy status [dir] [flags] inspect or watch one build
-  air status [dir] [flags]        inspect selected deployment/runtime readiness
-  air resources list [target]     list global resources or an app target's slots
-  air resources inspect|request|mcp-tools|mcp-call ADDRESS
-                                  /global-name or /UUID; target/slot for app bindings
-  air resources mcp-probe URL     public MCP/OAuth diagnostics without credentials
-  air resources bindings|bind|fixture|unbind
-                                  bind target/slot --resource /name; --type disambiguates slots
-  air pull [dir] [flags]          fast-forward a local workspace from Airlock
-  air clone <agent> <dir> [flags] clone Airlock source without Git
-  air remote default <name>       select the default Airlock instance
-  air remote unbind <name>        clear a remote's local agent binding
-
-Init flags:
-  --agentsdk-version <ver>   agentsdk version to pin (default "v%s")
-  --url <url>                write .airlock/local/agent.toml with this Airlock URL
-
-Update (dir defaults to "."):
-  Reconciles go.mod with this air version, updates the airlock-managed files
-  (Dockerfile, AGENTS.md, .gitignore, %s), runs go mod tidy, and refreshes
-  .airlock/toolchain. Requires an existing go.mod in dir.
-
-Toolchain install:
-  Ensures the build toolchain pinned by the scaffold:
-    templ       %s (via go tool templ)
-    sqlc        %s (standalone binary -> .airlock/toolchain/bin)
-    tailwindcss %s (standalone binary -> .airlock/toolchain/bin)
-    daisyui     %s (plugin mjs files -> .airlock/toolchain/lib/tailwind)
-    references     (agentsdk + UI docs -> .airlock/toolchain/skills)
-
-Login flags:
-  --reauthenticate            start a new device login even if already logged in
-  --no-browser               print the device login URL without opening a browser
-  --no-wait                  start device login, save pending state, and exit
-  --wait                     wait for browser approval even without a TTY
-  --check                    check one pending device login once and exit
-
-  Login validates and reuses working credentials saved for the Airlock URL.
-  Rejected credentials start a new browser approval; --reauthenticate starts
-  one even when the saved login works. In a TTY, air login waits for approval.
-  Without a TTY, it behaves like --no-wait so code harnesses do not hang on a
-  foreground poll loop.
-
-Deploy flags:
-  --target <name>             deployment: production (default), saved preview, or named target
-  --wait                     wait for the build and actual running app
-  --timeout <duration>        bound observation (default 10m)
-  --bind [type:]slot=<UUID>[@<fingerprint>]   select a resource; acknowledge exact server-reported differences
-  --fixture slot=<name>      attach a source-owned candidate HTTP fixture selection
-  --create                   create a draft agent before uploading source
-  --slug <slug>              agent slug for --create (derived from --name or dir if omitted)
-  --agent <slug-or-id>       existing agent target for a new or matching remote
-  --url <url>                Airlock URL for a new or matching remote
-  --remote <name>            named Airlock instance (default: configured default_remote)
-  --name <name>              display name for --create (default dir or slug)
-  --description <text>       description for --create
-  -m, --message <text>       required build message (single line, 200 bytes max)
-  --force                    replace stale Airlock source intentionally
-
-Deploy list/status (dir defaults to "."):
-  --target <name>             production by default; preview requires a saved reference
-  --agent <slug-or-id>       existing agent target for a new or matching remote
-  --url <url>                Airlock URL for a new or matching remote
-  --remote <name>            named target (default: configured default_remote)
-  --json                    print the typed API response as JSON
-  list --limit <n>           number of newest builds to show (default 10, range 1-50)
-  status --build <UUID>      inspect this build (default: latest)
-  status --watch             poll every 2 seconds until complete or failed; Ctrl-C cancels
-  status --logs              show persisted Docker and Sol logs; watch prints additions
-
-  Read-only: no upload, build, SDK compatibility check, or workspace writes.
-  Uses saved login credentials; credential refresh may update the login store.
-  Watch pins the selected build, even if a newer build starts. Log snapshot
-  replacements are marked and reprinted. --watch and --json cannot be combined.
-  JSON includes persisted detail logs, regardless of --logs. Failed status exits
-  nonzero after printing the snapshot (also with --json); building snapshots exit
-  successfully without --watch. No builds is an error. Build completion does not
-  describe the agent's current runtime or identify the currently deployed image.
-  A valid deploy list/status -m <text> uploads a directory named list/status;
-  use ./list or ./status to make a directory target unambiguous.
-
-Pull flags:
-  --target <name>             source deployment (production by default)
-  --agent <slug-or-id>       existing agent target for a new or matching remote
-  --url <url>                Airlock URL for a new or matching remote
-  --remote <name>            named deployment target (default: configured default_remote)
-  --force                    discard local source changes
-
-Clone flags:
-  --target <name>             source deployment (production by default)
-  --url <url>                Airlock URL; defaults to the sole saved login
-  --remote <name>            Airlock instance name stored in the cloned workspace
-
-Integration target flags:
-  --target <name>             app deployment (production by default)
-  --agent <slug-or-id>       agent for a new or matching remote
-  --url <url>                Airlock URL for a new or matching remote
-  --remote <name>            named Airlock instance (default: configured default_remote)
-
-Resources:
-  list|inspect <type> <UUID>    --remote <name> or --url <origin>, no app/target
-  request <UUID> --path /path [--method GET] [--data body]
-  mcp-tools <UUID> | mcp-call <UUID> --tool <name> [--data '{}']
-  bindings                    --target preview|production
-  bind <type> <slot>           --resource <UUID> --target <name>
-  fixture <type> <slot>        --fixture <name> --revision <candidate-UUID> --target preview
-  unbind <type> <slot>         --target <name>
-
-  Bindings use existing app/target rights and independent resource use, with no
-  assign permission or local binding file. Upload selections are stored atomically
-  with the whole source candidate and applied by the host at cutover.
-
-Remote tests:
-  air test --remote <name> --target preview --revision <UUID> --suite integration --wait
-  air test status|cancel --run <UUID> --remote <name> --target preview --revision <UUID>
-  Tests/fixtures are packaged from that exact server-owned source revision; runner
-  credentials are scoped opaque capabilities, not copied laptop secrets.
-  air run is unsupported; no local runtime package or host emulator is shipped.
-
-A remote binds one Airlock URL and one stable logical app ID. Selecting a remote
-does not change default_remote. Use air remote default <name> to change it.
-Unbinding clears only the local agent ID, slug, and source state; it preserves
-the Airlock URL and does not delete or modify an agent in Airlock.
-`,
-		agentsdk.Version,
-		agentsdk.Version,
-		scaffold.NoticesFilename,
-		scaffold.TemplVersion, scaffold.SQLCVersion, scaffold.TailwindVersion, scaffold.DaisyUIVersion,
-	)
-}
-
 // scaffoldFlags holds the inputs used to materialize a scaffold.
 type scaffoldFlags struct {
 	agentSDKVersion string
@@ -316,6 +159,10 @@ func parseFlags(args []string, set func(key, value string) error) ([]string, err
 	var positional []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			positional = append(positional, args[i+1:]...)
+			break
+		}
 		if len(a) < 2 || a[:2] != "--" {
 			positional = append(positional, a)
 			continue
@@ -392,10 +239,11 @@ func runInit(args []string, tidy func(string) error) error {
 		return err
 	}
 
-	fmt.Printf("Initialized agent %s in %s\n", id, dir)
+	setResult(map[string]string{"directory": dir, "localAgentId": id, "agentsdkVersion": f.agentSDKVersion}, "completed")
+	fmt.Printf("Initialized application in %s\n", safeTableCell(dir))
 	fmt.Printf("  agentsdk: %s\n", f.agentSDKVersion)
 	fmt.Println("\nNext steps:")
-	fmt.Printf("  cd %s\n", dir)
+	fmt.Printf("  %s\n", shellCommand(cliAction{Executable: "cd", Args: []string{dir}}))
 	fmt.Println("  go tool air toolchain install   # install build tools + coding skills")
 	fmt.Println("  go tool air build")
 	return nil
@@ -422,6 +270,7 @@ func cmdRemote(args []string) error {
 			return err
 		}
 		fmt.Printf("Default remote is now %s\n", name)
+		setResult(map[string]string{"defaultRemote": name}, "completed")
 	case "unbind":
 		remote, found := binding.remote(name)
 		if !found {
@@ -444,30 +293,39 @@ func cmdRemote(args []string) error {
 		if err := writeAgentBinding(".", binding); err != nil {
 			return err
 		}
-		agent := agentID
-		if slug != "" {
-			agent = fmt.Sprintf("%s (%s)", slug, agentID)
-		}
-		fmt.Printf("Remote %q is no longer bound to %s; Airlock URL preserved at %s\n", name, agent, remote.AirlockURL)
+		setResult(map[string]string{"remote": name, "unboundAppId": agentID, "unboundApp": slug, "origin": remote.AirlockURL}, "completed")
+		fmt.Printf("Remote %q is unbound; its Airlock URL is preserved. No remote application was changed.\n", name)
 	}
 	return nil
 }
 
 func cmdUpdate(args []string) error {
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "--") {
-			return fmt.Errorf("unknown update flag %s", arg)
-		}
-	}
-	dir := "."
-	switch len(args) {
-	case 0:
-	case 1:
-		dir = args[0]
-	default:
-		return errors.New("update takes at most one argument: the target directory")
+	dir, err := parseDirectoryArgs("update", args)
+	if err != nil {
+		return err
 	}
 	return runUpdateCommand(dir, tidyModule, ensureToolchain)
+}
+
+func parseDirectoryArgs(command string, args []string) (string, error) {
+	dir, seen, options := ".", false, true
+	for _, arg := range args {
+		if options && arg == "--" {
+			options = false
+			continue
+		}
+		if options && strings.HasPrefix(arg, "-") {
+			return "", fmt.Errorf("unknown %s flag %s", command, arg)
+		}
+		if seen {
+			return "", fmt.Errorf("%s takes at most one directory", command)
+		}
+		if arg == "" {
+			return "", fmt.Errorf("%s requires a nonempty directory", command)
+		}
+		dir, seen = arg, true
+	}
+	return dir, nil
 }
 
 func runUpdateCommand(dir string, tidy func(string) error, install func(string, string) error) error {
@@ -492,13 +350,14 @@ func runUpdateCommand(dir string, tidy func(string) error, install func(string, 
 		return err
 	}
 
-	fmt.Printf("Updated agent workspace in %s:\n", dir)
+	fmt.Printf("Updated agent workspace in %s:\n", safeTableCell(dir))
 	fmt.Println("  go.mod and go.sum")
 	fmt.Println("  Dockerfile")
 	fmt.Println("  AGENTS.md")
 	fmt.Println("  .gitignore")
 	fmt.Printf("  %s\n", scaffold.NoticesFilename)
 	fmt.Println("  .airlock/toolchain")
+	setResult(map[string]string{"directory": dir, "agentsdkVersion": version}, "completed")
 	return nil
 }
 
@@ -621,14 +480,11 @@ func tidyModule(dir string) error {
 }
 
 func cmdBuild(args []string) error {
-	dir := "."
-	switch len(args) {
-	case 0:
-	case 1:
-		dir = args[0]
-	default:
-		return errors.New("build takes at most one argument: the agent repo directory")
+	dir, err := parseDirectoryArgs("build", args)
+	if err != nil {
+		return err
 	}
+	setResult(map[string]any{"directory": dir, "validated": false, "artifactRetained": false}, "failed")
 	return runBuild(dir)
 }
 
@@ -675,7 +531,11 @@ func runBuild(dir string) error {
 	if err := buildConnectors(dir, outputDir); err != nil {
 		return err
 	}
-	return checkAppManifest(dir, filepath.Join(outputDir, outputName), os.Stderr)
+	if err := checkAppManifest(dir, filepath.Join(outputDir, outputName), os.Stderr); err != nil {
+		return err
+	}
+	setResult(map[string]any{"directory": dir, "validated": true, "artifactRetained": false}, "completed")
+	return nil
 }
 
 func cmdStageRuntimeFiles(args []string) error {
@@ -772,6 +632,7 @@ func cmdInstallToolchain(args []string) error {
 	fmt.Printf("  daisyui     %s -> %s\n", scaffold.DaisyUIVersion, filepath.Join(prefix, "lib", "tailwind"))
 	fmt.Printf("  UI refs     %s -> %s\n", scaffold.SkillsDigest(), filepath.Join(prefix, "skills"))
 	fmt.Printf("  agentsdk    %s -> %s\n", runningAgentSDKVersion(), filepath.Join(prefix, "skills", "agentsdk"))
+	setResult(map[string]string{"directory": prefix, "templ": scaffold.TemplVersion, "sqlc": scaffold.SQLCVersion, "tailwindcss": scaffold.TailwindVersion, "daisyui": scaffold.DaisyUIVersion}, "completed")
 	return nil
 }
 

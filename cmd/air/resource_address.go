@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"text/tabwriter"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
 )
@@ -97,12 +99,21 @@ func printResourceMCPTools(response *airlockv1.ListIntegrationMCPToolsResponse) 
 		}
 		out.Tools = append(out.Tools, tool{row.Name, row.Description, input, row.OutputSchemaJson})
 	}
-	encoded, err := json.MarshalIndent(out, "", "  ")
-	if err != nil {
-		return err
+	if humanOutput {
+		if _, err := json.Marshal(out); err != nil {
+			return fmt.Errorf("validate MCP tool schemas: %w", err)
+		}
+		if response.Instructions != "" {
+			fmt.Println(safeTableCell(response.Instructions))
+		}
+		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "TOOL\tDESCRIPTION")
+		for _, row := range response.Tools {
+			fmt.Fprintf(w, "%s\t%s\n", safeTableCell(row.Name), safeTableCell(row.Description))
+		}
+		return w.Flush()
 	}
-	fmt.Println(string(encoded))
-	return nil
+	return writeJSONData(out)
 }
 
 // Codegen is bound to one runtime UUID, not a user resource inventory or a
@@ -156,7 +167,7 @@ func codegenResourceCommand(ctx context.Context, command string, a resourceAddre
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "HTTP %d\n", out.StatusCode)
-		if _, err := os.Stdout.Write(out.Body); err != nil {
+		if err := writeResponseBody(bytes.NewReader(out.Body), int(out.StatusCode), integrationContentType(out.Headers), f.json); err != nil {
 			return err
 		}
 		if out.StatusCode >= 400 {
@@ -192,4 +203,13 @@ func codegenResourceCommand(ctx context.Context, command string, a resourceAddre
 		return errors.New("MCP resource returned a tool error")
 	}
 	return nil
+}
+
+func integrationContentType(headers []*airlockv1.IntegrationHTTPHeader) string {
+	for _, header := range headers {
+		if strings.EqualFold(header.Name, "Content-Type") && len(header.Values) > 0 {
+			return header.Values[0]
+		}
+	}
+	return ""
 }

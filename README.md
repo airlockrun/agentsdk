@@ -51,8 +51,10 @@ go tool air toolchain install
 go tool air build
 go tool air deploy -m "Describe this deployment"
 go tool air deploy list --limit 10
-go tool air deploy status --watch --logs
-go tool air status --watch --logs
+go tool air deploy status --wait --timeout 10m --logs
+go tool air status --wait --timeout 10m
+go tool air inspect
+go tool air help preview
 ```
 
 `deploy list [dir]` shows the newest builds with full build IDs, type, status,
@@ -63,23 +65,26 @@ conflict checks as source deployment, and use the saved login for that URL.
 They do not upload source, start builds, or check SDK compatibility. When a
 deployment accepted by this checkout finishes, status refreshes the canonical
 source ETag in `.airlock/local/agent.toml` without changing source files. Login
-refresh can update credentials outside the repository. `go tool air status` is
-the direct alias for deployment status.
+refresh can update credentials outside the repository. `go tool air status`
+shows runtime readiness; `go tool air inspect` exposes detailed deployment identities.
 
 Status shows build lifecycle, deployment phase, timestamps, source ref, errors,
-and job blockers. `--logs` adds persisted Docker and Sol logs. `--watch` polls
+and job blockers. `--logs` adds persisted Docker and Sol logs. `--wait` polls
 every two seconds, pins the selected build even if a newer build starts, and
 prints only new log content; replaced or truncated snapshots are marked and
-reprinted. Ctrl-C cancels the watch. A complete build is historical build state,
+reprinted. `--timeout` defaults to 10m. Ctrl-C stops observation, not deployment.
+A complete build is historical build state,
 not a claim that its image is currently deployed or that the agent is running.
 
-Both commands support `--json` using the typed API response (`builds` for list,
-`build` for status). Status JSON includes persisted logs even without `--logs`.
-`--watch --json` is rejected. Failed status prints its snapshot, then exits
-nonzero with an error on stderr, including in JSON mode. A building snapshot
-without `--watch` succeeds immediately. An empty build history is an explicit
-error. A valid `deploy list -m "message"` uploads a directory named `list`;
-use `./list` or `./status` to make these directory names unambiguous.
+Public commands support `--json` using a versioned CLI result envelope; see
+[the output contract](reference/cli-output.md). Build observations retain typed
+API fields under `data`. Status JSON includes persisted logs even without `--logs`.
+`--wait --json` emits one final result, not JSON Lines. Waiting for a failed build
+exits nonzero with its snapshot and structured error. Snapshot reads succeed even
+when the recorded build failed; consult its nested status. A building snapshot
+without `--wait` succeeds immediately. An empty build history is an explicit
+error. Subcommands immediately follow their parent; use `./list` or `./status`
+for directories with those names. Unknown and inapplicable flags are rejected.
 
 Direct resources use the same CLI locally and in hosted development:
 
@@ -108,8 +113,12 @@ Airlock authorizes hosted production operations on the server. A blocked request
 returns a durable challenge; the CLI reports it through the command supervisor's
 machine channel and exits `approval_required` (77). The supervisor stops the shell
 process group. Human decisions resume reasoning, never the original shell.
-Production execution grants last 30 minutes without refresh by use; deployment
-approval pins an immutable candidate and does not grant production-data access.
+Production management and production execution use separate app/workspace/human
+category grants for one hour after approval; use never renews that window. Matching
+live category grants admit eligible subsequent requests without another challenge.
+Narrow grants retain their exact scope and expiry. Every operation independently
+checks live authority and source/configuration fences. Deployment captures an
+immutable candidate and does not grant production-data execution access.
 Personal previews and ordinary authenticated operator CLI commands retain their
 normal service authorization.
 
@@ -170,8 +179,14 @@ verifies the exact size and SHA-256 before executing a candidate. Connector
 binaries use framed stdin/stdout child transport and never hold an Airlock
 credential.
 
-`go tool air connectors list` and `go tool air connectors inspect <id>` inspect
-visible installed connector resources without executing operations.
+Discover connectors alongside other authorized resources with `go tool air resources list`.
+Use `resources inspect /NAME` (or `/UUID`) for readiness, host, artifact status and
+capabilities. `resources list preview` lists app slots, not global inventory;
+`resources inspect preview/SLOT` inspects a slot and `resources candidates preview/SLOT --type connector`
+finds compatible bindings. Binding/use does not grant installation management.
+`go tool air connectors inspect ID` diagnoses installation host/artifact/version
+and management state; `hosts job`, `hosts request` and `hosts cancel` retain durable
+management observation and recovery.
 
 An authenticated operator with `manage` access to an enrolled host can run:
 
@@ -187,6 +202,16 @@ app's declared connector need; it does not bootstrap an unregistered machine.
 The host's local access mode must allow the operation. Ordinary CLI logins do not
 use developer-session grants. Developer execution credentials remain subject to
 the server's independently enforced execution ceiling.
+
+Hosted developer install/update requires the existing `host_management_v1` human
+confirmation for the exact host, workspace and human, valid for one hour. Exit 77
+(`approval_required`) means no protected effect was executed: resolve the pending
+confirmation in the developer conversation; do not replay the whole shell command.
+An update changes the installed executable/settings, not just an app binding.
+A multi-target need can bind a target group containing several installations;
+each installation is reserved to one need.
+The retained artifact must satisfy the installation's
+management app/need and bound interfaces; binding does not transfer ownership.
 
 Commands execute as the OS user running `airlock-host`, with executable and argv
 passed separately (use an explicit shell executable for shell syntax). `--cwd`

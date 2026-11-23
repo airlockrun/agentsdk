@@ -5,9 +5,110 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
+
+func TestResourceDiscoverySeparationJourneys(t *testing.T) {
+	var receipts []reviewReceipt
+	for _, journey := range []string{"global", "name", "uuid", "slots", "slot", "candidates", "removed connector list", "resource help", "management help"} {
+		for _, machine := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/json=%t", journey, machine), func(t *testing.T) {
+				t.Chdir(t.TempDir())
+				t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+				t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
+				t.Setenv("SOL_COMMAND_CONTROL_SOCKET", "")
+				root := "/api/v1/agents/" + testBuildAgentID + "/deployments/" + previewName
+				resource := fmt.Sprintf(`{"id":%q,"type":"connector","slug":"torrent","displayName":"Torrent host","hostId":%q,"authorized":true,"capabilities":["view","use"],"connectorStatus":{"readiness":"ready","artifactVersion":"1.2.3"}}`, fixtureJobID, fixtureHostID)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != "GET" {
+						t.Errorf("discovery mutated: %s", r.Method)
+					}
+					if r.Header.Get("Authorization") != "Bearer "+testAccessToken {
+						t.Error("lost admitted credential")
+					}
+					w.Header().Set("Content-Type", "application/json")
+					switch r.URL.Path {
+					case "/api/v1/resources":
+						fmt.Fprintf(w, `{"resources":[%s]}`, resource)
+					case "/api/v1/resources/resolve/torrent", "/api/v1/resources/resolve/" + fixtureJobID, "/api/v1/resources/connector/" + fixtureJobID:
+						fmt.Fprint(w, resource)
+					case "/api/v1/agents/" + testBuildAgentID:
+						fmt.Fprintf(w, `{"agent":{"id":%q,"slug":"torrent-app"}}`, testBuildAgentID)
+					case root:
+						fmt.Fprintf(w, `{"deployment":{"id":%q,"runtimeAgentId":%q,"appId":%q,"name":%q,"kind":"personal_preview","ownerWorkspaceId":%q,"ownerUserId":%q}}`, previewRuntimeID, previewRuntimeID, testBuildAgentID, previewName, previewWorkspaceID, previewOwnerID)
+					case root + "/bindings":
+						fmt.Fprintf(w, `{"runtimeAgentId":%q,"bindings":[{"type":"connector","slug":"torrent_host","selection":"resource","resourceId":%q}]}`, previewRuntimeID, fixtureJobID)
+					case root + "/bindings/connector/torrent_host/candidates":
+						fmt.Fprintf(w, `{"candidates":[{"resourceId":%q,"eligible":true}]}`, fixtureJobID)
+					case "/api/v1/connectors":
+						http.Error(w, "credential does not authorize this operation or target", 403)
+					default:
+						t.Errorf("unexpected route %s", r.URL.Path)
+						http.NotFound(w, r)
+					}
+				}))
+				defer server.Close()
+				for key, value := range map[string]string{"AIRLOCK_DEVELOPMENT_SESSION": previewWorkspaceID, "AIRLOCK_DEVELOPER_SESSION_ID": previewWorkspaceID, "AIRLOCK_API_URL": server.URL, "AIRLOCK_TOKEN": testAccessToken, "AIRLOCK_APP_ID": testBuildAgentID, "AIRLOCK_AGENT_ID": previewRuntimeID, "AIRLOCK_DEPLOYMENT_TARGET": previewName} {
+					t.Setenv(key, value)
+				}
+				args := []string{"resources", "list"}
+				switch journey {
+				case "name":
+					args = []string{"resources", "inspect", "/torrent"}
+				case "uuid":
+					args = []string{"resources", "inspect", "/" + fixtureJobID}
+				case "slots":
+					args = []string{"resources", "list", "preview"}
+				case "slot":
+					args = []string{"resources", "inspect", "preview/torrent_host", "--type", "connector"}
+				case "candidates":
+					args = []string{"resources", "candidates", "preview/torrent_host", "--type", "connector"}
+				case "removed connector list":
+					args = []string{"connectors", "list"}
+				case "resource help":
+					args = []string{"help", "resources", "list"}
+				case "management help":
+					args = []string{"help", "connectors"}
+				}
+				if machine {
+					args = append(args, "--json")
+				}
+				receipt := captureReviewCommand(t, journey, args)
+				receipts = append(receipts, receipt)
+				if os.Getenv("AIR_CLI_COMPARE_BASELINE") != "" {
+					return
+				}
+				if journey == "removed connector list" {
+					if receipt.ExitCode != 1 || !strings.Contains(receipt.Stdout+receipt.Stderr, "resources list") {
+						t.Fatalf("missing migration direction: %+v", receipt)
+					}
+				} else if receipt.ExitCode != 0 {
+					t.Fatalf("journey failed: %+v", receipt)
+				}
+				if machine {
+					decodeResult(t, receipt.Stdout)
+				}
+				if journey == "global" && (!strings.Contains(receipt.Stdout, "ready") || !strings.Contains(receipt.Stdout, "1.2.3")) {
+					t.Fatalf("connector readiness absent: %+v", receipt)
+				}
+				if journey == "slot" && machine && !strings.Contains(receipt.Stdout, `"context"`) {
+					t.Fatalf("slot context absent: %+v", receipt)
+				}
+			})
+		}
+	}
+	if path := os.Getenv("AIR_CLI_DISCOVERY_RECEIPTS"); path != "" {
+		raw, err := json.MarshalIndent(receipts, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestResourceBindingCLI(t *testing.T) {
 	t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", "")

@@ -21,6 +21,7 @@ type agentBinding struct {
 }
 
 type agentRemoteBinding struct {
+	displayName        string
 	AirlockURL         string
 	AgentID            string
 	Slug               string

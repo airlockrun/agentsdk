@@ -7,6 +7,53 @@ complete final migration from earlier stable and prerelease SDKs. Apply only the
 instructions relevant to the application's source. An application already on
 v0.8.1 receives no instructions when rebuilding against v0.8.1.
 
+## v0.11.0
+
+Use `resources list` for global connector/resource discovery and `resources list preview`
+for app slots. Replace connector inventory automation with `resources inspect /NAME`
+or `/UUID`; inspect a slot with `resources inspect preview/SLOT` and find compatible
+selections with `resources candidates preview/SLOT --type connector`.
+`connectors` exposes install, update and installation-specific inspect diagnostics,
+not a list command. Updates change installed executable/settings, not app-local bindings;
+binding/use does not grant management or transfer the installation's management app/need.
+A multi-target need can bind a target group containing several installations;
+each installation is reserved to one need.
+Hosted install/update retains exact-host human confirmation in the developer
+conversation; handle `approval_required` (77) without replaying the whole shell.
+
+CLI automation uses the CLI-owned `schemaVersion: 1` result envelope. Read
+command data under `data`, admitted operation identities under `operation`,
+selected coordinates under `context`, and failures under `error`. Parse one
+document from stdout even when the process exits nonzero; diagnostics and local
+build/test subprocess output use stderr. See [the CLI contract](reference/cli-output.md).
+`status --json` exposes `data.deployment`; build observations expose `data.build`
+or `data.builds`. Follow `guidance[].executable` and `guidance[].args` directly,
+without shell interpolation or automatic mutation replay.
+
+Use `deploy status --wait --timeout 10m` for bounded build observation.
+Use `status --wait --timeout 10m` for admitted-update and runtime readiness.
+`--watch` is not a CLI flag. `status` is runtime status, not build status.
+Put subcommands immediately after their parent. Use `./list` and `./status`
+for deployment directories, and `./status` or `./cancel` for local test directories.
+Only the flags advertised by that command's help are accepted; inapplicable
+flags are errors rather than ignored inputs. Value flags accept `--flag=value`;
+boolean switches take no value. Read decoded tool output at `data.result` and
+its run identity at `data.runId`; do not parse a CLI `resultJson` string.
+Use `inspect` for deployment identities and source/image provenance.
+Snapshot reads of failed builds or remote test runs succeed and expose their
+recorded status in `data`. Waiting for failed work exits nonzero; cancellation
+acknowledgment is not rollback. Check command outcome and nested operation state
+separately in automation.
+Accepted operation admission/identities survive later observation authorization
+failures (`observation_permission_denied` or `observation_authentication_required`).
+Do not treat those errors as permission to resubmit. Structured help includes
+option descriptions, defaults and required/conditional requirements. Local help
+guidance uses a module-owned Go tool launcher or a verified persistent executable;
+when neither is available, no executable help action is supplied.
+HTTP/log commands retain raw default stdout; their `--json` data explicitly
+declares UTF-8 or base64 body encoding. This changes the CLI interface, not the
+public Go method signatures. The CLI/host SDK compatibility check remains in force.
+
 ## v0.10.0
 
 Model-backed Sol web search uses `websearch.NewModelClient(backend, model)` for

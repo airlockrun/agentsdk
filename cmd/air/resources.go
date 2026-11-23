@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -131,7 +132,8 @@ func cmdResources(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "Target: remote=%s app=%s target=%s runtime=%s\n", s.remoteName, s.app.AgentID, s.info.Name, s.info.Id)
+		setSelectedContext(s)
+		fmt.Fprintln(os.Stderr, s.heading())
 		if command == "bindings" {
 			if len(positional) != 0 {
 				return errors.New("resources bindings takes no positional arguments")
@@ -216,6 +218,8 @@ func cmdResources(args []string) error {
 			return e
 		}
 		if command == "inspect" {
+			setSelectedContext(s)
+			fmt.Fprintln(os.Stderr, s.heading())
 			return writeProtoJSON(slot)
 		}
 		if (command == "request" && slot.Type != "connection") || ((command == "mcp-tools" || command == "mcp-call") && slot.Type != "mcp_server") {
@@ -277,7 +281,7 @@ func cmdResources(args []string) error {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "HTTP %d\n", response.StatusCode)
-		if _, err := os.Stdout.Write(response.Body); err != nil {
+		if err := writeResponseBody(bytes.NewReader(response.Body), int(response.StatusCode), integrationContentType(response.Headers), f.json); err != nil {
 			return err
 		}
 		if response.StatusCode >= 400 {

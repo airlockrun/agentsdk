@@ -80,7 +80,8 @@ func cmdOperation(command string, args []string) error {
 	if revision != "" && revision != s.info.SourceRevisionId {
 		return errors.New("selected deployment source revision changed")
 	}
-	fmt.Fprintf(os.Stderr, "Target: remote=%s app=%s target=%s runtime=%s revision=%s\n", s.remoteName, s.app.AgentID, s.info.Name, s.info.Id, s.info.SourceRevisionId)
+	setSelectedContext(s)
+	fmt.Fprintln(os.Stderr, s.heading())
 	client, err := s.client(revision)
 	if err != nil {
 		return err
@@ -96,7 +97,7 @@ func cmdOperation(command string, args []string) error {
 		}
 		defer response.Body.Close()
 		fmt.Fprintf(os.Stderr, "HTTP %d (%s/%s)\n", response.StatusCode, s.remoteName, s.info.Name)
-		if _, err := io.Copy(os.Stdout, response.Body); err != nil {
+		if err := writeResponseBody(response.Body, response.StatusCode, response.Header.Get("Content-Type"), f.json); err != nil {
 			return err
 		}
 		if response.StatusCode >= 400 {
@@ -118,11 +119,28 @@ func cmdOperation(command string, args []string) error {
 		if err := value.UnmarshalJSON([]byte(input)); err != nil {
 			return err
 		}
+		if invocationOutput != nil {
+			invocationOutput.Operation = &cliOperation{Kind: "tool_invoke", Admission: "unknown", Action: positional[1], RuntimeID: s.info.Id, Target: s.info.Name, RevisionID: s.info.SourceRevisionId}
+		}
 		out, err := client.InvokeTool(ctx, positional[1], value)
 		if err != nil {
-			return err
+			return admissionFailure(err)
 		}
-		return writeProtoJSON(out)
+		if invocationOutput != nil {
+			invocationOutput.Operation.Admission = "accepted"
+			invocationOutput.Operation.RunID = out.RunId
+			setResult(map[string]string{"runId": out.RunId}, "completed")
+		}
+		if !deployUUIDRe.MatchString(out.RunId) {
+			return errors.New("tool response did not include a valid run ID; inspect before invoking again")
+		}
+		if invocationOutput != nil {
+			invocationOutput.Guidance = []cliAction{selectedAction(s, "logs", "Inspect this exact tool run", out.RunId)}
+		}
+		if !json.Valid([]byte(out.ResultJson)) {
+			return errors.New("tool returned invalid result JSON; inspect its run before invoking again")
+		}
+		return writeJSONData(toolInvocationResult{RunID: out.RunId, Result: json.RawMessage(out.ResultJson)})
 	case "agent":
 		if len(positional) < 2 {
 			return errors.New("agent requires start|list <definition>, get|wait|cancel <definition> <run-id>, or continue <definition> <session-id> --prompt <text>")
@@ -136,7 +154,7 @@ func cmdOperation(command string, args []string) error {
 			if err != nil {
 				return err
 			}
-			return json.NewEncoder(os.Stdout).Encode(runs)
+			return writeJSONData(runs)
 		}
 		if action == "continue" {
 			if len(positional) != 3 || !deployUUIDRe.MatchString(positional[2]) || strings.TrimSpace(prompt) == "" {
@@ -152,11 +170,26 @@ func cmdOperation(command string, args []string) error {
 				return errors.New("--request-id must be a UUID")
 			}
 			fmt.Fprintf(os.Stderr, "Request ID: %s\n", requestID)
+			if invocationOutput != nil {
+				invocationOutput.Operation = &cliOperation{Kind: "agent_continue", Admission: "unknown", RequestID: requestID, Definition: definition, SessionID: positional[2]}
+				invocationOutput.Guidance = []cliAction{selectedAction(s, "agent list", "Inspect runs without replay; preserve this request ID and exact payload", definition)}
+			}
 			run, err := client.ContinueAgent(ctx, definition, positional[2], requestID, contractHash, prompt)
 			if err != nil {
+				return admissionFailure(err)
+			}
+			if invocationOutput != nil {
+				invocationOutput.Operation.Admission = "accepted"
+				invocationOutput.Operation.RunID = run.ID
+				invocationOutput.Guidance = []cliAction{selectedAction(s, "agent get", "Inspect this admitted run", definition, run.ID)}
+			}
+			if err := writeJSONData(run); err != nil {
 				return err
 			}
-			return json.NewEncoder(os.Stdout).Encode(run)
+			if invocationOutput != nil {
+				invocationOutput.Status = "accepted"
+			}
+			return nil
 		}
 		if action == "start" {
 			if len(positional) != 2 {
@@ -174,13 +207,28 @@ func cmdOperation(command string, args []string) error {
 			// Print before admission so uncertain responses can be retried with
 			// the same request ID rather than creating duplicate work.
 			fmt.Fprintf(os.Stderr, "Request ID: %s\n", requestID)
+			if invocationOutput != nil {
+				invocationOutput.Operation = &cliOperation{Kind: "agent_start", Admission: "preparing", RequestID: requestID, Definition: definition}
+				invocationOutput.Guidance = []cliAction{selectedAction(s, "agent list", "Inspect runs without replay; preserve this request ID and exact payload", definition)}
+			}
 			value := &structpb.Value{}
 			if err := value.UnmarshalJSON([]byte(input)); err != nil {
 				return err
 			}
+			if invocationOutput != nil {
+				invocationOutput.Operation.Admission = "unknown"
+			}
 			run, err := client.StartAgent(ctx, definition, requestID, contractHash, value)
 			if err != nil {
-				return err
+				return admissionFailure(err)
+			}
+			if invocationOutput != nil {
+				invocationOutput.Operation.Admission = "accepted"
+				invocationOutput.Operation.RunID = run.ID
+				invocationOutput.Guidance = []cliAction{selectedAction(s, "agent get", "Inspect this admitted run", definition, run.ID)}
+				if err := writeJSONData(run); err != nil {
+					return err
+				}
 			}
 			if f.wait {
 				run, err = client.WaitAgent(ctx, definition, run.ID, 2*time.Second)
@@ -188,8 +236,11 @@ func cmdOperation(command string, args []string) error {
 					return err
 				}
 			}
-			if err := json.NewEncoder(os.Stdout).Encode(run); err != nil {
+			if err := writeJSONData(run); err != nil {
 				return err
+			}
+			if invocationOutput != nil && !f.wait {
+				invocationOutput.Status = "accepted"
 			}
 			if f.wait && run.Status != "completed" {
 				return fmt.Errorf("agent run ended with %s", run.Status)
@@ -213,7 +264,7 @@ func cmdOperation(command string, args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := json.NewEncoder(os.Stdout).Encode(run); err != nil {
+		if err := writeJSONData(run); err != nil {
 			return err
 		}
 		if action == "wait" && run.Status != "completed" {
@@ -239,8 +290,7 @@ func cmdOperation(command string, args []string) error {
 			body, _ := io.ReadAll(response.Body)
 			return newHTTPStatusError(response.StatusCode, response.Status, body)
 		}
-		_, err = io.Copy(os.Stdout, response.Body)
-		return err
+		return writeResponseBody(response.Body, response.StatusCode, response.Header.Get("Content-Type"), f.json)
 	}
 	return errors.New("unknown target operation")
 }

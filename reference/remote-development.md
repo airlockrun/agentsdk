@@ -39,7 +39,7 @@ go tool air preview my-app --create --name my-app -m "Initial app" --wait
 go tool air preview my-app -m "Try new report" --wait
 go tool air status my-app --target preview --json
 go tool air deploy list my-app --target preview
-go tool air deploy status my-app --target preview --watch --logs
+go tool air deploy status my-app --target preview --wait --timeout 10m --logs
 ```
 
 `air preview` creates or updates the saved preview. `air deploy --target preview`
@@ -72,22 +72,29 @@ IDs (`--limit` accepts 1–50). `air deploy status [dir] --target preview` selec
 the latest build; `--build UUID` pins another. Both accept `--remote`, `--url`
 and `--agent`. Use `./list` or `./status` for directory names matching subcommands.
 
-Status `--watch --logs` pins the selected build, polls every two seconds and
+Build status `--wait --timeout 10m --logs` pins the selected build, polls every two seconds and
 prints persisted Docker/Sol log additions until complete, failed or interrupted.
 Replaced/truncated log snapshots are marked and reprinted. Build phase describes
 that build, not the currently deployed image. These observation commands do not
 upload source or require SDK compatibility; they use saved operator credentials
 (refresh can update the external login store), not codegen integration tokens.
 
-`--json` emits typed API response fields, including `routeBaseUrl` and
-`workspaceUrl`; status includes persisted logs. It cannot combine with `--watch`.
-Failed builds emit the snapshot before returning a nonzero exit and stderr error,
-including in JSON mode. An unfinished snapshot without watch succeeds immediately;
-no builds is an error. Status JSON's `deployment.routeBaseUrl` and build JSON's
-`routeBaseUrl` are exact human-navigation URLs from the selected target. Share
+`--json` emits one CLI-owned result envelope, including on failures and timeout;
+see [the output contract](cli-output.md). Build fields are under `data`, including
+`routeBaseUrl` and `workspaceUrl`; status includes persisted logs. `--wait --json`
+emits one terminal observation. Waiting for failed builds returns a nonzero exit
+and structured error. Snapshot reads succeed even for a recorded failed build;
+consult the nested status. An unfinished snapshot without waiting succeeds immediately;
+no builds is an error. Runtime JSON's `data.deployment.routeBaseUrl` and build JSON's
+`data.routeBaseUrl` are exact human-navigation URLs from the selected target. Share
 them unchanged; `workspaceUrl` is a separate dashboard conversation link and can
 be empty for laptop previews. Verify through authenticated app/tool operations,
 not an unauthenticated GET or a token in a human link.
+
+`air inspect` exposes selected deployment IDs, source revision, image and ownership
+for diagnostics. Routine status uses a friendly target label; concrete selectors
+remain in JSON and suggested actions. Acceptance, assigned URL, build completion,
+active running image, and configuration readiness are distinct observations.
 
 ## Operate the real app
 
@@ -109,9 +116,13 @@ go tool air restart --target preview --wait
 
 Stop retains target DB/files/bindings; it is not deletion. Deleting a laptop checkout
 emits no server event. Host idle TTL/admin policy handles preview cleanup.
-Hosted developer production `start`, `stop` and `restart` requests require a
-distinct lifecycle approval for the exact action and runtime/configuration state.
-Deployment and production-data approvals do not include lifecycle access.
+Hosted developer production `start`, `stop` and `restart` requests require a live
+production-management category grant or a matching narrow lifecycle grant.
+Management and production execution categories remain separate, bound to this exact
+app/workspace/originating human for one hour after approval without renewal by use.
+Narrow grants retain their exact scope/expiry. Each operation independently checks
+live authority and source/configuration fences; production-data execution grants
+do not include lifecycle access.
 Restart uses one host operation, not a stop/start command sequence. A protected
 request returns HTTP 428 before effects; approval wakes fresh reasoning without
 replaying the shell. Production `suspend` is outside developer authority.
@@ -146,12 +157,22 @@ workspace, commands default to the injected preview. Host injection includes
 host authorization; conflicting app/remote/origin coordinates are rejected.
 The client receives user credentials, never native app tokens or caller assertions.
 
-`go tool air preview -m "Describe changes" --launch` also starts an existing
+`go tool air preview -m "Describe changes" --launch --wait --json` also starts an existing
 stopped/suspended image. An unchanged-source response completes without a new
-build task. Hosted UI launch queues this same fixed CLI workflow after the active
-turn's final checkpoint, using a durable workspace command. Later submitted chat
-messages remain visible and wait for a ready, failed or resource-setup-blocked
-preview outcome. The model receives the outcome as a header or host notification.
+build task. Hosted UI launch queues `go tool air preview -m "Preview workspace"
+--launch` after the active turn's final checkpoint, using a durable workspace
+command; its controller follows the admitted build. Later submitted chat messages
+remain visible and wait for a ready, failed or blocked preview outcome. The model
+receives the outcome as a header or host notification.
+Built-in bounded waits are available to humans, external agents and hosted agents.
+Hosted agents can observe in foreground or with the single background workspace
+command, fitting CLI timeout to the tool/caller deadline. Prefer built-in waits
+over hand-written status/sleep loops. A HOST completion may also arrive; match
+its deployment task UUID to `operation.taskId`, not a shell request/checkpoint ID.
+An already observed completion is information, not a new request or a reason to
+resubmit. Accepted empty task IDs report no new build; runtime observation can
+use the returned canonical revision. Unknown admission requires inspection
+without replay.
 Hosted command credentials include exact task ownership for source admission;
 the host supplies the observed source ETag for a restored UI launch checkout.
 No shell effects are automatically replayed after interruption. The developer
