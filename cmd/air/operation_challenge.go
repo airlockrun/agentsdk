@@ -15,7 +15,7 @@ import (
 type approvalRequiredError struct{ id string }
 
 func (e *approvalRequiredError) Error() string {
-	return "approval_required: " + e.id + "; protected operation was not executed; do not replay the whole shell command"
+	return "approval_required: " + e.id + "; protected operation was not executed; resolve the pending human confirmation in the developer conversation; do not replay the whole shell command"
 }
 
 type approvalTransport struct{ next http.RoundTripper }

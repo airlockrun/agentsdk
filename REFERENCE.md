@@ -97,6 +97,10 @@ atomic candidate binding/fixture plans, suite admission and scoped runner APIs.
 Testing contracts: `/libs/agentsdk/reference/testing.md` and
 `/libs/agentsdk/reference/remote-development.md`.
 
+Read [CLI output](reference/cli-output.md) for the versioned JSON envelope,
+human discovery, raw body encoding and bounded observation contract:
+`/libs/agentsdk/reference/cli-output.md`.
+
 ## Design principle: register granular tools
 
 Give the LLM the same useful operations as every route or integration. Prefer

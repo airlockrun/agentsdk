@@ -82,7 +82,7 @@ func cmdLogin(args []string) error {
 	if check {
 		return checkDeviceLogin(ctx, baseURL)
 	}
-	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(cliOriginalStdout().Fd()))
 	wait := interactive
 	if forceWait {
 		wait = true
@@ -145,6 +145,7 @@ func validateExistingLogin(ctx context.Context, baseURL string) (bool, error) {
 		return false, fmt.Errorf("validate login for %s: server response missing user email", baseURL)
 	}
 	fmt.Printf("Already logged in to %s as %s. Use --reauthenticate to log in again.\n", baseURL, me.User.GetEmail())
+	setResult(map[string]string{"origin": baseURL, "email": me.User.GetEmail(), "state": "authenticated"}, "completed")
 	return true, nil
 }
 
@@ -165,6 +166,10 @@ func loginWithDeviceCode(ctx context.Context, baseURL string, openBrowser, wait 
 	}
 	if err := savePendingDeviceLogin(baseURL, pending); err != nil {
 		return err
+	}
+	setResult(map[string]any{"origin": baseURL, "verificationUrl": begin.VerificationUrl, "userCode": begin.UserCode, "expiresAt": pending.ExpiresAt, "pollIntervalSeconds": pending.PollIntervalSeconds}, "pending")
+	if invocationOutput != nil {
+		invocationOutput.Guidance = []cliAction{{Kind: "observe", Message: "Approve in the browser, then check the same login", Executable: "go", Args: []string{"tool", "air", "login", baseURL, "--check", "--json"}}}
 	}
 	fmt.Println("Open this URL to log in:")
 	fmt.Printf("  %s\n\n", begin.VerificationUrl)
@@ -260,6 +265,7 @@ func handleDeviceLoginPoll(baseURL string, pending pendingDeviceLogin, poll *air
 	}
 	switch poll.Status {
 	case "pending", "slow_down":
+		setResult(map[string]any{"origin": baseURL, "verificationUrl": pending.VerificationURL, "userCode": pending.UserCode, "pollIntervalSeconds": poll.PollIntervalSeconds}, "pending")
 		if poll.PollIntervalSeconds > 0 {
 			pending.PollIntervalSeconds = poll.PollIntervalSeconds
 			if err := updatePendingDeviceLoginIfMatch(baseURL, pending); err != nil {
@@ -285,6 +291,10 @@ func handleDeviceLoginPoll(baseURL string, pending pendingDeviceLogin, poll *air
 			return true, err
 		}
 		fmt.Printf("Logged in to %s as %s\n", baseURL, poll.User.GetEmail())
+		setResult(map[string]string{"origin": baseURL, "email": poll.User.GetEmail(), "state": "authenticated"}, "completed")
+		if invocationOutput != nil {
+			invocationOutput.Guidance = nil
+		}
 		return true, nil
 	default:
 		return true, fmt.Errorf("device login returned unknown status %q", poll.Status)
@@ -300,6 +310,7 @@ func cmdLogout(args []string) error {
 		return err
 	}
 	var hadSession bool
+	revocation := "not_needed"
 	ctx, cancel := context.WithTimeout(context.Background(), authMutationTimeout)
 	defer cancel()
 	err = withCredentialsLock(ctx, func(path string) error {
@@ -313,10 +324,12 @@ func cmdLogout(args []string) error {
 		sess, ok := creds.Sessions[baseURL]
 		hadSession = ok
 		if ok && sess.RefreshToken != "" {
+			revocation = "revoked"
 			revokeCtx, revokeCancel := context.WithTimeout(ctx, authRequestTimeout)
 			err := doProto(revokeCtx, baseURL, httpMethodPost, "/auth/logout", "", &airlockv1.LogoutRequest{RefreshToken: sess.RefreshToken}, nil)
 			revokeCancel()
 			if err != nil {
+				revocation = "unconfirmed"
 				fmt.Fprintf(os.Stderr, "Server session was not revoked; local login will still be removed: %v\n", err)
 			}
 		}
@@ -332,6 +345,7 @@ func cmdLogout(args []string) error {
 	} else {
 		fmt.Printf("No saved login for %s\n", baseURL)
 	}
+	setResult(map[string]any{"origin": baseURL, "localLoginRemoved": true, "revocation": revocation}, "completed")
 	return nil
 }
 

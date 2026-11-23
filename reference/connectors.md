@@ -89,6 +89,9 @@ Use `StartConnectorJob` for job-mode commands. Multi-target needs may use
 `StartConnectorOrchestration`; Airlock persists and coordinates parallel,
 serial, rolling, canary, and quorum execution.
 
+A multi-target need can bind a target group containing several installations,
+including installations on different hosts; each installation is reserved to one need.
+
 Directory methods are `List`, `Stat`, `Read`, `Write`, `Delete`, `Move`,
 `Import`, and `Export`. Imports and exports use narrow Airlock transfer grants.
 The child accepts only HTTPS origins supplied by the host during initialization

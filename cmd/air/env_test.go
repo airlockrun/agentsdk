@@ -14,6 +14,85 @@ import (
 
 const envTestAgentID = "11111111-1111-1111-1111-111111111111"
 
+func TestWorkspaceSettingsLinksUseBrowserURLOnly(t *testing.T) {
+	for _, test := range []struct{ name, workspace, kind, want string }{
+		{"environment", "https://public.example.test/chat/session?app=app", "production", "https://public.example.test/chat/session?app=app&settings=environment&target=production"},
+		{"preview", "https://public.example.test/chat/session?app=app", "personal_preview", "https://public.example.test/chat/session?app=app&settings=environment&target=runtime"},
+		{"absent", "", "production", ""},
+		{"relative", "/chat/session", "production", ""},
+		{"unsafe", "javascript:alert(1)", "production", ""},
+		{"userinfo", "https://secret:password@public.example.test/chat", "production", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			target := selectedDeployment{baseURL: "http://internal-api:8080", info: &airlockv1.DeploymentInfo{Id: "runtime", Kind: test.kind, WorkspaceUrl: test.workspace}}
+			if got := envSettingsURL(target); got != test.want || strings.Contains(got, "internal-api") {
+				t.Fatalf("browser link: %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestEnvJSONRedactsSecretValuesAndDefaults(t *testing.T) {
+	server := setupEnvCommand(t, func(w http.ResponseWriter, r *http.Request) {
+		writeEnvVarList(t, w,
+			&airlockv1.EnvVarInfo{Slug: "API_KEY", IsSecret: true, Configured: true, Value: "secret-value-not-for-output", DefaultValue: "secret-default-not-for-output"},
+			&airlockv1.EnvVarInfo{Slug: "REGION", Configured: true, Value: "eu-west"},
+		)
+	})
+	defer server.Close()
+	output, err := invokeFixture(t, "env", "list", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodeResult(t, output)
+	for _, secret := range []string{"secret-value-not-for-output", "secret-default-not-for-output", testAccessToken} {
+		if strings.Contains(output, secret) {
+			t.Fatalf("secret leaked: %s", output)
+		}
+	}
+	if !strings.Contains(output, "eu-west") || !strings.Contains(output, "API_KEY") {
+		t.Fatalf("lost non-secret configuration metadata: %s", output)
+	}
+}
+
+func TestEnvJSONMutationDoesNotGuessActivationOrReplay(t *testing.T) {
+	for _, status := range []int{http.StatusNoContent, http.StatusForbidden, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			posts := 0
+			server := setupEnvCommand(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					writeEnvVarList(t, w, &airlockv1.EnvVarInfo{Slug: "API_KEY", IsSecret: true})
+					return
+				}
+				posts++
+				w.WriteHeader(status)
+				if status != http.StatusNoContent {
+					_, _ = w.Write([]byte(`{"error":"fixture failure with current-private-value"}`))
+				}
+			})
+			defer server.Close()
+			output, err := invokeFixture(t, "env", "set", "API_KEY", "current-private-value", "--json")
+			result := decodeResult(t, output)
+			if posts != 1 || strings.Contains(output, "current-private-value") || strings.Contains(output, testAccessToken) {
+				t.Fatalf("replayed configuration or leaked secret: %s", output)
+			}
+			if status == http.StatusNoContent {
+				data := result.Data.(map[string]any)
+				if err != nil || data["runtimeConfiguration"] != "unobserved" || data["restartRequired"] != nil || result.Operation.Admission != "accepted" {
+					t.Fatalf("guessed runtime activation: %v %s", err, output)
+				}
+			} else if status == http.StatusForbidden {
+				if err == nil || result.Error.Code != "permission_denied" || result.Operation.Admission != "blocked" || !strings.Contains(output, "[redacted]") {
+					t.Fatalf("redaction lost permission denial: %v %s", err, output)
+				}
+			} else if err == nil || result.Error.Code != "effect_unknown" || result.Operation.Admission != "unknown" || !strings.Contains(output, "[redacted]") {
+				t.Fatalf("uncertain configuration contract: %v %s", err, output)
+			}
+			t.Logf("JSON stdout:\n%s", output)
+		})
+	}
+}
+
 func TestCmdEnvList(t *testing.T) {
 	server := setupEnvCommand(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/agents/"+envTestAgentID+"/env-vars" {
@@ -79,7 +158,7 @@ func TestCmdEnvSecretMutationsDoNotPrintValues(t *testing.T) {
 	defer server.Close()
 	for _, args := range [][]string{{"set", "API_KEY", "do-not-print-this", "--target", "production"}, {"clear", "API_KEY", "--target", "production"}} {
 		output := captureCommandStdout(t, func() error { return cmdEnv(args) })
-		if strings.Contains(output, "do-not-print-this") || !strings.Contains(output, "Restart required") {
+		if strings.Contains(output, "do-not-print-this") || !strings.Contains(output, "to check whether a restart is needed") {
 			t.Fatalf("unsafe mutation output: %s", output)
 		}
 	}
@@ -150,7 +229,7 @@ func TestCmdEnvSetValueBeginningWithDashes(t *testing.T) {
 	output := captureCommandStdout(t, func() error {
 		return cmdEnv([]string{"set", "OPTIONS", "--target", "production", "--", "--verbose"})
 	})
-	if !strings.Contains(output, "Set OPTIONS. Restart required") {
+	if !strings.Contains(output, "Saved OPTIONS. Run ") {
 		t.Fatalf("env set output = %q", output)
 	}
 }
@@ -185,11 +264,11 @@ func TestCmdEnvSetAndClear(t *testing.T) {
 	output := captureCommandStdout(t, func() error {
 		return cmdEnv([]string{"set", "GREETING", "hello wide world", "--target", "production"})
 	})
-	if !strings.Contains(output, "Set GREETING. Restart required") || strings.Contains(output, "hello wide world") {
+	if !strings.Contains(output, "Saved GREETING. Run ") || strings.Contains(output, "hello wide world") {
 		t.Fatalf("env set output = %q", output)
 	}
 	output = captureCommandStdout(t, func() error { return cmdEnv([]string{"clear", "GREETING", "--target", "production"}) })
-	if !strings.Contains(output, "Cleared GREETING. Restart required") {
+	if !strings.Contains(output, "Cleared GREETING. Run ") {
 		t.Fatalf("env clear output = %q", output)
 	}
 	if mutations.Load() != 2 {

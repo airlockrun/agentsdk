@@ -52,11 +52,25 @@ func cmdEnv(args []string) error {
 	if err != nil {
 		return err
 	}
+	setSelectedContext(target)
+	if command != "get" && invocationOutput == nil {
+		target.printHeading()
+	}
 	if command == "list" {
+		if invocationOutput != nil {
+			for _, row := range envVars {
+				if row.IsSecret {
+					row.Value, row.DefaultValue = "", ""
+				}
+			}
+			return writeProtoData(&airlockv1.ListEnvVarsResponse{EnvVars: envVars})
+		}
 		if err := printEnvVars(envVars); err != nil {
 			return err
 		}
-		fmt.Printf("Settings: %s\n", envSettingsURL(target))
+		if link := envSettingsURL(target); link != "" {
+			fmt.Printf("Settings: %s\n", link)
+		}
 		return nil
 	}
 
@@ -75,6 +89,9 @@ func cmdEnv(args []string) error {
 		if !envVar.Configured {
 			value = envVar.DefaultValue
 		}
+		if invocationOutput != nil {
+			return writeJSONData(map[string]string{"slug": slug, "value": value})
+		}
 		fmt.Println(value)
 		return nil
 	case "set":
@@ -88,27 +105,50 @@ func cmdEnv(args []string) error {
 				return fmt.Errorf("value for env var %q does not match required pattern", slug)
 			}
 		}
-		if err := doProto(ctx, target.baseURL, http.MethodPost, path, target.token, &airlockv1.SetEnvVarValueRequest{Value: value}, nil); err != nil {
-			return err
+		if invocationOutput != nil {
+			invocationOutput.Operation = &cliOperation{Kind: "environment_configuration", Admission: "unknown", Action: "set", Slug: slug, RuntimeID: target.info.Id, Target: target.info.Name}
 		}
-		fmt.Printf("Set %s. Restart required for running instances; takes effect on next start for stopped targets.\n", safeTableCell(slug))
+		if err := doProto(ctx, target.baseURL, http.MethodPost, path, target.token, &airlockv1.SetEnvVarValueRequest{Value: value}, nil); err != nil {
+			err = admissionFailure(err)
+			if envVar.IsSecret {
+				err = &redactedCLIError{cause: err, secret: value}
+			}
+			return fmt.Errorf("environment change for %q was not confirmed; inspect without replaying it: %s: %w", slug, shellCommand(selectedAction(target, "inspect", "")), err)
+		}
+		if invocationOutput != nil {
+			invocationOutput.Operation.Admission = "accepted"
+		}
+		fmt.Printf("Saved %s. Run %s to check whether a restart is needed.\n", safeTableCell(slug), shellCommand(humanSelectedAction(target, "status")))
+		setResult(map[string]any{"slug": slug, "configured": true, "runtimeConfiguration": "unobserved"}, "completed")
 		return nil
 	case "clear":
-		if err := doProto(ctx, target.baseURL, http.MethodDelete, path, target.token, nil, nil); err != nil {
-			return err
+		if invocationOutput != nil {
+			invocationOutput.Operation = &cliOperation{Kind: "environment_configuration", Admission: "unknown", Action: "clear", Slug: slug, RuntimeID: target.info.Id, Target: target.info.Name}
 		}
-		fmt.Printf("Cleared %s. Restart required for running instances; takes effect on next start for stopped targets.\n", safeTableCell(slug))
+		if err := doProto(ctx, target.baseURL, http.MethodDelete, path, target.token, nil, nil); err != nil {
+			err = admissionFailure(err)
+			return fmt.Errorf("environment change for %q was not confirmed; inspect without replaying it: %s: %w", slug, shellCommand(selectedAction(target, "inspect", "")), err)
+		}
+		if invocationOutput != nil {
+			invocationOutput.Operation.Admission = "accepted"
+		}
+		fmt.Printf("Cleared %s. Run %s to check whether a restart is needed.\n", safeTableCell(slug), shellCommand(humanSelectedAction(target, "status")))
+		setResult(map[string]any{"slug": slug, "configured": false, "runtimeConfiguration": "unobserved"}, "completed")
 		return nil
 	}
 	panic("unreachable")
 }
 
 func envSettingsURL(target selectedDeployment) string {
+	return workspaceSettingsURL(target, "environment")
+}
+
+func workspaceSettingsURL(target selectedDeployment, section string) string {
 	if target.info.WorkspaceUrl != "" {
 		link, err := url.Parse(target.info.WorkspaceUrl)
-		if err == nil {
+		if err == nil && link.Host != "" && (link.Scheme == "https" || link.Scheme == "http") && link.User == nil {
 			query := link.Query()
-			query.Set("settings", "environment")
+			query.Set("settings", section)
 			selector := target.info.Id
 			if target.info.Kind == "production" {
 				selector = "production"
@@ -118,7 +158,7 @@ func envSettingsURL(target selectedDeployment) string {
 			return safeTableCell(link.String())
 		}
 	}
-	return target.baseURL + "/agents/" + url.PathEscape(target.app.AgentID) + "?view=advanced&target=" + url.QueryEscape(target.info.Id) + "#env-vars"
+	return ""
 }
 
 func parseEnvArgs(args []string) (integrationTargetFlags, []string, error) {

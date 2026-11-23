@@ -130,7 +130,11 @@ func cmdClone(args []string) (retErr error) {
 		return err
 	}
 	cloneComplete = true
-	fmt.Printf("Cloned %s (%s) from %s into %s\n", target.Slug, target.AgentID, baseURL, dst)
+	selected.flags.dir = dst
+	setSelectedContext(selected)
+	setResult(map[string]string{"appId": target.AgentID, "app": target.Slug, "directory": dst, "origin": baseURL}, "completed")
+	selected.printHeading()
+	fmt.Printf("Source cloned into %s\n", safeTableCell(dst))
 	return nil
 }
 
@@ -187,6 +191,10 @@ func cmdPull(args []string) error {
 	if err != nil {
 		return err
 	}
+	setSelectedContext(selected)
+	if invocationOutput == nil {
+		selected.printHeading()
+	}
 	f.target = selected.info.Name
 	tmp, metadata, err := downloadSource(ctx, selected.baseURL, selected.token, selected.path("/source"))
 	if err != nil {
@@ -220,11 +228,13 @@ func cmdPull(args []string) error {
 			return err
 		}
 		fmt.Println("Local source already matches Airlock")
+		setResult(map[string]string{"directory": dir, "source": "matches"}, "completed")
 		return nil
 	}
 	baseState := state.SourceState
 	if remoteState == baseState && !f.force {
 		fmt.Println("Airlock source is unchanged; local source has unpushed changes")
+		setResult(map[string]string{"directory": dir, "source": "local_changes"}, "completed")
 		return nil
 	}
 	if !f.force && (baseState == "" || localState != baseState) {
@@ -244,7 +254,9 @@ func cmdPull(args []string) error {
 	if err := selected.saveSource(state); err != nil {
 		return err
 	}
-	fmt.Printf("Pulled app %s target %s from %s\n", selected.app.AgentID, f.target, selected.baseURL)
+	setSelectedContext(selected)
+	setResult(map[string]string{"directory": dir, "source": "updated"}, "completed")
+	fmt.Println("Source updated.")
 	return nil
 }
 

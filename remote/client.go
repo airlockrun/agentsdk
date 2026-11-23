@@ -70,6 +70,14 @@ type HTTPError struct {
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("remote: HTTP %d: %s", e.StatusCode, e.Body) }
 
+type requestError struct {
+	error
+	method string
+}
+
+func (e *requestError) Unwrap() error         { return e.error }
+func (e *requestError) RequestMethod() string { return e.method }
+
 func (c *Client) call(ctx context.Context, method, path string, input, output proto.Message) error {
 	var body []byte
 	var err error
@@ -112,7 +120,7 @@ func (c *Client) call(ctx context.Context, method, path string, input, output pr
 		return errors.New("remote: operator response exceeds 4 MiB")
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return &HTTPError{StatusCode: response.StatusCode, Body: strings.TrimSpace(string(raw))}
+		return &requestError{error: &HTTPError{StatusCode: response.StatusCode, Body: strings.TrimSpace(string(raw))}, method: method}
 	}
 	if output == nil {
 		return nil

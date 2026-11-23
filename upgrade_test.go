@@ -70,8 +70,8 @@ func TestConsolidatedStableUpgradeInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 4 || entries[0].version != "v0.8.1" || entries[1].version != "v0.8.3" || entries[2].version != "v0.9.0" || entries[3].version != "v0.10.0" {
-		t.Fatalf("expected v0.8.1, v0.8.3, v0.9.0 and v0.10.0 migration entries, got %#v", entries)
+	if len(entries) != 5 || entries[0].version != "v0.8.1" || entries[1].version != "v0.8.3" || entries[2].version != "v0.9.0" || entries[3].version != "v0.10.0" || entries[4].version != "v0.11.0" {
+		t.Fatalf("unexpected migration entries: %#v", entries)
 	}
 	for _, from := range []string{"0.7.0", "0.8.1-alpha.7", "0.8.1-alpha.8", "0.8.1-alpha.9", "0.8.1-alpha.12", "0.8.1-alpha.13"} {
 		t.Run(from, func(t *testing.T) {

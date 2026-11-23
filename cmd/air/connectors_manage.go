@@ -21,7 +21,7 @@ import (
 func cmdConnectorManagement(args []string) error {
 	operation := args[0]
 	values := map[string]string{}
-	wait, jsonOutput := true, false
+	wait, jsonOutput := true, invocationOutput != nil
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
 		case "--no-wait":
@@ -98,9 +98,6 @@ func cmdConnectorManagement(args []string) error {
 		settings = string(body)
 	}
 	baseURL := values["--url"]
-	if baseURL == "" && os.Getenv("AIRLOCK_DEVELOPMENT_SESSION") != "" {
-		baseURL = os.Getenv("AIRLOCK_API_URL")
-	}
 	baseURL, err := connectorOperatorURL(baseURL)
 	if err != nil {
 		return err
@@ -146,8 +143,12 @@ func cmdConnectorManagement(args []string) error {
 	}
 	response := &airlockv1.GetHostManagementJobResponse{}
 	fmt.Fprintf(os.Stderr, "Remote admission request %s; preserve this ID and exact arguments after an uncertain response.\n", requestID)
+	if invocationOutput != nil {
+		invocationOutput.Operation = &cliOperation{Kind: "connector_" + operation, Admission: "unknown", RequestID: requestID, HostID: values["--host"], ConnectorID: values["--connector"]}
+		invocationOutput.Guidance = []cliAction{{Kind: "observe", Message: "Recover exact admission without resubmitting", Executable: "go", Args: []string{"tool", "air", "hosts", "request", values["--host"], requestID, "--url", baseURL, "--json"}}}
+	}
 	if err := doProto(ctx, baseURL, http.MethodPost, path, token, request, response); err != nil {
-		return err
+		return admissionFailure(err)
 	}
 	if err := validateConnectorManagementJob(response.Job, values["--host"], values["--connector"], "connector_"+operation, values["--artifact"]); err != nil {
 		return err
@@ -156,11 +157,28 @@ func cmdConnectorManagement(args []string) error {
 		return errors.New("Airlock returned a job for a different admission request")
 	}
 	jobID, connectorID := response.Job.Id, response.Job.ConnectorId
+	if invocationOutput != nil {
+		invocationOutput.Operation.Admission = "accepted"
+		invocationOutput.Operation.JobID = jobID
+		invocationOutput.Operation.ConnectorID = connectorID
+	}
+	if invocationOutput != nil {
+		if err := writeProtoJSON(response); err != nil {
+			return err
+		}
+	}
 	if !wait {
 		if jsonOutput {
-			return writeProtoJSON(response)
+			if err := writeProtoJSON(response); err != nil {
+				return err
+			}
+			if invocationOutput != nil {
+				invocationOutput.Status = "accepted"
+			}
+			return nil
 		}
-		fmt.Printf("Job %s %s; connector %s (not verified installed/updated).\n", jobID, response.Job.Status, connectorID)
+		fmt.Printf("Connector %s accepted — not yet verified.\n", operation)
+		fmt.Printf("Observe: %s\n", shellCommand(cliAction{Executable: "go", Args: []string{"tool", "air", "hosts", "job", jobID, "--url", baseURL, "--wait"}}))
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "Remote job %s on host %s; interrupt stops observation, not execution.\n", jobID, values["--host"])
@@ -171,6 +189,11 @@ func cmdConnectorManagement(args []string) error {
 	lastStatus := ""
 	var lastEvent int64
 	for {
+		if invocationOutput != nil {
+			if err := writeProtoJSON(response); err != nil {
+				return err
+			}
+		}
 		for _, event := range response.Events {
 			if event.Sequence > lastEvent {
 				fmt.Fprintf(os.Stderr, "%s: %s %q\n", jobID, event.Phase, event.Message)
@@ -210,7 +233,11 @@ func cmdConnectorManagement(args []string) error {
 				if jsonOutput {
 					return writeProtoJSON(response)
 				}
-				fmt.Printf("Verified connector %s ready on host %s with artifact %s (job %s).\n", connectorID, c.HostId, expectedDigest, jobID)
+				name := c.DisplayName
+				if name == "" {
+					name = "Connector"
+				}
+				fmt.Printf("%s ready — verified %s.\n", safeTableCell(name), operation)
 				return nil
 			}
 		}

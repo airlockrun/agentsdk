@@ -31,10 +31,14 @@ type httpStatusError struct {
 }
 
 func (e *httpStatusError) Error() string {
-	if e.Message == "" {
-		return e.Status
+	message := e.Status
+	if e.Message != "" {
+		message = fmt.Sprintf("%s: %s", e.Status, e.Message)
 	}
-	return fmt.Sprintf("%s: %s", e.Status, e.Message)
+	if e.AccessToken != "" {
+		message = strings.ReplaceAll(message, e.AccessToken, "[redacted]")
+	}
+	return message
 }
 
 func isTerminalSessionError(err error) bool {

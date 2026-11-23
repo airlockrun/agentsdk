@@ -144,6 +144,9 @@ func deployToTarget(f deployFlags) error {
 		if _, err := ensureDeploySDKVersion(ctx, baseURL, token); err != nil {
 			return err
 		}
+		if invocationOutput != nil {
+			invocationOutput.Context = map[string]string{"directory": f.dir, "remote": name, "origin": baseURL}
+		}
 		app, err := createDraftAgent(ctx, baseURL, token, f)
 		if err != nil {
 			return explainCreateAgentError(ctx, baseURL, token, name, f.dir, f.slug, err)
@@ -153,9 +156,15 @@ func deployToTarget(f deployFlags) error {
 			return err
 		}
 	}
-	s, err := resolveDeployment(ctx, targetFlags{dir: f.dir, remote: f.remote, url: f.url, agent: f.agent, target: f.target, timeout: f.timeout}, f.ensurePreview)
+	s, err := resolveDeployment(ctx, targetFlags{dir: f.dir, remote: f.remote, url: f.url, agent: f.agent, target: f.target, timeout: f.timeout, json: f.json}, f.ensurePreview)
 	if err != nil {
 		return err
+	}
+	setSelectedContext(s)
+	if invocationOutput != nil {
+		if err := s.print(); err != nil {
+			return err
+		}
 	}
 	if _, err := ensureDeploySDKVersion(ctx, s.baseURL, s.token); err != nil {
 		return err
@@ -190,13 +199,17 @@ func deployToTarget(f deployFlags) error {
 		}
 		state.SourceETag = metadata.ETag
 	}
+	if invocationOutput != nil {
+		invocationOutput.Operation = &cliOperation{Kind: "source_upload", Admission: "preparing", RuntimeID: s.info.Id, Target: s.info.Name, ExpectedSourceETag: state.SourceETag}
+	}
 	accepted, err := uploadSource(ctx, s.baseURL, s.token, s.path("/source"), f.dir, state.SourceETag, f.message, configHeader)
 	if err != nil {
+		err = admissionFailure(err)
 		var stale *staleSourceError
 		if errors.As(err, &stale) {
 			return fmt.Errorf("source conflict for remote %s target %s: pull this target before deploying, or explicitly use --force: %w", s.remoteName, f.target, err)
 		}
-		return err
+		return fmt.Errorf("source submission was not confirmed; inspect before resubmitting: %s: %w", shellCommand(selectedAction(s, "inspect", "")), err)
 	}
 	s.expectedRevision = ""
 	state.Name, state.OwnerUserID = s.info.Name, s.info.OwnerUserId
@@ -214,17 +227,52 @@ func deployToTarget(f deployFlags) error {
 		}
 		state.PendingTask, state.PendingSourceState = accepted.TaskID, accepted.State
 	}
-	if err := s.saveSource(state); err != nil {
-		return err
+	if invocationOutput != nil {
+		invocationOutput.Operation = &cliOperation{Kind: "source_upload", Admission: "accepted", TaskID: accepted.TaskID, RevisionID: accepted.Revision, Generation: accepted.Generation, RuntimeID: s.info.Id, Target: s.info.Name, UploadedSourceState: accepted.State}
 	}
-	fmt.Printf("Remote: %s (%s)\nApp: %s\nTarget: %s\nRuntime: %s\nCandidate: %s\nTask: %s\n", s.remoteName, s.baseURL, s.app.AgentID, s.info.Name, s.info.Id, accepted.Revision, accepted.TaskID)
-	s.printAppURL()
+	if err := s.saveSource(state); err != nil {
+		handle := "revision " + accepted.Revision
+		if accepted.TaskID != "" {
+			handle = "task " + accepted.TaskID
+		}
+		if invocationOutput != nil {
+			invocationOutput.Guidance = []cliAction{selectedAction(s, "inspect", "Source is admitted; resolve the local state-file error, then inspect without resubmitting")}
+		}
+		return fmt.Errorf("source admitted (%s), but local state could not be saved; deployment may continue. Resolve the local state-file error and inspect without resubmitting: %s: %w", handle, shellCommand(selectedAction(s, "inspect", "")), err)
+	}
+	setResult(map[string]any{"taskId": accepted.TaskID, "revisionId": accepted.Revision, "generation": accepted.Generation, "runtimeId": s.info.Id, "target": s.info.Name, "routeBaseUrl": s.info.RouteBaseUrl, "serving": map[string]any{"status": s.info.Status, "running": s.info.Running, "imageRef": s.info.ImageRef, "revisionId": s.info.SourceRevisionId}}, "accepted")
+	if invocationOutput != nil {
+		extra := []string{"--wait", "--timeout", f.timeout.String()}
+		if accepted.TaskID == "" {
+			extra = append(extra, "--revision", accepted.Revision)
+		}
+		invocationOutput.Guidance = []cliAction{selectedAction(s, "status", "Observe readiness without resubmitting", extra...), selectedAction(s, "inspect", "Inspect deployment diagnostics")}
+	}
+	if !f.json {
+		s.printHeading()
+		fmt.Println("Deployment submitted.")
+		if s.info.RouteBaseUrl != "" {
+			label := "App URL"
+			if s.info.Kind == "personal_preview" {
+				label = "Preview URL"
+			}
+			fmt.Printf("%s (may not be ready yet): %s\n", label, s.info.RouteBaseUrl)
+		}
+		extra := []string{"--wait"}
+		if f.timeout != 10*time.Minute {
+			extra = append(extra, "--timeout", f.timeout.String())
+		}
+		if accepted.TaskID == "" {
+			extra = append(extra, "--revision", accepted.Revision)
+		}
+		fmt.Printf("Check readiness: %s\n", shellCommand(humanSelectedAction(s, "status", extra...)))
+	}
 	reportDeploymentReadiness(ctx, s, accepted.Revision)
 	// Builds preserve an explicitly stopped target. Launch waits for that
 	// replacement before starting it, retaining the accepted task for recovery.
 	if f.launch && s.info.Status == "stopped" && state.PendingTask != "" {
 		if err := s.reconcileTask(ctx, &state, true, 2*time.Second); err != nil {
-			return err
+			return s.observationFailure(ctx, err)
 		}
 	}
 	// Upload admission checks source CAS and image availability before an
@@ -239,11 +287,11 @@ func deployToTarget(f deployFlags) error {
 	}
 	if state.PendingTask != "" {
 		if err := s.reconcileTask(ctx, &state, true, 2*time.Second); err != nil {
-			return err
+			return s.observationFailure(ctx, err)
 		}
 	}
-	if err := s.waitRunning(ctx, 2*time.Second); err != nil {
-		return err
+	if err := s.waitRunning(ctx, 2*time.Second, readinessRuntime); err != nil {
+		return s.observationFailure(ctx, err)
 	}
 	return s.print()
 }
@@ -328,7 +376,7 @@ func (s *selectedDeployment) reconcileTask(ctx context.Context, state *targetSou
 			if err := s.saveSource(*state); err != nil {
 				return err
 			}
-			return fmt.Errorf("deployment task %s %s: %s", id, task.Info.Status, task.Error)
+			return &deploymentTaskFailure{id: id, status: task.Info.Status, message: task.Error}
 		case "succeeded":
 			if !deployUUIDRe.MatchString(task.BuildID) {
 				return errors.New("completed deployment task omitted its build identity")
@@ -368,4 +416,17 @@ func (s *selectedDeployment) reconcileTask(ctx context.Context, state *targetSou
 		case <-time.After(interval):
 		}
 	}
+}
+
+type deploymentTaskFailure struct{ id, status, message string }
+
+func (e *deploymentTaskFailure) Error() string {
+	label := "deployment update"
+	if e.id != "" {
+		label = "deployment task " + e.id
+	}
+	if e.message == "" {
+		return label + " " + e.status
+	}
+	return fmt.Sprintf("%s %s: %s", label, e.status, e.message)
 }

@@ -113,17 +113,37 @@ attribute and event APIs. Procedural examples belong in those references, not he
 
 ## Remote targets and human links
 
+- Discover all resource types with `air resources list`; use `air resources list preview`
+  for app slots, `air resources inspect /NAME` for safe resource details and
+  `air resources candidates preview/SLOT --type connector` for connector compatibility.
+- Use `air connectors install/update` for installation management and `connectors inspect ID`
+  for host/artifact/version diagnostics. Explain that updates change installed executable/settings,
+  not an app-local binding; binding/use grants no management and does not transfer the
+  installation's management app/need. Respect exclusive connector reservations.
+- Resolve hosted `approval_required` (77) in the developer conversation; never bypass
+  exact-host human confirmation or replay a whole shell after approval.
+- Preserve complete discovery stdout separately from stderr and check CLI exit status
+  before JSON parsing; do not truncate results or merge stderr into JSON.
 - `--remote` selects an Airlock instance; `--target` selects its deployment.
   General commands default to production; `air preview` does not change later
   defaults. Hosted workspaces can inject a preview default. Select explicitly.
 - Preview uploads/builds and remote integration can change real state. Use the
   requested app/target and permissions; keep fixtures in the whole candidate.
-- Share the exact server-returned `App URL` (`deployment.routeBaseUrl` in status
-  JSON, `routeBaseUrl` in build JSON). Never invent a hostname or replace a
+- Share the exact server-returned `App URL` (`data.deployment.routeBaseUrl` in status
+  JSON, `data.routeBaseUrl` in build JSON). Never invent a hostname or replace a
   preview URL with production. `workspaceUrl` is a separate dashboard link.
 - Verify with authenticated `air request`, `air tools invoke` and agent commands
   against the selected target, not an unauthenticated browser GET or tokens in
   links. Use relative links inside the app; absolute app origins are runtime-only.
+- Use `air COMMAND --help` for supported syntax and follow the versioned JSON
+  contract in `reference/cli-output.md`; preserve concrete selectors in actions.
+- Use `preview -m "Describe changes" --launch --wait --json` for bounded preview
+  observation. Hosted agents can use foreground waits or the single background
+  workspace command; fit CLI timeout to the tool/caller deadline. Prefer built-in
+  waits over hand-written status/sleep loops. Match any HOST deployment completion
+  to `operation.taskId`, not shell request/checkpoint IDs; an already observed
+  completion is information, not a new request or permission to resubmit.
+  Inspect unknown admission without replay. See `reference/cli-output.md`.
 
 ## Build an operable, responsive UI
 

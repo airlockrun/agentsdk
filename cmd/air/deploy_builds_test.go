@@ -50,14 +50,14 @@ func TestParseDeployBuildFlags(t *testing.T) {
 	}{
 		{"defaults", "list", nil, ""},
 		{"interspersed", "list", []string{"--limit", "50", "repo", "--json", "--agent", "todo", "--remote", "prod", "--url", "https://example.com"}, ""},
-		{"status", "status", []string{"repo", "--build", testBuildID, "--logs", "--watch"}, ""},
+		{"status", "status", []string{"repo", "--build", testBuildID, "--logs", "--wait"}, ""},
 		{"json logs", "status", []string{"--json", "--logs"}, ""},
 		{"zero", "list", []string{"--limit", "0"}, "between 1 and 50"},
 		{"negative", "list", []string{"--limit", "-1"}, "between 1 and 50"},
 		{"large", "list", []string{"--limit", "51"}, "between 1 and 50"},
 		{"not number", "list", []string{"--limit", "ten"}, "between 1 and 50"},
-		{"watch json", "status", []string{"--watch", "--json"}, "cannot combine"},
-		{"list watch", "list", []string{"--watch"}, "requires deploy status"},
+		{"wait json", "status", []string{"--wait", "--json"}, ""},
+		{"list wait", "list", []string{"--wait"}, "requires deploy status"},
 		{"list logs", "list", []string{"--logs"}, "requires deploy status"},
 		{"list build", "list", []string{"--build", testBuildID}, "requires deploy status"},
 		{"status limit", "status", []string{"--limit", "2"}, "requires deploy list"},
@@ -102,8 +102,9 @@ func TestDeployBuildCommands(t *testing.T) {
 		{"list limit json", "list", "failed", []string{"--limit", "1", "--json"}, "", 1, 0},
 		{"latest", "status", "building", nil, "", 1, 1},
 		{"explicit", "status", "complete", []string{"--build", testBuildID, "--logs"}, "", 0, 1},
-		{"failed json", "status", "failed", []string{"--json"}, "failed", 1, 1},
-		{"failed text", "status", "failed", []string{"--logs"}, "failed", 1, 1},
+		{"failed json snapshot", "status", "failed", []string{"--json"}, "", 1, 1},
+		{"failed text snapshot", "status", "failed", []string{"--logs"}, "", 1, 1},
+		{"failed json wait", "status", "failed", []string{"--json", "--wait"}, "failed", 1, 1},
 		{"empty list", "list", "empty", nil, "no builds", 1, 0},
 		{"empty latest", "status", "empty", nil, "no builds", 1, 0},
 	} {
@@ -247,7 +248,9 @@ func TestDeployStatusClearsFailedPendingTask(t *testing.T) {
 	if err := writeAgentBinding(dir, binding); err != nil {
 		t.Fatal(err)
 	}
-	_, err := captureCommandStdoutResult(t, func() error { return cmdDeploy([]string{"status", dir, "--remote", "prod", "--target", "production"}) })
+	_, err := captureCommandStdoutResult(t, func() error {
+		return cmdDeploy([]string{"status", dir, "--remote", "prod", "--target", "production", "--wait"})
+	})
 	if err == nil || !strings.Contains(err.Error(), taskID+" failed: compile failed") {
 		t.Fatalf("error = %v", err)
 	}
@@ -430,7 +433,7 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 			if err := writeAgentBinding(dir, binding); err != nil {
 				t.Fatal(err)
 			}
-			args := []string{"status", dir, "--target", "production", "--build", testBuildID, "--watch"}
+			args := []string{"status", dir, "--target", "production", "--build", testBuildID, "--wait"}
 			if tt.agent != "" {
 				args = append(args, "--agent", tt.agent)
 			}
@@ -472,17 +475,24 @@ func TestDeployBuildTargetAndAuth(t *testing.T) {
 	}
 }
 
-func TestDeploySubcommandRoutingPreservesUploads(t *testing.T) {
+func TestDeploySubcommandsAreReserved(t *testing.T) {
 	t.Setenv("AIRLOCK_INTEGRATION_TOKEN", "")
 	t.Chdir(t.TempDir())
-	for _, args := range [][]string{
-		{"list", "-m", "message"}, {"status", "--message", "message"},
-		{"-m", "list", "repo"}, {"repo", "--message", "status"},
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"list", "-m", "message"}, "unknown deploy list flag"},
+		{[]string{"status", "--message", "message"}, "unknown deploy status flag"},
+		{[]string{"./list", "-m", "message"}, "deploy requires an agent repo with go.mod"},
+		{[]string{"./status", "--message", "message"}, "deploy requires an agent repo with go.mod"},
+		{[]string{"-m", "list", "repo"}, "deploy requires an agent repo with go.mod"},
+		{[]string{"repo", "--message", "status"}, "deploy requires an agent repo with go.mod"},
 	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			err := cmdDeploy(append(args, "--target", "production"))
-			if err == nil || !strings.Contains(err.Error(), "deploy requires an agent repo with go.mod") {
-				t.Fatalf("not routed to upload: %v", err)
+		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
+			err := cmdDeploy(append(test.args, "--target", "production"))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("wrong command routing: %v, want %q", err, test.want)
 			}
 		})
 	}

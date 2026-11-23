@@ -269,12 +269,7 @@ func mcpProbePort(u *url.URL) string {
 }
 
 func printMCPProbe(result mcpProbeResult) error {
-	encoded, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return err
-	}
-	fmt.Println(string(encoded))
-	return nil
+	return writeJSONData(result)
 }
 
 func probeMCP(rawURL string) error {

@@ -23,10 +23,11 @@ type deployBuildFlags struct {
 	dir, remote, url, agent, build, target string
 	limit                                  int
 	json, watch, logs                      bool
+	timeout                                time.Duration
 }
 
 func parseDeployBuildFlags(command string, args []string) (deployBuildFlags, error) {
-	f := deployBuildFlags{dir: ".", limit: 10}
+	f := deployBuildFlags{dir: ".", limit: 10, timeout: 10 * time.Minute, json: invocationOutput != nil}
 	dirSet, options := false, true
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -45,17 +46,17 @@ func parseDeployBuildFlags(command string, args []string) (deployBuildFlags, err
 		case "--json":
 			f.json = true
 			continue
-		case "--watch", "--logs":
+		case "--wait", "--logs":
 			if command != "status" {
 				return f, fmt.Errorf("%s requires deploy status", a)
 			}
-			if a == "--watch" {
+			if a == "--wait" {
 				f.watch = true
 			} else {
 				f.logs = true
 			}
 			continue
-		case "--remote", "--url", "--agent", "--target":
+		case "--remote", "--url", "--agent", "--target", "--timeout":
 		case "--limit":
 			if command != "list" {
 				return f, errors.New("--limit requires deploy list")
@@ -72,6 +73,12 @@ func parseDeployBuildFlags(command string, args []string) (deployBuildFlags, err
 		}
 		i++
 		switch a {
+		case "--timeout":
+			duration, err := time.ParseDuration(args[i])
+			if err != nil || duration <= 0 {
+				return f, errors.New("--timeout requires a positive duration")
+			}
+			f.timeout = duration
 		case "--remote":
 			f.remote = args[i]
 		case "--url":
@@ -96,9 +103,6 @@ func parseDeployBuildFlags(command string, args []string) (deployBuildFlags, err
 	if f.remote != "" && !validRemoteName(f.remote) {
 		return f, fmt.Errorf("invalid remote %q", f.remote)
 	}
-	if f.watch && f.json {
-		return f, errors.New("deploy status cannot combine --watch and --json")
-	}
 	return f, nil
 }
 
@@ -112,6 +116,8 @@ func cmdDeployBuilds(command string, args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	ctx, cancel := context.WithTimeout(ctx, f.timeout)
+	defer cancel()
 	return runDeployBuilds(ctx, command, f, 2*time.Second)
 }
 
@@ -127,9 +133,9 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 		return err
 	}
 	baseURL, token := s.baseURL, s.token
-	fmt.Fprintf(os.Stderr, "Target: remote=%s app=%s target=%s runtime=%s\n", s.remoteName, s.app.AgentID, s.info.Name, s.info.Id)
+	setSelectedContext(s)
 	if !f.json {
-		s.printAppURL()
+		s.printHeading()
 	}
 	target := agentRemoteBinding{AgentID: s.info.Id, Slug: s.info.Name}
 	path := s.path("/builds")
@@ -171,6 +177,9 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 				}
 				if task.Error == "" {
 					task.Error = task.Info.Status
+				}
+				if !f.watch {
+					return nil
 				}
 				return fmt.Errorf("deployment task %s %s: %s", taskID, task.Info.Status, task.Error)
 			case "succeeded":
@@ -238,7 +247,7 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 				oldSnapshot.DockerLog, oldSnapshot.SolLog, oldSnapshot.LogSeq = "", "", 0
 			}
 			if !proto.Equal(snapshot, oldSnapshot) {
-				printBuildStatus(b, target, baseURL)
+				printBuildStatus(b)
 			}
 			if f.logs {
 				printBuildLog("Docker", previous.GetDockerLog(), b.DockerLog)
@@ -247,6 +256,9 @@ func runDeployBuilds(ctx context.Context, command string, f deployBuildFlags, po
 		}
 		switch b.Status {
 		case "failed":
+			if !f.watch {
+				return nil
+			}
 			return fmt.Errorf("build %s failed", b.Id)
 		case "complete":
 			return nil
@@ -279,6 +291,24 @@ func writeBuildObservation(response proto.Message, deployment *airlockv1.Deploym
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
+	kind := "task"
+	switch response.(type) {
+	case *airlockv1.ListAgentBuildsResponse:
+		kind = "builds"
+	case *airlockv1.GetAgentBuildResponse:
+		kind = "build"
+	default:
+		fields = map[string]json.RawMessage{"task": raw}
+	}
+	for _, key := range []string{"task", "build", "builds"} {
+		if _, ok := fields[key]; !ok {
+			fields[key] = json.RawMessage("null")
+		}
+	}
+	fields["kind"], err = json.Marshal(kind)
+	if err != nil {
+		return err
+	}
 	fields["workspaceUrl"], err = json.Marshal(deployment.WorkspaceUrl)
 	if err != nil {
 		return err
@@ -287,7 +317,7 @@ func writeBuildObservation(response proto.Message, deployment *airlockv1.Deploym
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(os.Stdout).Encode(fields)
+	return writeJSONData(fields)
 }
 
 func buildTime(t *timestamppb.Timestamp) string {
@@ -297,10 +327,12 @@ func buildTime(t *timestamppb.Timestamp) string {
 	return t.AsTime().UTC().Format(time.RFC3339Nano)
 }
 
-func printBuildStatus(b *airlockv1.AgentBuildInfo, target agentRemoteBinding, baseURL string) {
-	fmt.Printf("Build: %s\nTarget: %s (%s) at %s\nType: %s\nBuild status: %s\nDeployment phase: %s\nStarted: %s\nFinished: %s\nSource ref: %s\nMessage: %s\n",
-		safeTableCell(b.Id), safeTableCell(target.Slug), target.AgentID, safeTableCell(baseURL), safeTableCell(b.Type), safeTableCell(b.Status),
-		strings.TrimPrefix(b.DeploymentPhase.String(), "AGENT_BUILD_DEPLOYMENT_PHASE_"), buildTime(b.StartedAt), buildTime(b.FinishedAt), safeTableCell(b.SourceRef), safeTableCell(b.Instructions))
+func printBuildStatus(b *airlockv1.AgentBuildInfo) {
+	fmt.Printf("Build: %s\nBuild status: %s\nDeployment phase: %s\nStarted: %s\nFinished: %s\nMessage: %s\n",
+		safeTableCell(b.Id), safeTableCell(b.Status), strings.TrimPrefix(b.DeploymentPhase.String(), "AGENT_BUILD_DEPLOYMENT_PHASE_"), buildTime(b.StartedAt), buildTime(b.FinishedAt), safeTableCell(b.Instructions))
+	if b.SourceRef != "" {
+		fmt.Printf("Source ref: %s\n", safeTableCell(b.SourceRef))
+	}
 	if b.DeploymentPausedAt != nil {
 		fmt.Printf("Deployment paused: %s\n", buildTime(b.DeploymentPausedAt))
 	}

@@ -48,7 +48,7 @@ func cmdHosts(args []string) error {
 		start = 3
 	}
 	baseURL, stdinFile := "", ""
-	wait, jsonOutput := args[0] == "exec", false
+	wait, jsonOutput := args[0] == "exec", invocationOutput != nil
 	for i := start; i < len(args); i++ {
 		flag := args[i]
 		if flag == "--" && args[0] == "exec" {
@@ -138,8 +138,15 @@ func cmdHosts(args []string) error {
 	}
 	response := &airlockv1.GetHostManagementJobResponse{}
 	if args[0] == "exec" {
+		if invocationOutput != nil {
+			invocationOutput.Operation = &cliOperation{Kind: "host_shell", Admission: "unknown", RequestID: request.RequestId, HostID: id.String()}
+			invocationOutput.Guidance = []cliAction{{Kind: "observe", Message: "Recover this exact request; do not admit a new request after uncertainty", Executable: "go", Args: []string{"tool", "air", "hosts", "request", id.String(), request.RequestId, "--url", baseURL, "--json"}}}
+		}
 		fmt.Fprintf(os.Stderr, "Remote admission request %s; preserve this ID and exact arguments after an uncertain response.\n", request.RequestId)
 		err = doProto(ctx, baseURL, http.MethodPost, "/api/v1/hosts/"+id.String()+"/shell", token, request, response)
+		if err != nil {
+			err = admissionFailure(err)
+		}
 	} else {
 		method := http.MethodGet
 		if args[0] == "cancel" {
@@ -152,6 +159,14 @@ func cmdHosts(args []string) error {
 		err = doProto(ctx, baseURL, method, path, token, nil, response)
 	}
 	if err != nil {
+		var status *httpStatusError
+		if args[0] == "request" && errors.As(err, &status) && status.StatusCode == http.StatusNotFound {
+			message := "Request lookup is unavailable on this instance or the request was not found; neither proves the original operation was not admitted. Preserve the exact request ID and payload; inspect a recorded job ID with hosts job. Do not submit a fresh request."
+			if invocationOutput != nil {
+				invocationOutput.Guidance = []cliAction{{Kind: "recovery", Message: message}}
+			}
+			return fmt.Errorf("recover host %s request %s: %s: %w", id.String(), lookupID, message, err)
+		}
 		return err
 	}
 	identityCommand := args[0]
@@ -171,6 +186,15 @@ func cmdHosts(args []string) error {
 		return errors.New("Airlock did not confirm the cancellation request")
 	}
 	jobID, hostID := response.Job.Id, response.Job.HostId
+	if invocationOutput != nil && args[0] == "exec" {
+		invocationOutput.Operation.Admission = "accepted"
+		invocationOutput.Operation.JobID = jobID
+	}
+	if invocationOutput != nil {
+		if err := writeProtoJSON(response); err != nil {
+			return err
+		}
+	}
 	kind := response.Job.Kind
 	if wait {
 		bound := time.Duration(request.TimeoutSeconds)*time.Second + 30*time.Second
@@ -202,6 +226,11 @@ func cmdHosts(args []string) error {
 			if response.Job.HostId != hostID || response.Job.Kind != kind {
 				return errors.New("Airlock returned a job for a different host")
 			}
+			if invocationOutput != nil {
+				if err := writeProtoJSON(response); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	if jsonOutput {
@@ -209,6 +238,9 @@ func cmdHosts(args []string) error {
 			return err
 		}
 		if !wait {
+			if invocationOutput != nil && (args[0] == "exec" || args[0] == "cancel") {
+				invocationOutput.Status = "accepted"
+			}
 			return nil
 		}
 	}
@@ -253,12 +285,10 @@ func cmdHosts(args []string) error {
 	}
 	var output protocol.ShellOutput
 	if response.Job.OutputJson != "" {
-		if err := json.Unmarshal([]byte(response.Job.OutputJson), &output); err != nil {
-			return fmt.Errorf("invalid shell output for job %s: %w", jobID, err)
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(response.Job.OutputJson), &fields); err != nil || len(fields["exitCode"]) == 0 || string(fields["exitCode"]) == "null" {
-			return fmt.Errorf("shell output for job %s has no exit status", jobID)
+		var err error
+		output, err = decodeShellOutput(jobID, response.Job.OutputJson)
+		if err != nil {
+			return err
 		}
 		if !jsonOutput {
 			if _, err := os.Stdout.Write(output.Stdout); err != nil {
@@ -282,6 +312,54 @@ func cmdHosts(args []string) error {
 		return &hostCommandExitError{code: output.ExitCode}
 	}
 	return nil
+}
+
+func decodeShellOutput(jobID, raw string) (protocol.ShellOutput, error) {
+	var output protocol.ShellOutput
+	if err := json.Unmarshal([]byte(raw), &output); err != nil {
+		return output, fmt.Errorf("invalid shell output for job %s: %w", jobID, err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &fields); err != nil || len(fields["exitCode"]) == 0 || string(fields["exitCode"]) == "null" {
+		return output, fmt.Errorf("shell output for job %s has no exit status", jobID)
+	}
+	return output, nil
+}
+
+func writeHostObservation(response *airlockv1.GetHostManagementJobResponse) error {
+	raw, err := protoMarshal.Marshal(response)
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	for _, key := range []string{"stdout", "stderr", "exitCode"} {
+		fields[key] = json.RawMessage("null")
+	}
+	// Retain the typed snapshot even when a malformed child output cannot be decoded.
+	setResult(fields, "completed")
+	job := response.Job
+	if job != nil && job.Kind == "shell" && job.OutputJson != "" {
+		output, err := decodeShellOutput(job.Id, job.OutputJson)
+		if err != nil {
+			return err
+		}
+		fields["stdout"], err = json.Marshal(encodedBody(output.Stdout, 0, ""))
+		if err != nil {
+			return err
+		}
+		fields["stderr"], err = json.Marshal(encodedBody(output.Stderr, 0, ""))
+		if err != nil {
+			return err
+		}
+		fields["exitCode"], err = json.Marshal(output.ExitCode)
+		if err != nil {
+			return err
+		}
+	}
+	return writeJSONData(fields)
 }
 
 func validateHostJob(job *airlockv1.HostManagementJobInfo, command, id string) error {

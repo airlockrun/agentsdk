@@ -57,25 +57,33 @@ func validateUnitTestImports(root string) error {
 }
 
 func cmdTest(args []string) error {
+	if len(args) > 0 && (args[0] == "status" || args[0] == "cancel") {
+		return cmdRemoteTest(args)
+	}
 	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
 		if strings.HasPrefix(arg, "--") {
 			return cmdRemoteTest(args)
 		}
 	}
-	dir := "."
-	if len(args) > 1 {
-		return errors.New("air test takes at most one local directory; remote suites require --remote --target --revision")
+	dir, err := parseDirectoryArgs("test", args)
+	if err != nil {
+		return err
 	}
-	if len(args) == 1 {
-		dir = args[0]
-	}
+	setResult(map[string]string{"directory": dir, "kind": "local", "result": "failed"}, "failed")
 	if err := validateUnitTestImports(dir); err != nil {
 		return err
 	}
 	command := exec.Command("go", "test", "-p=1", "-count=1", "./...")
 	command.Dir = dir
 	command.Stdout, command.Stderr = os.Stdout, os.Stderr
-	return command.Run()
+	if err := command.Run(); err != nil {
+		return err
+	}
+	setResult(map[string]string{"directory": dir, "kind": "local", "result": "passed"}, "completed")
+	return nil
 }
 
 func cmdRemoteTest(args []string) error {
@@ -124,6 +132,9 @@ func cmdRemoteTest(args []string) error {
 	command := "run"
 	if len(positional) > 0 {
 		if positional[0] == "status" || positional[0] == "cancel" {
+			if len(args) == 0 || args[0] != positional[0] {
+				return errors.New("put test status/cancel immediately after test; use ./status or ./cancel for a directory")
+			}
 			command = positional[0]
 			if len(positional) != 1 {
 				return errors.New("test status/cancel takes --run UUID, not positional identifiers")
@@ -153,13 +164,25 @@ func cmdRemoteTest(args []string) error {
 		return err
 	}
 	var info *airlockv1.DeploymentTestRunInfo
+	if invocationOutput != nil && command != "status" {
+		invocationOutput.Operation = &cliOperation{Kind: "remote_test", Admission: "unknown", RuntimeID: s.info.Id, Target: s.info.Name, RevisionID: revision, Suite: suite, TestRunID: runID}
+		if command == "cancel" {
+			invocationOutput.Guidance = []cliAction{selectedAction(s, "test status", "Observe this exact test run without replaying cancellation", "--run", runID, "--revision", revision)}
+		}
+	}
 	switch command {
 	case "run":
 		info, err = client.RunTests(ctx, &airlockv1.RunDeploymentTestsRequest{SourceRevisionId: revision, Suite: suite, TimeoutSeconds: int32(f.timeout / time.Second)})
+		if err != nil {
+			err = admissionFailure(err)
+		}
 	case "status":
 		info, err = client.GetTest(ctx, runID)
 	case "cancel":
 		info, err = client.CancelTest(ctx, runID)
+		if err != nil {
+			err = admissionFailure(err)
+		}
 	}
 	if err != nil {
 		return err
@@ -167,8 +190,15 @@ func cmdRemoteTest(args []string) error {
 	if info.DeploymentId != s.info.Id {
 		return errors.New("test response selected a different deployment")
 	}
-	fmt.Fprintf(os.Stderr, "Remote test: %s app=%s target=%s runtime=%s revision=%s\n", info.Id, info.AppId, f.target, info.DeploymentId, info.SourceRevisionId)
-	if f.wait {
+	setSelectedContext(s)
+	if invocationOutput != nil {
+		invocationOutput.Operation = &cliOperation{Kind: "remote_test", Admission: "accepted", RuntimeID: s.info.Id, Target: s.info.Name, TestRunID: info.Id, RevisionID: info.SourceRevisionId, Suite: info.Suite}
+		invocationOutput.Guidance = []cliAction{selectedAction(s, "test status", "Observe this exact test run without resubmitting", "--run", info.Id, "--revision", info.SourceRevisionId)}
+		if err := writeProtoJSON(&airlockv1.DeploymentTestRunResponse{Test: info}); err != nil {
+			return err
+		}
+	}
+	if f.wait && info.Status != "succeeded" && info.Status != "failed" && info.Status != "cancelled" {
 		info, err = client.WaitTest(ctx, info.Id, 2*time.Second)
 		if err != nil {
 			return err
@@ -180,7 +210,10 @@ func cmdRemoteTest(args []string) error {
 	if err := writeProtoJSON(&airlockv1.DeploymentTestRunResponse{Test: info}); err != nil {
 		return err
 	}
-	if info.Status == "failed" || info.Status == "cancelled" || (info.Status == "succeeded" && info.ExitCode != 0) {
+	if invocationOutput != nil && command == "run" && !f.wait {
+		invocationOutput.Status = "accepted"
+	}
+	if f.wait && command != "cancel" && (info.Status == "failed" || info.Status == "cancelled" || (info.Status == "succeeded" && info.ExitCode != 0)) {
 		return fmt.Errorf("remote suite %s %s (exit %d): %s", info.Suite, info.Status, info.ExitCode, info.Error)
 	}
 	return nil

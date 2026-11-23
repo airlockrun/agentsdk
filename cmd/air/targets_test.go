@@ -1,17 +1,361 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	airlockv1 "github.com/airlockrun/agentsdk/internal/airlockv1"
+	"github.com/airlockrun/agentsdk/wire"
 )
+
+func captureStatusGuidanceJourneys(t *testing.T) []reviewReceipt {
+	t.Helper()
+	var receipts []reviewReceipt
+	for _, scenario := range []string{"building", "queued", "candidate only", "saved running", "saved succeeded", "saved failed", "invalid saved task", "ready", "ready stale terminal cache", "failed older runtime", "stopped", "hosted building", "hosted queued", "hosted candidate only", "hosted saved running", "wait completed", "hosted wait completed", "own wait completed", "hosted own wait completed", "own wait timeout", "hosted timeout", "failed wait", "custom timeout and directory", "inspect building"} {
+		for _, machine := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/json=%t", scenario, machine), func(t *testing.T) {
+				t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+				for _, name := range []string{"AIRLOCK_DEVELOPMENT_SESSION", "AIRLOCK_INTEGRATION_TOKEN", "AIRLOCK_TOKEN", "AIRLOCK_DEVELOPER_RUN_ID"} {
+					t.Setenv(name, "")
+				}
+				dir := filepath.Join(t.TempDir(), "app 'quoted'")
+				if err := os.Mkdir(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+				t.Chdir(dir)
+				mustWrite(t, filepath.Join(dir, "go.mod"), "module example.test/app\n\ngo 1.26\n\ntool github.com/airlockrun/agentsdk/cmd/air\n")
+				hosted := strings.HasPrefix(scenario, "hosted")
+				stateScenario := strings.TrimPrefix(scenario, "hosted ")
+				reads, mutations := 0, 0
+				prefix := "/api/v1/agents/" + testBuildAgentID + "/deployments/"
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.Method != http.MethodGet && r.Method != http.MethodHead {
+						mutations++
+						t.Errorf("observation mutated: %s %s", r.Method, r.URL)
+					}
+					switch r.URL.Path {
+					case "/api/v1/agents/" + testBuildAgentID:
+						fmt.Fprintf(w, `{"agent":{"id":%q,"name":"MaxFrame","slug":"maxframe"}}`, testBuildAgentID)
+					case prefix + previewRuntimeID, prefix + previewName:
+						reads++
+						status, task, taskStatus, candidate, running := "active", previewTaskID, "running", previewWorkspaceID, true
+						switch stateScenario {
+						case "queued":
+							taskStatus = "queued"
+						case "candidate only":
+							task, taskStatus = "", ""
+						case "saved running", "saved succeeded", "saved failed", "invalid saved task":
+							task, taskStatus, candidate = "", "", ""
+						case "ready":
+							taskStatus, candidate = "succeeded", ""
+						case "ready stale terminal cache":
+							taskStatus, candidate = "succeeded", ""
+						case "failed older runtime", "failed wait":
+							taskStatus, candidate = "failed", ""
+						case "stopped":
+							status, taskStatus, candidate, running = "stopped", "succeeded", "", false
+						case "wait completed", "own wait completed":
+							if reads > 1 {
+								taskStatus, candidate = "succeeded", ""
+							}
+						}
+						fmt.Fprintf(w, `{"deployment":{"id":%q,"appId":%q,"runtimeAgentId":%q,"kind":"personal_preview","name":%q,"ownerUserId":%q,"ownerWorkspaceId":%q,"status":%q,"running":%t,"imageRef":"older-serving-image","sourceRevisionId":%q,"buildTaskId":%q,"buildTaskStatus":%q,"pendingCandidateRevisionId":%q,"routeBaseUrl":"https://maxframe-preview.example.test"}}`, previewRuntimeID, testBuildAgentID, previewRuntimeID, previewName, previewOwnerID, previewWorkspaceID, status, running, testSourceRevision, task, taskStatus, candidate)
+					case "/api/v1/tasks/" + previewTaskID:
+						status := "running"
+						if stateScenario == "saved succeeded" || stateScenario == "own wait completed" {
+							status = "succeeded"
+						}
+						if stateScenario == "own wait completed" {
+							w.Header().Set("X-Airlock-Build-ID", testBuildID)
+						}
+						if scenario == "saved failed" {
+							status = "failed"
+						}
+						fmt.Fprintf(w, `{"id":%q,"kind":"upgrade","status":%q}`, previewTaskID, status)
+					case prefix + previewName + "/builds/" + testBuildID:
+						fmt.Fprintf(w, `{"build":{"id":%q,"agentId":%q,"status":"complete"}}`, testBuildID, previewRuntimeID)
+					case prefix + previewName + "/source":
+						if r.Method != http.MethodHead {
+							t.Errorf("unexpected source request: %s", r.Method)
+						}
+						w.Header().Set(wire.SourceStateHeader, "sha256:canonical-source")
+						w.Header().Set(wire.SourceRevisionHeader, testSourceRevision)
+						w.Header().Set(wire.SourceGenerationHeader, "2")
+						w.Header().Set("ETag", (wire.SourceVersion{Revision: testSourceRevision, Generation: 2}).ETag())
+					default:
+						t.Errorf("unexpected request: %s", r.URL)
+						http.NotFound(w, r)
+					}
+				}))
+				defer server.Close()
+				if err := saveLoginCredentials(server.URL, "review@example.test", testAccessToken, ""); err != nil {
+					t.Fatal(err)
+				}
+				state := targetSourceBinding{Name: previewName, OwnerUserID: previewOwnerID}
+				if strings.Contains(scenario, "saved") || scenario == "ready stale terminal cache" || scenario == "own wait timeout" || stateScenario == "own wait completed" {
+					state.PendingTask, state.PendingSourceState = previewTaskID, "sha256:accepted-source"
+				}
+				if scenario == "invalid saved task" {
+					state.PendingTask = "invalid-cache-id"
+				}
+				binding := agentBinding{}
+				binding.putRemote("corp", agentRemoteBinding{AirlockURL: server.URL, AgentID: testBuildAgentID, Slug: "maxframe", Previews: map[string]previewReference{testBuildAgentID: {DeploymentID: previewRuntimeID, Name: previewName}}, Targets: map[string]targetSourceBinding{previewRuntimeID: state}})
+				if err := writeAgentBinding(dir, binding); err != nil {
+					t.Fatal(err)
+				}
+				before, err := os.ReadFile(filepath.Join(dir, agentBindingPath))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if hosted {
+					for name, value := range map[string]string{"AIRLOCK_DEVELOPMENT_SESSION": previewWorkspaceID, "AIRLOCK_DEVELOPER_SESSION_ID": previewWorkspaceID, "AIRLOCK_APP_ID": testBuildAgentID, "AIRLOCK_AGENT_ID": previewRuntimeID, "AIRLOCK_DEPLOYMENT_TARGET": previewName, "AIRLOCK_API_URL": server.URL, "AIRLOCK_TOKEN": testAccessToken} {
+						t.Setenv(name, value)
+					}
+				}
+				args := []string{"status", "--remote", "corp", "--target", "preview"}
+				if scenario == "inspect building" {
+					args[0] = "inspect"
+				}
+				if stateScenario == "wait completed" || stateScenario == "own wait completed" || scenario == "failed wait" {
+					args = append(args, "--wait", "--timeout", "1s")
+				}
+				if scenario == "own wait timeout" || scenario == "hosted timeout" {
+					args = append(args, "--wait", "--timeout", "20ms")
+				}
+				if scenario == "custom timeout and directory" {
+					t.Chdir(filepath.Dir(dir))
+					args = append(args, "--dir", dir, "--timeout", "3m")
+				}
+				if machine {
+					args = append(args, "--json")
+				}
+				stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stdout.Close()
+				stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer stderr.Close()
+				oldOut, oldErr := os.Stdout, os.Stderr
+				var commandErr error
+				func() {
+					os.Stdout, os.Stderr = stdout, stderr
+					defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
+					commandErr = runReviewCLI(t, args, stdout, stderr)
+				}()
+				out, err := os.ReadFile(stdout.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				diagnostics, err := os.ReadFile(stderr.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				after, err := os.ReadFile(filepath.Join(dir, agentBindingPath))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (stateScenario != "own wait completed" && string(before) != string(after)) || mutations != 0 {
+					t.Fatal("status guidance mutated source state")
+				}
+				if stateScenario == "own wait completed" {
+					updated, _, err := loadAgentBinding(dir)
+					if err != nil {
+						t.Fatal(err)
+					}
+					remote, _ := updated.remote("corp")
+					if remote.Targets[previewRuntimeID].PendingTask != "" || remote.Targets[previewRuntimeID].SourceState != "sha256:canonical-source" {
+						t.Fatal("own accepted task was not reconciled")
+					}
+				}
+				receipt := reviewReceipt{Journey: scenario, Args: args, ExitCode: reviewExitCode(commandErr), Stdout: string(out), Stderr: string(diagnostics), Mutations: mutations}
+				receipts = append(receipts, receipt)
+				raw, err := json.Marshal(receipt)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Logf("RECEIPT %s", raw)
+				if machine {
+					decodeResult(t, receipt.Stdout)
+				}
+				wantError := scenario == "own wait timeout" || scenario == "hosted timeout" || scenario == "failed wait"
+				if (commandErr != nil) != wantError {
+					t.Fatalf("unexpected result: %v %+v", commandErr, receipt)
+				}
+			})
+		}
+	}
+	return receipts
+}
+
+func TestStatusGuidanceReviewCapture(t *testing.T) {
+	receipts := captureStatusGuidanceJourneys(t)
+	if path := os.Getenv("AIR_CLI_STATUS_RECEIPTS"); path != "" {
+		raw, err := json.MarshalIndent(receipts, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, append(raw, '\n'), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestStatusGuidanceProgressAndTerminalStates(t *testing.T) {
+	receipts := captureStatusGuidanceJourneys(t)
+	for _, receipt := range receipts {
+		scenario, machine := receipt.Journey, jsonRequested(receipt.Args)
+		stateScenario := strings.TrimPrefix(scenario, "hosted ")
+		wantWait := stateScenario == "building" || stateScenario == "queued" || stateScenario == "candidate only" || stateScenario == "saved running" || stateScenario == "own wait timeout" || scenario == "custom timeout and directory" || scenario == "hosted timeout"
+		if machine {
+			result := decodeResult(t, receipt.Stdout)
+			wait := false
+			for _, action := range result.Guidance {
+				wait = wait || containsArgument(action.Args, "--wait")
+				if containsArgument(action.Args, "--wait") && (!strings.Contains(shellCommand(action), "--target "+previewName) || !strings.Contains(shellCommand(action), "--agent "+testBuildAgentID)) {
+					t.Fatalf("unpinned machine wait: %+v", action)
+				}
+			}
+			if wait != wantWait {
+				t.Fatalf("wrong wait guidance: %+v", receipt)
+			}
+			if strings.Contains(receipt.Stdout, `"when"`) || strings.Contains(receipt.Stdout, "Yield for HOST") {
+				t.Fatalf("context-dependent guidance: %+v", receipt)
+			}
+			if scenario == "own wait timeout" && (result.Operation == nil || result.Operation.Admission != "accepted" || result.Operation.TaskID != previewTaskID || result.Error.Code != "observation_timeout" || !strings.Contains(receipt.Stdout, "older-serving-image")) {
+				t.Fatalf("timeout lost accepted task/snapshot: %+v", receipt)
+			}
+			if scenario == "failed older runtime" || scenario == "failed wait" {
+				if !strings.Contains(receipt.Stdout, `"deploy","status"`) || !strings.Contains(receipt.Stdout, `"--logs"`) {
+					t.Fatalf("missing diagnostics: %+v", receipt)
+				}
+			}
+			continue
+		}
+		hasWait := strings.Contains(receipt.Stdout, "--wait")
+		if hasWait != wantWait {
+			t.Fatalf("wrong human wait: %+v", receipt)
+		}
+		if wantWait && (!strings.Contains(receipt.Stdout, "--remote corp --target preview --wait") || strings.Contains(receipt.Stdout, testBuildAgentID) || strings.Contains(receipt.Stdout, previewName)) {
+			t.Fatalf("unfriendly wait: %+v", receipt)
+		}
+		if scenario == "custom timeout and directory" && (!strings.Contains(receipt.Stdout, "go -C '") || !strings.Contains(receipt.Stdout, "--timeout 3m0s")) {
+			t.Fatalf("lost directory/timeout: %+v", receipt)
+		}
+		if (scenario == "building" || scenario == "queued") && !strings.Contains(receipt.Stdout, "current version is still running") {
+			t.Fatalf("lost serving state: %+v", receipt)
+		}
+	}
+	for _, hosted := range receipts {
+		if !strings.HasPrefix(hosted.Journey, "hosted ") || hosted.Journey == "hosted timeout" {
+			continue
+		}
+		for _, external := range receipts {
+			if external.Journey != strings.TrimPrefix(hosted.Journey, "hosted ") || jsonRequested(external.Args) != jsonRequested(hosted.Args) {
+				continue
+			}
+			if jsonRequested(hosted.Args) {
+				h, e := decodeResult(t, hosted.Stdout), decodeResult(t, external.Stdout)
+				if !reflect.DeepEqual(h.Guidance, e.Guidance) || !reflect.DeepEqual(h.Data, e.Data) || h.Status != e.Status {
+					t.Fatalf("hosted rendering differs from external state: %s\n%s", hosted.Stdout, external.Stdout)
+				}
+			} else {
+				normalize := func(s string) string {
+					return strings.ReplaceAll(s, "Application · Preview · corp", "MaxFrame · Preview · corp")
+				}
+				if normalize(hosted.Stdout) != normalize(external.Stdout) {
+					t.Fatalf("hosted human body differs: %s\n%s", hosted.Stdout, external.Stdout)
+				}
+			}
+		}
+	}
+}
+
+func TestTargetWaitRequiresActiveRunningImage(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, image string
+		running             bool
+		ready               bool
+	}{
+		{"ready active", "active", "verified-image", true, true},
+		{"wrong running status", "running", "verified-image", true, false},
+		{"missing image", "active", "", true, false},
+		{"not running", "active", "verified-image", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Error("wait mutated target")
+				}
+				fmt.Fprintf(w, `{"deployment":{"id":%q,"appId":%q,"runtimeAgentId":%q,"kind":"production","name":"production","status":%q,"running":%t,"imageRef":%q}}`, testBuildAgentID, testBuildAgentID, testBuildAgentID, tc.status, tc.running, tc.image)
+			}))
+			defer server.Close()
+			s := selectedDeployment{flags: targetFlags{target: "production"}, baseURL: server.URL, app: agentRemoteBinding{AgentID: testBuildAgentID}, info: &airlockv1.DeploymentInfo{Id: testBuildAgentID}}
+			ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+			defer cancel()
+			err := s.waitRunning(ctx, time.Millisecond, readinessRuntime)
+			if tc.ready && err != nil || !tc.ready && !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("readiness=%t: %v", tc.ready, err)
+			}
+		})
+	}
+}
+
+func TestLifecycleWaitObservesRuntimeNotHistoricalBuildFailure(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AIRLOCK_DEVELOPMENT_SESSION", "")
+	dir := t.TempDir()
+	posts := 0
+	prefix := "/api/v1/agents/" + testBuildAgentID + "/deployments/production"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testAccessToken {
+			t.Error("lifecycle lost ordinary authorization")
+		}
+		switch r.URL.Path {
+		case "/api/v1/agents/" + testBuildAgentID:
+			fmt.Fprintf(w, `{"agent":{"id":%q,"slug":"maxframe"}}`, testBuildAgentID)
+		case prefix:
+			fmt.Fprintf(w, `{"deployment":{"id":%q,"appId":%q,"runtimeAgentId":%q,"name":"production","kind":"production","status":"active","running":true,"imageRef":"serving-version","sourceRevisionId":%q,"buildTaskId":%q,"buildTaskStatus":"failed"}}`, testBuildAgentID, testBuildAgentID, testBuildAgentID, testSourceRevision, previewTaskID)
+		case prefix + "/restart":
+			if r.Method != http.MethodPost {
+				t.Error("restart did not use its exact operation")
+			}
+			posts++
+			fmt.Fprint(w, `{}`)
+		default:
+			t.Errorf("unexpected lifecycle/task/replay route: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	if err := saveLoginCredentials(server.URL, "operator@example.test", testAccessToken, ""); err != nil {
+		t.Fatal(err)
+	}
+	binding := agentBinding{}
+	binding.putRemote("corp", agentRemoteBinding{AirlockURL: server.URL, AgentID: testBuildAgentID})
+	if err := writeAgentBinding(dir, binding); err != nil {
+		t.Fatal(err)
+	}
+	output, err := invokeFixture(t, "restart", "--dir", dir, "--wait", "--json")
+	result := decodeResult(t, output)
+	if err != nil || result.Status != "completed" || result.Error != nil || result.Operation.Action != "restart" || posts != 1 || result.Data.(map[string]any)["deployment"].(map[string]any)["buildTaskStatus"] != "failed" {
+		t.Fatalf("lifecycle conflated deployment outcome or replayed: %v posts=%d %s", err, posts, output)
+	}
+	t.Logf("JSON stdout:\n%s", output)
+}
 
 func TestRestartPreservesTargetAndApproval(t *testing.T) {
 	for _, tc := range []struct {

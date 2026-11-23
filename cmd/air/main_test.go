@@ -499,14 +499,24 @@ func TestToolchainInstallRejectsPrefix(t *testing.T) {
 
 func TestUsageIncludesVersion(t *testing.T) {
 	var out strings.Builder
-	usage(&out)
+	if err := printHelp(&out, "", false); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(out.String(), "air v"+agentsdk.Version) {
 		t.Fatalf("usage does not identify CLI version:\n%s", out.String())
+	}
+	out.Reset()
+	if err := printHelp(&out, "login", false); err != nil {
+		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "--reauthenticate") {
 		t.Fatalf("usage does not document --reauthenticate:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "air env set <slug> <value>") {
+	out.Reset()
+	if err := printHelp(&out, "env set", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "air env set SLUG VALUE") {
 		t.Fatalf("usage does not document env commands:\n%s", out.String())
 	}
 }
